@@ -1,0 +1,107 @@
+import type { ReadToolDetails, Theme } from "@earendil-works/pi-coding-agent";
+import { createReadToolDefinition, keyHint, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
+import {
+	activeDotLine,
+	callLine,
+	emptyLine,
+	errLine,
+	fmtSize,
+	linkifyUrlsInText,
+	resultLine,
+	type RenderCtx,
+} from "./shared.ts";
+
+interface ReadDisplayLines {
+	fileLines: string[];
+	noticeLines: string[];
+}
+
+function isReadBackendNotice(line: string): boolean {
+	const trimmed = line.trim();
+	return (
+		trimmed.startsWith("[Showing lines ") ||
+		/^\[\d+ more lines in file\. Use offset=\d+ to continue\.\]$/.test(trimmed) ||
+		/^\[Line \d+ is .+ exceeds .+ limit\. Use bash: .+\]$/.test(trimmed)
+	);
+}
+
+function splitReadOutput(text: string): ReadDisplayLines {
+	const lines = text.split("\n");
+	let noticeStart = -1;
+	for (let i = lines.length - 1; i >= 0; i--) {
+		if (isReadBackendNotice(lines[i] ?? "")) {
+			noticeStart = i;
+			break;
+		}
+		if ((lines[i] ?? "").trim() !== "") break;
+	}
+	if (noticeStart === -1) return { fileLines: lines, noticeLines: [] };
+	if (noticeStart > 0 && (lines[noticeStart - 1] ?? "").trim() === "") noticeStart--;
+	return {
+		fileLines: lines.slice(0, noticeStart),
+		noticeLines: lines.slice(noticeStart),
+	};
+}
+
+function renderReadNotice(line: string, theme: Theme): string {
+	if (line.trim() === "") return "";
+	const color = line.trim().startsWith("[Line ") ? "warning" : "muted";
+	return `  ${theme.fg(color, linkifyUrlsInText(line))}`;
+}
+
+export function createReadRenderer(cwd: string) {
+	const base = createReadToolDefinition(cwd);
+	return {
+		...base,
+		renderShell: "self" as const,
+
+		renderCall(args: Record<string, unknown>, theme: Theme) {
+			const parts: string[] = [String(args.path ?? "…")];
+			if (args.offset) parts.push(`offset=${args.offset}`);
+			if (args.limit) parts.push(`limit=${args.limit}`);
+			return new Text(callLine("Read", parts.join(" "), theme), 0, 0);
+		},
+
+		renderResult(result: any, options: ToolRenderResultOptions, theme: Theme, ctx = {} as RenderCtx) {
+			const { expanded, isPartial } = options;
+			if (isPartial) return new Text(activeDotLine("Read", " Reading…", theme), 0, 0);
+			if (expanded) return base.renderResult(result, options, theme, ctx as any);
+
+			const content = result.content ?? [];
+			const details = result.details as ReadToolDetails | undefined;
+			const imageBlock = content.find((c: any) => c?.type === "image");
+			const firstText = content.find((c: any) => c?.type === "text");
+			const noteText = firstText?.type === "text" ? firstText.text : "";
+			const isImage = !!imageBlock || noteText.startsWith("Read image file");
+
+			if (ctx.isError) {
+				return new Text(errLine(noteText.split("\n")[0] || "read failed", theme), 0, 0);
+			}
+
+			if (isImage) {
+				const mimeMatch = noteText.match(/\[([^\]]+)\]/);
+				const mime = mimeMatch ? mimeMatch[1] : "";
+				const size = imageBlock?.type === "image" && imageBlock.data ? fmtSize(imageBlock.data.length) : "";
+				const detail = [mime, size].filter(Boolean).join(", ");
+				const text = resultLine(`Read image${detail ? ` (${detail})` : ""}`, theme);
+				return new Text(text, 0, 0);
+			}
+
+			if (!firstText || firstText.type !== "text") return new Text(errLine("no content", theme), 0, 0);
+
+			const { fileLines, noticeLines } = splitReadOutput(firstText.text);
+			const lineCount = firstText.text.length === 0 ? 0 : fileLines.length;
+			const truncInfo = details?.truncation?.truncated ? ` (truncated from ${details.truncation.totalLines})` : "";
+			let text = resultLine(`Read ${lineCount} ${lineCount === 1 ? "line" : "lines"}${truncInfo}`, theme);
+			if (firstText.text.length === 0) {
+				text += `\n${emptyLine("(empty file)", theme)}`;
+				return new Text(text, 0, 0);
+			}
+
+			text += ` ${theme.fg("muted", "(")}${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+			if (noticeLines.length > 0) for (const line of noticeLines) text += `\n${renderReadNotice(line, theme)}`;
+			return new Text(text, 0, 0);
+		},
+	};
+}
