@@ -93,6 +93,7 @@ Each extension documents its own behavior, design decisions, and file layout in 
 
 ## Testing Notes
 
+- **Load this checkout without installing.** Disable installed extensions and load the repo for the session only: `pi -ne -e ./pi-config`. `-ne` stops installed copies from shadowing your working tree; iterate and re-run to verify.
 - When testing UI changes, call the tool via the `advisor` tool or `question` tool from this agent to observe renderCall / renderResult output.
 - Verify both collapsed and expanded states (Ctrl+O toggle).
 - Check error states by providing invalid configuration or triggering intentional failures.

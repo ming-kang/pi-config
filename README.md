@@ -2,22 +2,10 @@
 
 This Pi package contains commonly used extensions and themes, maintained for personal use.
 
-## Structure
-
-```
-pi-config/
-  extensions/        # .ts / .js extensions (auto-discovered)
-    shared/          # cross-extension helper modules (not loaded as an extension)
-  themes/            # .json themes (auto-discovered)
-  package.json       # Pi manifest (pi.extensions, pi.themes)
-```
-
-Pi discovers resources from the `pi` manifest in `package.json`, with the `extensions/` and `themes/` directories as a fallback.
-
 ## Extensions
 
 | Extension | What it does |
-|---|---|
+|:-:|---|
 | [`question`](extensions/question/README.md) | `question` tool — multiple-choice prompts to the user, including multi-select and custom "Other" answers |
 | [`statusline`](extensions/statusline/README.md) | Compact color-coded footer (model · effort · ctx% · cwd · branch · tokens · cost) |
 | [`tools-view`](extensions/tools-view/README.md) | Compact rendering for built-in tools (read/bash/edit/write) and **central style hub** — all extensions import rendering primitives from `tools-view/shared.ts` |
@@ -38,14 +26,6 @@ pi install git:github.com/ming-kang/pi-config
 pi install https://github.com/ming-kang/pi-config
 ```
 
-Or install from a local checkout (Pi loads it in place, no copy):
-
-```bash
-pi install ./pi-config
-# or project-scoped:
-pi install -l ./pi-config
-```
-
 Update:
 
 ```bash
@@ -55,28 +35,26 @@ pi update git:github.com/ming-kang/pi-config    # update only this one
 
 Installing without a ref (no `@v1.0.0`) tracks the default branch, so `pi update` keeps everyone in sync with the latest changes. Auto-discovered resources can be reloaded in a running session with `/reload`.
 
-## Loading only part of this package
+## Development
 
-Pi installs the whole repository, but loading is selectable. In `settings.json`:
+Working on this package? Read [`AGENTS.md`](AGENTS.md) first — it documents the design conventions (centralized rendering, extension structure, per-extension decisions) that keep the extensions consistent.
 
-```json
-{
-	"packages": [
-		{
-			"source": "git:github.com/ming-kang/pi-config",
-			"themes": ["themes/ice-cream.json"],
-			"extensions": []
-		}
-	]
-}
+To try local changes without installing, disable installed extensions and load this checkout for the session only:
+
+```bash
+pi -ne -e ./pi-config
 ```
 
-- Omit a key → load all of that type.
-- `[]` → load none of that type.
-- Glob and `!exclusions`, `+path` / `-path` overrides are supported.
+`-ne` skips already-installed extensions so they don't shadow your working copy; `-e ./pi-config` loads this repo in place. This is the fastest way to verify a change — no install, no copy.
 
-Or use `pi config` to enable/disable individual resources after install.
+To install a local checkout for everyday use instead:
+
+```bash
+pi install ./pi-config
+# or project-scoped (this directory only):
+pi install -l ./pi-config
+```
 
 ## License
 
-MIT
+[MIT](LICENSE)
