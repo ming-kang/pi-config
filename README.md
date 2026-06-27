@@ -22,7 +22,7 @@ Pi discovers resources from the `pi` manifest in `package.json`, with the `exten
 | [`statusline`](extensions/statusline/README.md) | Compact color-coded footer (model · effort · ctx% · cwd · branch · tokens · cost) |
 | [`tools-view`](extensions/tools-view/README.md) | Compact rendering for built-in tools (read/bash/edit/write) and **central style hub** — all extensions import rendering primitives from `tools-view/shared.ts` |
 | [`advisor`](extensions/advisor/README.md) | `advisor` tool + `/advisor` command — one-shot review from a configured reviewer model via Pi's own model registry and provider auth |
-| [`rewind`](extensions/rewind/README.md) | Git-backed per-turn checkpoints + `/rewind` and `/checkpoint` |
+| [`rewind`](extensions/rewind/README.md) | Per-edit file backups; restore via `/tree`, settings & storage via `/rewind` |
 | [`read-before-edit`](extensions/read-before-edit/README.md) | Blocks edit/write of a file that wasn't read first (or changed since read) |
 | [`todo`](extensions/todo/README.md) | Conversation-backed task list tool with `/todos` and a live above-editor overlay |
 

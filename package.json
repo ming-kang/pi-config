@@ -3,7 +3,14 @@
 	"version": "0.1.0",
 	"description": "Shared Pi configuration: commonly used extensions and themes.",
 	"keywords": ["pi-package"],
+	"homepage": "https://github.com/ming-kang/pi-config#readme",
+	"bugs": "https://github.com/ming-kang/pi-config/issues",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/ming-kang/pi-config.git"
+	},
 	"license": "MIT",
+	"author": "ming-kang",
 	"peerDependencies": {
 		"@earendil-works/pi-agent-core": "*",
 		"@earendil-works/pi-ai": "*",
