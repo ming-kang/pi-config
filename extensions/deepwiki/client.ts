@@ -33,6 +33,7 @@ export interface DeepWikiResponse {
 	toolName: DeepWikiToolName;
 	text: string;
 	outputLength: number;
+	sectionTitles?: string[];
 }
 
 function toolNameForAction(action: DeepWikiParams["action"]): DeepWikiToolName {
@@ -124,6 +125,13 @@ function extractToolText(result: unknown): string {
 	return text;
 }
 
+export function extractStructureSections(text: string): string[] {
+	return text
+		.split("\n")
+		.map((line) => line.match(/^\s*-\s+\d+\s+(.+)$/)?.[1]?.trim())
+		.filter((section): section is string => Boolean(section));
+}
+
 export async function callDeepWiki(params: DeepWikiParams, signal: AbortSignal | undefined): Promise<DeepWikiResponse> {
 	const toolName = toolNameForAction(params.action);
 	const body = {
@@ -162,5 +170,6 @@ export async function callDeepWiki(params: DeepWikiParams, signal: AbortSignal |
 		toolName,
 		text: resultText,
 		outputLength: resultText.length,
+		...(toolName === "read_wiki_structure" ? { sectionTitles: extractStructureSections(resultText) } : {}),
 	};
 }

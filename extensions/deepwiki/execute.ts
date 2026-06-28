@@ -9,6 +9,8 @@ export interface DeepWikiDetails {
 	question?: string;
 	toolName?: string;
 	outputLength?: number;
+	sectionCount?: number;
+	sectionTitles?: string[];
 	errorMessage?: string;
 }
 
@@ -36,9 +38,26 @@ export async function executeDeepWiki(
 
 	try {
 		const response = await callDeepWiki(normalizedParams, signal);
-		return buildResult(normalizedParams, response.text, {
+		const extra: Partial<DeepWikiDetails> = {
 			toolName: response.toolName,
 			outputLength: response.outputLength,
+			...(response.sectionTitles ? { sectionCount: response.sectionTitles.length, sectionTitles: response.sectionTitles } : {}),
+		};
+
+		if (normalizedParams.action === "contents" && !signal?.aborted) {
+			try {
+				const structure = await callDeepWiki({ action: "structure", repoName }, signal);
+				if (structure.sectionTitles) {
+					extra.sectionCount = structure.sectionTitles.length;
+					extra.sectionTitles = structure.sectionTitles;
+				}
+			} catch {
+				// Contents are still useful without summary metadata.
+			}
+		}
+
+		return buildResult(normalizedParams, response.text, {
+			...extra,
 		});
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
