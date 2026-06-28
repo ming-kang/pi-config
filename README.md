@@ -10,6 +10,7 @@ This Pi package contains commonly used extensions and themes, maintained for per
 | [`statusline`](extensions/statusline/README.md) | Compact color-coded footer (model · effort · ctx% · cwd · branch · tokens · cost) |
 | [`tools-view`](extensions/tools-view/README.md) | Compact rendering for built-in tools (read/bash/edit/write) and **central style hub** — all extensions import rendering primitives from `tools-view/shared.ts` |
 | [`advisor`](extensions/advisor/README.md) | `advisor` tool + `/advisor` command — one-shot review from a configured reviewer model via Pi's own model registry and provider auth |
+| [`deepwiki`](extensions/deepwiki/README.md) | `deepwiki` tool — query DeepWiki repository docs for GitHub repos without adding generic MCP support to Pi |
 | [`rewind`](extensions/rewind/README.md) | Per-edit file backups; restore via `/tree`, settings & storage via `/rewind` |
 | [`read-before-edit`](extensions/read-before-edit/README.md) | Blocks edit/write of a file that wasn't read first (or changed since read) |
 | [`todo`](extensions/todo/README.md) | Conversation-backed task list tool with `/todos` and a live above-editor overlay |
