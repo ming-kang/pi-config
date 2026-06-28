@@ -1,99 +1,52 @@
-# pi-config — Agent Guidelines
+# Package Contract
 
-This file is for AI coding agents working on `pi-config/`. It documents design conventions, architectural decisions, and shared agreements between maintainers.
+A shared Pi package bundling commonly used extensions and themes, published as a standalone GitHub repo.
 
-pi-config is a shared Pi package that bundles commonly used extensions and themes, published as a standalone GitHub repository.
+This file governs work on the code here: cross-cutting conventions live in this file; per-extension behavior lives in each extension's README.
 
----
+## Build & Test
 
-## Architectural Principles
+- **No build, no tracked tests.** Pi loads `.ts` directly via jiti; offline experiments go in `scratch/` (git-ignored).
+- **Iterate:** `pi -ne -e ./pi-config` loads this checkout for the session only (`-ne` stops installed copies from shadowing it).
+- **Verify a change:** drive the tool and check `renderCall` / `renderResult` in both collapsed and expanded (Ctrl+O) states; for lifecycle extensions (`rewind` / `read-before-edit` / `todo`) also exercise `/reload` and `/tree` navigation.
 
-### Extensions are decoupled; rendering is centralized
+## Architecture Boundaries
 
-- Each tool-owning extension (`advisor/`, `todo/`, `question/`, `rewind/`, `read-before-edit/`) owns its tool logic — `execute`, `schema`, `state`, configuration, commands, lifecycle handlers. The remaining two are special: `tools-view/` is the shared rendering hub (below), and `statusline/` is a footer-only extension with no tool.
-- **All tool rendering** is shipped via the `tools-view/` extension's shared style primitives. Every tool that needs a custom look must:
-  1. Set `renderShell: "self"` in its tool definition.
-  2. Import style helpers from `../tools-view/shared.ts`.
-  3. Use `callLine()` for `renderCall`, `resultLine()` for collapsed results, `errLine()` for errors, `activeDotLine()` for partial/progress states.
-- The style primitives live in one place (`tools-view/shared.ts`). To change the global look, edit that file — all tools pick it up automatically.
+- **Rendering is centralized.** Every custom-rendered tool sets `renderShell: "self"` and imports its primitives from `../tools-view/shared.ts`. To change the global look, edit `tools-view/shared.ts` — nothing else.
+- **`tools-view/` is a dependency, not optional.** Other extensions import its style primitives; if you selectively load a subset of this package, do **not** exclude `tools-view`.
+- **Extension layout:** `extensions/<name>/` owns `index.ts` (registration + lifecycle hooks) plus helpers (`schema` / `state` / `config` / `execute` …). A small extension may be a single `extensions/<name>.ts`.
+- **Shared, non-extension code** lives in `extensions/shared/` — no `index.ts`, no `pi` manifest, so Pi's loader treats it as a pure import target (e.g. `file-state.ts`, the read-state cache `read-before-edit` populates and `rewind` invalidates).
+- **Import rule:** cross-extension imports are allowed **only** for `../tools-view/shared.ts` and `../shared/*`. Never reach into another extension's internal modules.
 
-### Consistent rendering pattern
+## Conventions
 
-Every custom-rendered tool follows this visual convention:
+- Relative imports use the **`.ts`** source suffix — never `.js`.
+- **Pi-native first:** reuse `createXToolDefinition`, `keyHint("app.tools.expand", …)`, `theme.fg/bg/bold`, `completeSimple`, `modelRegistry`, `convertToLlm` instead of reimplementing.
+- **Visual convention:** `●` bullet (`success` / `error` / `warning`) + dim `│ ` prefix; `callLine` (renderCall), `resultLine` (collapsed result), `errLine` (error), `activeDotLine` (partial/progress).
+- **Guiding rule:** make the smallest possible change to Pi's behavior, reusing native mechanisms, to arrive at an experience that feels like Claude Code. Document unavoidable upstream limits in the extension's header comment.
 
-```
-● ToolName args              ← callLine (renderCall)
-│ Summary / result info      ← resultLine (collapsed renderResult)
-● error description          ← errLine (error state)
-● ToolName Working…          ← activeDotLine (partial state)
-```
+## Safety Rails
 
-- Bullet `●` uses `theme.fg("success", …)` on success, `theme.fg("error", …)` on error, `theme.fg("warning", …)` for active state.
-- Result prefix `│ ` is drawn with `theme.fg("dim", "│ ")`.
-- Tool name in call line uses `theme.fg("toolTitle", theme.bold(...))`.
-- Collapsed results stay compact: a one-line summary (counts / status), optionally a bounded preview (bash shows the last few output lines, write the first lines, edit the diff up to a line cap), and a `keyHint("app.tools.expand", …)` to reveal the rest.
-- Expanded content (Ctrl+O) shows the full tool output with appropriate formatting (markdown, diff, syntax-highlighted code, etc.).
+### NEVER
+- Commit API keys, provider tokens, Pi config files, or machine-specific paths.
+- Import another extension's internal modules (only `../tools-view/shared.ts` and `../shared/*` are shared).
+- Write `.js` import specifiers.
+- Exclude `tools-view` when selectively loading — it breaks every other extension's rendering.
 
-### Pi-native mechanisms first
+### ALWAYS
+- Route tool rendering through the `tools-view/shared.ts` primitives.
+- Verify both collapsed and expanded (Ctrl+O) states for any UI change.
+- Use Conventional Commits; commit at verified checkpoints.
 
-Reuse Pi's public API wherever possible:
-- `createXToolDefinition(cwd)` + spread for overriding built-in tools.
-- `keyHint("app.tools.expand", …)` for expand/collapse hints.
-- `theme.fg()`, `theme.bg()`, `theme.bold()` for all styling.
-- `completeSimple()` for LLM completions, `modelRegistry` for model discovery, `convertToLlm` for session message conversion.
+## Per-extension design notes
 
-Document unavoidable upstream limitations in the extension header comment — do not silently work around them.
+[`advisor`](extensions/advisor/README.md) · [`question`](extensions/question/README.md) · [`todo`](extensions/todo/README.md) · [`rewind`](extensions/rewind/README.md) · [`read-before-edit`](extensions/read-before-edit/README.md) · [`tools-view`](extensions/tools-view/README.md) · [`statusline`](extensions/statusline/README.md)
 
----
+## Compact Instructions
 
-## Extension Structure
+Preserve:
 
-```
-extensions/<name>/
-  index.ts      ← Extension entry: registerTool, registerCommand, lifecycle hooks
-  schema.ts     ← Parameter schema (TypeBox)
-  types.ts      ← Shared types / interfaces
-  state.ts      ← Runtime state management
-  config.ts     ← Persistent configuration (read/write JSON files)
-  execute.ts    ← Tool execution logic (when complex)
-  ...helpers    ← Any other helper modules imported by index.ts
-```
-
-A simple single-file extension (`extensions/<name>.ts`) is fine when the logic is small.
-
-Modules shared *across* extensions live in `extensions/shared/` — it has no `index.ts` and no `pi` manifest, so Pi's loader does not treat it as an extension (it is purely an import target). Example: `shared/file-state.ts`, the read-state cache that `read-before-edit` populates and `rewind` invalidates after a restore.
-
-Cross-extension imports are allowed **only** for `../tools-view/shared.ts` (style primitives) and for established shared utilities under `../shared/` (e.g. `../shared/file-state.ts`). Do not import from another extension's internal modules — that creates hidden coupling.
-
-Relative imports use the `.ts` source suffix (Pi's own example extensions do the same, and jiti resolves it directly) — do not write `.js` specifiers.
-
----
-
-## Design Decisions
-
-Each extension documents its own behavior, design decisions, and file layout in its own README. Cross-cutting conventions (rendering, imports, structure) stay in this file; anything specific to one extension belongs in that extension's README.
-
-- [`advisor/README.md`](extensions/advisor/README.md)
-- [`question/README.md`](extensions/question/README.md)
-- [`todo/README.md`](extensions/todo/README.md)
-- [`rewind/README.md`](extensions/rewind/README.md)
-- [`read-before-edit/README.md`](extensions/read-before-edit/README.md)
-- [`tools-view/README.md`](extensions/tools-view/README.md)
-- [`statusline/README.md`](extensions/statusline/README.md)
-
----
-
-## Commits
-
-- Use Conventional Commits (`feat:`, `fix:`, `refactor:`, `style:`, `docs:`, etc.).
-- Commit at meaningful checkpoints after verification.
-- Do not commit API keys, provider tokens, Pi config files, or machine-specific paths.
-
----
-
-## Testing Notes
-
-- **Load this checkout without installing.** Disable installed extensions and load the repo for the session only: `pi -ne -e ./pi-config`. `-ne` stops installed copies from shadowing your working tree; iterate and re-run to verify.
-- When testing UI changes, call the tool via the `advisor` tool or `question` tool from this agent to observe renderCall / renderResult output.
-- Verify both collapsed and expanded states (Ctrl+O toggle).
-- Check error states by providing invalid configuration or triggering intentional failures.
+1. The centralized-rendering rule and the `../tools-view/shared.ts` import boundary (NEVER summarize away).
+2. Extension structure and the `shared/` vs extension distinction.
+3. Which extension(s) were modified and the verification status (loads / UI states checked).
+4. Open risks, TODOs, rollback notes.
