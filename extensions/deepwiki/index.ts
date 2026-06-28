@@ -10,8 +10,8 @@ import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { activeDotLine, callLine, errLine, resultLine } from "../tools-view/shared.ts";
 
 import { executeDeepWiki, type DeepWikiDetails } from "./execute.ts";
-import { extractStructureSections } from "./client.ts";
-import { DeepWikiParamsSchema, type DeepWikiParams } from "./schema.ts";
+import { extractContentPages, extractStructureSections } from "./client.ts";
+import { DeepWikiParamsSchema, normalizeDeepWikiParams, type DeepWikiParams } from "./schema.ts";
 
 const ACTION_LABEL: Record<DeepWikiParams["action"], string> = {
 	structure: "structure",
@@ -43,24 +43,28 @@ function extractTopLevelSections(text: string): string[] {
 	return extractStructureSections(text);
 }
 
-function formatSectionList(sections: string[], maxItems = 4): string {
-	const shown = sections.slice(0, maxItems).join(", ");
-	return sections.length > maxItems ? `${shown}...` : shown;
+function formatPageList(pages: string[], maxItems = 4): string {
+	const shown = pages.slice(0, maxItems).join(", ");
+	return pages.length > maxItems ? `${shown}...` : shown;
 }
 
-function getSectionTitles(text: string, details: DeepWikiDetails | undefined): string[] {
-	return details?.sectionTitles?.length ? details.sectionTitles : extractTopLevelSections(text);
+function getPageTitles(text: string, details: DeepWikiDetails | undefined): string[] {
+	if (details?.pageTitles?.length) return details.pageTitles;
+	if (details?.sectionTitles?.length) return details.sectionTitles;
+	const contentPages = extractContentPages(text);
+	return contentPages.length ? contentPages : extractTopLevelSections(text);
 }
 
 function summarizeStructure(text: string, details: DeepWikiDetails | undefined): string {
-	const sections = getSectionTitles(text, details);
-	if (sections.length === 0) return truncate(firstContentLine(text));
-	return `${sections.length} pages · ${formatSectionList(sections)}`;
+	const pages = getPageTitles(text, details);
+	if (pages.length === 0) return truncate(firstContentLine(text));
+	return `${pages.length} pages · ${formatPageList(pages)}`;
 }
 
-function summarizeContents(details: DeepWikiDetails | undefined): string {
-	if (!details?.sectionCount) return "Wiki loaded · expand for full contents";
-	return `Wiki loaded · ${details.sectionCount} sections · expand for full contents`;
+function summarizeContents(text: string, details: DeepWikiDetails | undefined): string {
+	const pages = getPageTitles(text, details);
+	if (pages.length === 0) return "Wiki loaded · expand for full contents";
+	return `Wiki loaded · ${pages.length} pages · expand for full contents`;
 }
 
 function stripDeepWikiTail(text: string): string {
@@ -87,14 +91,23 @@ function summarizeQuestion(text: string): string {
 
 function summarizeCollapsedResult(text: string, details: DeepWikiDetails | undefined): string {
 	if (details?.action === "structure") return summarizeStructure(text, details);
-	if (details?.action === "contents") return summarizeContents(details);
+	if (details?.action === "contents") return summarizeContents(text, details);
 	if (details?.action === "question") return summarizeQuestion(text);
 	return truncate(firstContentLine(text));
 }
 
+function repoLabel(repoName: DeepWikiParams["repoName"] | undefined): string {
+	if (Array.isArray(repoName)) {
+		if (repoName.length === 0) return "repo";
+		if (repoName.length === 1) return repoName[0];
+		return `${repoName.length} repos: ${repoName.slice(0, 3).join(", ")}${repoName.length > 3 ? "..." : ""}`;
+	}
+	return repoName ?? "repo";
+}
+
 function callSuffix(args: DeepWikiParams, theme: Theme): string {
 	const action = ACTION_LABEL[args.action] ?? String(args.action ?? "...");
-	let suffix = `${theme.fg("muted", action)} ${theme.fg("accent", args.repoName ?? "repo")}`;
+	let suffix = `${theme.fg("muted", action)} ${theme.fg("accent", repoLabel(args.repoName))}`;
 	if (args.action === "question" && args.question) {
 		suffix += ` ${theme.fg("dim", truncate(args.question, 72))}`;
 	}
@@ -106,15 +119,20 @@ export default function deepwiki(pi: ExtensionAPI): void {
 		name: "deepwiki",
 		label: "DeepWiki",
 		description:
-			"Query DeepWiki online docs for public GitHub repos by owner/repo. Actions: question asks a focused repo question, structure lists wiki topics, contents fetches the full wiki. Not for local files, private repos, or uncommitted changes.",
-		promptSnippet: "Query online DeepWiki docs for public GitHub repos, not local files",
+			"Query DeepWiki's generated documentation for public GitHub repositories. Best for understanding an unfamiliar repo, finding reference patterns while designing or building something, explaining architecture/APIs/implementation details, and comparing up to 10 public repos. Results are generated from indexed public repo snapshots and often include cited source files; they are not local workspace state or guaranteed-latest upstream facts.",
+		promptSnippet:
+			"Use DeepWiki for public GitHub repo architecture, APIs, implementation patterns, reference designs, and repo comparisons",
 		promptGuidelines: [
-			"Use `deepwiki` for public GitHub repo architecture, API, or implementation questions when online generated docs help.",
-			"Use `deepwiki` only with repoName in owner/repo format; do not pass local paths, URLs, or package names.",
-			"Prefer `deepwiki` action `question` for specific asks; use `structure` for the topic map and `contents` only when full-wiki context is needed.",
-			"Do not use `deepwiki` for local workspace state or uncommitted changes; use read, grep, find, and ls for local files.",
+			"Use `deepwiki` when the user wants to understand a public GitHub repository: architecture, module layout, APIs, extension points, data flow, onboarding, or where a concept lives.",
+			"Use `deepwiki` as reference research while developing a new feature or project when public repos can provide implementation patterns, design tradeoffs, or examples to adapt.",
+			"Use `question` for targeted questions; use repoName as an array of up to 10 repos when comparing libraries, frameworks, plugin systems, or implementation approaches.",
+			"When these conditions apply, call `deepwiki` yourself instead of asking the user to open DeepWiki or paste docs.",
+			"Use `structure` first when the repo is unfamiliar and you need the topic map; use `contents` only when broad generated docs and source-file citations are worth the larger output.",
+			"Prefer repoName in owner/repo format; GitHub and DeepWiki URLs are accepted as fallback inputs, but do not pass package names or local paths.",
+			"Do not use `deepwiki` for local workspace files, uncommitted changes, private repos, exact current HEAD, release dates, pricing, security advisories, or anything where freshness is required; use local tools or current primary sources instead.",
 		],
 		parameters: DeepWikiParamsSchema,
+		prepareArguments: normalizeDeepWikiParams,
 		renderShell: "self",
 
 		async execute(_toolCallId, params, signal, onUpdate) {

@@ -1,7 +1,9 @@
-import type { DeepWikiParams } from "./schema.ts";
+import { normalizeDeepWikiParams, type DeepWikiParams } from "./schema.ts";
 
 const DEEPWIKI_MCP_URL = "https://mcp.deepwiki.com/mcp";
 const MCP_PROTOCOL_VERSION = "2024-11-05";
+const REQUEST_TIMEOUT_MS = 45_000;
+const CACHE_TTL_MS = 10 * 60_000;
 
 type DeepWikiToolName = "read_wiki_structure" | "read_wiki_contents" | "ask_question";
 
@@ -33,8 +35,16 @@ export interface DeepWikiResponse {
 	toolName: DeepWikiToolName;
 	text: string;
 	outputLength: number;
-	sectionTitles?: string[];
+	pageTitles?: string[];
+	cacheHit?: boolean;
 }
+
+interface CacheEntry {
+	expiresAt: number;
+	response: DeepWikiResponse;
+}
+
+const responseCache = new Map<string, CacheEntry>();
 
 function toolNameForAction(action: DeepWikiParams["action"]): DeepWikiToolName {
 	if (action === "structure") return "read_wiki_structure";
@@ -42,23 +52,28 @@ function toolNameForAction(action: DeepWikiParams["action"]): DeepWikiToolName {
 	return "ask_question";
 }
 
-function normalizeRepoName(repoName: string): string {
-	const normalized = repoName.trim();
-	if (!normalized) throw new Error("repoName is required");
-	if (!/^[^\s/]+\/[^\s/]+$/.test(normalized)) {
-		throw new Error('repoName must use "owner/repo" format');
+function argumentsForParams(params: DeepWikiParams): Record<string, unknown> {
+	const normalized = normalizeDeepWikiParams(params);
+	if (normalized.action === "question") {
+		const question = normalized.question?.trim();
+		if (!question) throw new Error("question is required when action is question");
+		return { repoName: normalized.repoName, question };
 	}
-	return normalized;
+	return { repoName: normalized.repoName };
 }
 
-function argumentsForParams(params: DeepWikiParams): Record<string, unknown> {
-	const repoName = normalizeRepoName(params.repoName);
-	if (params.action === "question") {
-		const question = params.question?.trim();
-		if (!question) throw new Error("question is required when action is question");
-		return { repoName, question };
-	}
-	return { repoName };
+function cacheKey(params: DeepWikiParams): string {
+	const normalized = normalizeDeepWikiParams(params);
+	const repos = Array.isArray(normalized.repoName) ? normalized.repoName : [normalized.repoName];
+	return JSON.stringify([normalized.action, repos, normalized.question ?? ""]);
+}
+
+function cloneResponse(response: DeepWikiResponse, cacheHit: boolean): DeepWikiResponse {
+	return {
+		...response,
+		...(response.pageTitles ? { pageTitles: [...response.pageTitles] } : {}),
+		cacheHit,
+	};
 }
 
 function truncate(text: string, maxLength = 500): string {
@@ -77,6 +92,7 @@ function parseJson(text: string): JsonRpcEnvelope {
 
 function parseSse(text: string): JsonRpcEnvelope {
 	const blocks = text.split(/\r?\n\r?\n/);
+	let fallback: JsonRpcEnvelope | undefined;
 	for (const block of blocks) {
 		const dataLines = block
 			.split(/\r?\n/)
@@ -86,8 +102,11 @@ function parseSse(text: string): JsonRpcEnvelope {
 
 		const data = dataLines.join("\n").trim();
 		if (!data || data === "[DONE]") continue;
-		return parseJson(data);
+		const envelope = parseJson(data);
+		if (envelope.error || envelope.result !== undefined) return envelope;
+		fallback = envelope;
 	}
+	if (fallback) return fallback;
 	throw new Error("DeepWiki returned an empty event stream");
 }
 
@@ -115,47 +134,133 @@ function extractContentResult(result: McpToolCallResult): string {
 		.trim();
 }
 
+function isDeepWikiErrorText(text: string): boolean {
+	const trimmed = text.trim();
+	return (
+		/^Error fetching wiki for .+?: Repository not found\./i.test(trimmed) ||
+		/^Error processing question: Repository not found\./i.test(trimmed)
+	);
+}
+
 function extractToolText(result: unknown): string {
 	if (!result || typeof result !== "object") throw new Error("DeepWiki returned no result object");
 
 	const toolResult = result as McpToolCallResult;
 	const text = extractStructuredResult(toolResult) ?? extractContentResult(toolResult);
 	if (!text) throw new Error("DeepWiki returned no text content");
-	if (toolResult.isError) throw new Error(text);
+	if (toolResult.isError || isDeepWikiErrorText(text)) throw new Error(text);
 	return text;
 }
 
 export function extractStructureSections(text: string): string[] {
-	return text
-		.split("\n")
-		.map((line) => line.match(/^\s*-\s+\d+\s+(.+)$/)?.[1]?.trim())
-		.filter((section): section is string => Boolean(section));
+	return uniqueTitles(
+		text
+			.split("\n")
+			.map((line) => line.match(/^\s*-\s+\d+\s+(.+)$/)?.[1]?.trim()),
+	);
+}
+
+export function extractContentPages(text: string): string[] {
+	return uniqueTitles(
+		text
+			.split("\n")
+			.map((line) => line.match(/^#\s+Page:\s+(.+)$/)?.[1]?.trim()),
+	);
+}
+
+function uniqueTitles(titles: Array<string | undefined>): string[] {
+	const seen = new Set<string>();
+	const result: string[] = [];
+	for (const title of titles) {
+		if (!title || seen.has(title)) continue;
+		seen.add(title);
+		result.push(title);
+	}
+	return result;
+}
+
+function extractPageTitles(toolName: DeepWikiToolName, text: string): string[] {
+	if (toolName === "read_wiki_structure") return extractStructureSections(text);
+	if (toolName === "read_wiki_contents") return extractContentPages(text);
+	return [];
+}
+
+function createRequestSignal(signal: AbortSignal | undefined): {
+	signal: AbortSignal;
+	timedOut: () => boolean;
+	cleanup: () => void;
+} {
+	const controller = new AbortController();
+	let timedOut = false;
+	const abortFromParent = () => controller.abort(signal?.reason);
+	const timeout = setTimeout(() => {
+		timedOut = true;
+		controller.abort();
+	}, REQUEST_TIMEOUT_MS);
+
+	if (signal?.aborted) {
+		abortFromParent();
+	} else {
+		signal?.addEventListener("abort", abortFromParent, { once: true });
+	}
+
+	return {
+		signal: controller.signal,
+		timedOut: () => timedOut,
+		cleanup: () => {
+			clearTimeout(timeout);
+			signal?.removeEventListener("abort", abortFromParent);
+		},
+	};
 }
 
 export async function callDeepWiki(params: DeepWikiParams, signal: AbortSignal | undefined): Promise<DeepWikiResponse> {
-	const toolName = toolNameForAction(params.action);
+	const normalizedParams = normalizeDeepWikiParams(params);
+	const key = cacheKey(normalizedParams);
+	const cached = responseCache.get(key);
+	if (cached && cached.expiresAt > Date.now()) {
+		return cloneResponse(cached.response, true);
+	}
+	if (cached) responseCache.delete(key);
+
+	const toolName = toolNameForAction(normalizedParams.action);
 	const body = {
 		jsonrpc: "2.0",
 		id: 1,
 		method: "tools/call",
 		params: {
 			name: toolName,
-			arguments: argumentsForParams(params),
+			arguments: argumentsForParams(normalizedParams),
 		},
 	};
 
-	const response = await fetch(DEEPWIKI_MCP_URL, {
-		method: "POST",
-		headers: {
-			Accept: "application/json, text/event-stream",
-			"Content-Type": "application/json",
-			"MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
-		},
-		body: JSON.stringify(body),
-		signal,
-	});
+	const requestSignal = createRequestSignal(signal);
+	let response: Response;
+	let text: string;
+	try {
+		response = await fetch(DEEPWIKI_MCP_URL, {
+			method: "POST",
+			headers: {
+				Accept: "application/json, text/event-stream",
+				"Content-Type": "application/json",
+				"MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
+			},
+			body: JSON.stringify(body),
+			signal: requestSignal.signal,
+		});
+		text = await response.text();
+	} catch (error) {
+		if (requestSignal.timedOut()) {
+			throw new Error(`DeepWiki request timed out after ${REQUEST_TIMEOUT_MS / 1000}s`);
+		}
+		if (signal?.aborted) {
+			throw new Error("DeepWiki request aborted");
+		}
+		throw error;
+	} finally {
+		requestSignal.cleanup();
+	}
 
-	const text = await response.text();
 	if (!response.ok) {
 		throw new Error(`DeepWiki HTTP ${response.status}: ${truncate(text)}`);
 	}
@@ -166,10 +271,13 @@ export async function callDeepWiki(params: DeepWikiParams, signal: AbortSignal |
 	}
 
 	const resultText = extractToolText(envelope.result);
-	return {
+	const pageTitles = extractPageTitles(toolName, resultText);
+	const result: DeepWikiResponse = {
 		toolName,
 		text: resultText,
 		outputLength: resultText.length,
-		...(toolName === "read_wiki_structure" ? { sectionTitles: extractStructureSections(resultText) } : {}),
+		...(pageTitles.length ? { pageTitles } : {}),
 	};
+	responseCache.set(key, { expiresAt: Date.now() + CACHE_TTL_MS, response: cloneResponse(result, false) });
+	return result;
 }

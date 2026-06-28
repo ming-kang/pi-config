@@ -13,10 +13,34 @@ It is intentionally not a general MCP bridge. The extension exposes one dedicate
 ## Tool Parameters
 
 - `action`: `structure`, `contents`, or `question`
-- `repoName`: GitHub repository in `owner/repo` format
+- `repoName`: GitHub repository in `owner/repo` format, or an array of up to 10 repositories for `question`
 - `question`: required only for `action: "question"`
+
+`repoName` is normalized before validation. `owner/repo` is the expected form, but common GitHub and DeepWiki URLs are accepted as a fallback. For model tolerance, comma-separated repo strings are also accepted and normalized into repo lists. If `action` is omitted, the tool defaults to `question` when a question is present and `structure` otherwise. `structure` and `contents` require exactly one repository.
+
+## Usage Strategy
+
+Use DeepWiki when generated docs for public repositories are useful context:
+
+- Understanding an unfamiliar public repo's architecture, module layout, APIs, data flow, or extension points.
+- Researching reference implementations while designing or building a new feature or project.
+- Asking a focused question about how a public repo implements something.
+- Comparing patterns or extension surfaces across multiple public repos with `question` and a repo array.
+- Pulling a broad topic map with `structure` before deciding which part of a repo matters.
+
+The prompt is model-facing: when these conditions apply, the model should call the tool itself instead of telling the user to open DeepWiki manually.
+
+Avoid DeepWiki when the authoritative source is local or time-sensitive:
+
+- Local workspace files, private code, uncommitted changes, or exact current checkout state.
+- Latest releases, pricing, security advisories, schedules, or facts that need current primary-source verification.
+- Package names without a known GitHub repo; resolve the repo first instead of guessing.
 
 ## Notes
 
 - DeepWiki currently exposes this data through its public MCP HTTP endpoint; this extension calls only the three DeepWiki operations above.
+- DeepWiki may return generated explanations with source-file citations and "related pages" links; collapsed rendering strips the navigation tail for concise summaries.
+- A repository may not be indexed. DeepWiki can return that as normal text, so the extension treats repository-not-found messages as tool errors.
+- Successful responses are cached in-process for 10 minutes, keyed by action, repo, and question. Failed, aborted, and timed-out requests are not cached.
+- Network requests time out after 45 seconds and surface as Pi tool errors.
 - Use local Pi tools (`read`, `grep`, `find`, `ls`) for workspace state. DeepWiki answers describe repository snapshots indexed by DeepWiki, not local uncommitted files.
