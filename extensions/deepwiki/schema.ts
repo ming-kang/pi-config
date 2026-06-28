@@ -12,12 +12,12 @@ export const DeepWikiParamsSchema = Type.Object({
 	action: DeepWikiActionSchema,
 	repoName: Type.String({
 		minLength: 1,
-		description: 'GitHub repository in "owner/repo" format, such as "facebook/react".',
+		description: 'Public GitHub repo in "owner/repo" format; not a local path or URL.',
 	}),
 	question: Type.Optional(
 		Type.String({
 			minLength: 1,
-			description: "Required when action is question. The focused repository question to ask DeepWiki.",
+			description: "Focused repo question; required for action question.",
 		}),
 	),
 });
