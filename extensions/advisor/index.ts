@@ -5,10 +5,11 @@
  * separately configured reviewer model via Pi's own model registry and
  * provider auth. It intentionally gives the reviewer no tools.
  */
-import { getMarkdownTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import { type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 
-import { activeDotLine, callLine, errLine, resultLine } from "../tools-view/shared.ts";
+import { activeDotLine, callLine, errorResultLine, markdownResultBlock, resultLine } from "../tools-view/shared.ts";
+import { firstLine } from "../shared/text.ts";
 
 import {
 	ADVISOR_LABEL,
@@ -79,22 +80,19 @@ export default function advisor(pi: ExtensionAPI): void {
 
 			if (options.isPartial) {
 				const modelInfo = details?.advisorModel ?? "";
-				return new Text(activeDotLine("Advisor", ` Consulting ${modelInfo}…`, theme), 0, 0);
+				return new Text(activeDotLine("Advisor", ` Consulting ${modelInfo}...`, theme), 0, 0);
 			}
 
 			if (ctx.isError || details?.errorMessage) {
-				const msg = text.split("\n")[0] || "advisor call failed";
-				return new Text(errLine(msg, theme), 0, 0);
+				const msg = firstLine(text, "advisor call failed");
+				return new Text(errorResultLine(msg, options.expanded, theme), 0, 0);
 			}
 
 			if (!options.expanded) {
 				return new Text(resultLine(theme.fg("accent", extractSummary(text)), theme), 0, 0);
 			}
 
-			const container = new Container();
-			container.addChild(new Spacer(1));
-			container.addChild(new Markdown(text, 1, 0, getMarkdownTheme()));
-			return container;
+			return markdownResultBlock(text);
 		},
 	});
 

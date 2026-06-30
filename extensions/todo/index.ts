@@ -10,7 +10,8 @@ import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-ag
 import { Text } from "@earendil-works/pi-tui";
 
 import { TodoOverlay } from "./overlay.ts";
-import { activeDotLine, callLine, errLine, resultLine } from "../tools-view/shared.ts";
+import { activeDotLine, callLine, errorResultLine, resultLine } from "../tools-view/shared.ts";
+import { firstLine } from "../shared/text.ts";
 import {
 	applyTodoMutation,
 	buildTodoDetails,
@@ -76,18 +77,18 @@ export default function todo(pi: ExtensionAPI): void {
 			} else if (args.action === "list" && args.status) {
 				suffix += ` ${theme.fg("dim", args.status)}`;
 			}
-			return new Text(callLine("Todo", suffix, theme, "warning"), 0, 0);
+			return new Text(callLine("Todo", suffix, theme), 0, 0);
 		},
 
 		renderResult(result, options, theme) {
 			const details = result.details as TodoDetails | undefined;
 
 			if (options.isPartial) {
-				return new Text(activeDotLine("Todo", " Working…", theme), 0, 0);
+				return new Text(activeDotLine("Todo", " Working...", theme), 0, 0);
 			}
 
 			if (details?.error) {
-				return new Text(errLine(details.error, theme), 0, 0);
+				return new Text(errorResultLine(details.error, options.expanded, theme), 0, 0);
 			}
 
 			const textContent = result.content.find((part) => part.type === "text")?.text ?? "";
@@ -108,7 +109,7 @@ export default function todo(pi: ExtensionAPI): void {
 			}
 
 			if (!options.expanded) {
-				const summary = textContent.split("\n")[0] || "ok";
+				const summary = firstLine(textContent, "ok");
 				return new Text(resultLine(theme.fg("success", summary), theme), 0, 0);
 			}
 

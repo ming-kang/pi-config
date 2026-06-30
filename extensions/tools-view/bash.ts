@@ -57,7 +57,7 @@ export function createBashRenderer(cwd: string) {
 		renderShell: "self" as const,
 
 		renderCall(args: Record<string, unknown>, theme: Theme) {
-			const cmd = truncateToWidth(String(args.command ?? "…"), 80, "…");
+			const cmd = truncateToWidth(String(args.command ?? "..."), 80, "...");
 			const tail = args.timeout ? ` timeout=${args.timeout}s` : "";
 			return new Text(callLine("Bash", cmd + tail, theme), 0, 0);
 		},
@@ -80,9 +80,9 @@ export function createBashRenderer(cwd: string) {
 				let text = `${dot} ${theme.fg("toolTitle", theme.bold("Bash"))}`;
 				if (preview) {
 					text += `\n  ${theme.fg("dim", preview)}`;
-					if (bodyCount > 5) text += `\n  ${theme.fg("muted", `… ${bodyCount - 5} lines`)}`;
+					if (bodyCount > 5) text += `\n  ${theme.fg("muted", `... ${bodyCount - 5} lines`)}`;
 				} else {
-					text += theme.fg("dim", " Running…");
+					text += theme.fg("dim", " Running...");
 				}
 				if (details?.truncation?.truncated) text += theme.fg("warning", " (truncating)");
 				return new Text(text, 0, 0);
@@ -109,7 +109,7 @@ export function createBashRenderer(cwd: string) {
 				if (hidden > 0) {
 					text += expanded
 						? `\n  ${theme.fg("muted", "(")}${keyHint("app.tools.expand", "to collapse")}${theme.fg("muted", ")")}`
-						: `\n  ${theme.fg("muted", `… ${hidden} more lines (`)}${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+						: `\n  ${theme.fg("muted", `... ${hidden} more lines (`)}${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
 				}
 			}
 			return new Text(text, 0, 0);

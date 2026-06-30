@@ -57,7 +57,7 @@ export function createReadRenderer(cwd: string) {
 		renderShell: "self" as const,
 
 		renderCall(args: Record<string, unknown>, theme: Theme) {
-			const parts: string[] = [String(args.path ?? "…")];
+			const parts: string[] = [String(args.path ?? "...")];
 			if (args.offset) parts.push(`offset=${args.offset}`);
 			if (args.limit) parts.push(`limit=${args.limit}`);
 			return new Text(callLine("Read", parts.join(" "), theme), 0, 0);
@@ -65,7 +65,7 @@ export function createReadRenderer(cwd: string) {
 
 		renderResult(result: any, options: ToolRenderResultOptions, theme: Theme, ctx = {} as RenderCtx) {
 			const { expanded, isPartial } = options;
-			if (isPartial) return new Text(activeDotLine("Read", " Reading…", theme), 0, 0);
+			if (isPartial) return new Text(activeDotLine("Read", " Reading...", theme), 0, 0);
 			if (expanded) return base.renderResult(result, options, theme, ctx as any);
 
 			const content = result.content ?? [];

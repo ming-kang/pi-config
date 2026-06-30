@@ -148,7 +148,7 @@ export default function (pi: ExtensionAPI) {
 							.sort(([a], [b]) => a.localeCompare(b))
 							.map(([, text]) => sanitizeStatus(text))
 							.join("  ");
-						lines.push(truncateToWidth(statusLine, width, theme.fg("dim", "…")));
+						lines.push(truncateToWidth(statusLine, width, theme.fg("dim", "...")));
 					}
 					return lines;
 				},

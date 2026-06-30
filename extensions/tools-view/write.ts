@@ -18,14 +18,14 @@ export function createWriteRenderer(cwd: string) {
 		renderShell: "self" as const,
 
 		renderCall(args: Record<string, unknown>, theme: Theme) {
-			const filePath = String(args.path ?? "…");
+			const filePath = String(args.path ?? "...");
 			const suffix = typeof args.content === "string" ? ` · ${textLineCount(args.content)} lines` : "";
 			return new Text(callLine("Write", `${filePath}${suffix}`, theme), 0, 0);
 		},
 
 		renderResult(result: any, options: ToolRenderResultOptions, theme: Theme, ctx = {} as RenderCtx) {
 			const { expanded, isPartial } = options;
-			if (isPartial) return new Text(activeDotLine("Write", " Writing…", theme), 0, 0);
+			if (isPartial) return new Text(activeDotLine("Write", " Writing...", theme), 0, 0);
 
 			if (ctx.isError) {
 				const textBlock = (result.content ?? []).find((c: any) => c?.type === "text");
@@ -51,7 +51,7 @@ export function createWriteRenderer(cwd: string) {
 			for (const line of renderNumberedLines(allWriteLines.slice(0, maxLines), 1, theme)) text += `\n${line}`;
 			const remaining = allWriteLines.length - maxLines;
 			if (remaining > 0) {
-				text += `\n  ${theme.fg("muted", `… (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+				text += `\n  ${theme.fg("muted", `... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
 			}
 			return new Text(text, 0, 0);
 		},

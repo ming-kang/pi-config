@@ -32,6 +32,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { rewindBackupsRoot, sessionsDir } from "../shared/paths.ts";
+import { truncateText } from "../shared/text.ts";
 import { type RewindConfig, loadRewindConfig } from "./config.ts";
 import {
 	beginTurn,
@@ -71,11 +72,6 @@ function lastUserEntryId(ctx: ExtensionContext): string | undefined {
 		if (e.type === "message" && (e.message as AgentMessage).role === "user") return e.id;
 	}
 	return undefined;
-}
-
-function truncate(s: string, n: number): string {
-	const t = s.replace(/\s+/g, " ").trim();
-	return t.length > n ? t.slice(0, n - 1) + "…" : t;
 }
 
 /** Rebuild the snapshot list for a session from its persisted custom entries. */
@@ -158,7 +154,7 @@ export default function rewind(pi: ExtensionAPI): void {
 		if (!sid) return;
 		const userEntryId = lastUserEntryId(ctx) ?? "";
 		const turnId = ctx.sessionManager.getLeafId() ?? userEntryId;
-		const prompt = truncate(pendingPrompt.get(sid) ?? "", 120);
+		const prompt = truncateText(pendingPrompt.get(sid) ?? "", 120, { collapseWhitespace: true });
 		pendingPrompt.delete(sid);
 		const frame = endTurn(sid, userEntryId, turnId, prompt, new Date().toISOString(), config.maxSnapshots);
 		if (frame && userEntryId) {

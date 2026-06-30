@@ -12,11 +12,21 @@ All custom tool rendering follows one visual convention. Every tool sets `render
 ```
 ● ToolName args              ← call line   (callLine)
 │ Summary / result           ← collapsed   (resultLine)
-● error description          ← error       (errLine)
-● ToolName Working…          ← active      (activeDotLine)
+● error description          ← error       (errLine / errorResultLine)
+● ToolName Working...        ← active      (activeDotLine)
 ```
 
-Primitives live in `shared.ts`: `callLine()` for `renderCall`, `resultLine()` for collapsed `renderResult`, `errLine()` for error states, `activeDotLine()` for partial/progress states. Bullet `●` uses `theme.fg("success" | "error" | "warning", …)`; the result prefix `│ ` uses `theme.fg("dim", …)`; the tool name uses `theme.fg("toolTitle", theme.bold(...))`.
+Primitives live in `shared.ts`: `callLine()` for `renderCall`, `resultLine()` for collapsed `renderResult`, `errLine()` / `errorResultLine()` for error states, `activeDotLine()` for partial/progress states, `markdownResultBlock()` for expanded Markdown results. Bullet `●` uses `theme.fg("success" | "error" | "warning", …)`; the result prefix `│ ` uses `theme.fg("dim", …)`; the tool name uses `theme.fg("toolTitle", theme.bold(...))`.
+
+### Dot-color rule
+
+The `callLine` bullet is **always `success` (green)** for every tool — built-in and custom alike. Custom tools are not a separate visual species; the dot color never encodes tool identity. State is conveyed by the *line form*, not the dot color:
+
+- **`success`** — a completed call line (`callLine`, default; no 4th arg).
+- **`warning`** — an in-progress/partial line (`activeDotLine`, always warning).
+- **`error`** — a failure line (`errLine` / `errorResultLine`, error color).
+
+Do not pass a 4th `dotColor` arg to `callLine` — the default `success` is the rule. (No override exists today.)
 
 ## Collapsed-result convention
 

@@ -353,7 +353,7 @@ export function createQuestionDialog(questions: Question[]) {
 							? theme.fg("success", "[x]")
 							: theme.fg("dim", "[ ]")
 					: "";
-				const focusArrow = focused ? theme.fg("accent", ">") : " ";
+				const focusArrow = focused ? theme.fg("accent", "→") : " ";
 				const note = option.kind === "option" && state.notesByOption.has(option.label) ? theme.fg("success", " +note") : "";
 				const customText =
 					option.kind === "other"

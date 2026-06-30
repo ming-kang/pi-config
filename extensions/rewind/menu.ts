@@ -53,14 +53,14 @@ export async function runRewindMenu(ctx: ExtensionCommandContext): Promise<void>
 }
 
 async function pickRetention(ctx: ExtensionCommandContext): Promise<void> {
-	const options = [...RETENTION_PRESETS.map((d) => `${d} days`), "Keep forever", "Custom…"];
+	const options = [...RETENTION_PRESETS.map((d) => `${d} days`), "Keep forever", "Custom..."];
 	const pick = await ctx.ui.select("Auto-clean backups after", options);
 	if (!pick) return;
 
 	let days: number;
 	if (pick === "Keep forever") {
 		days = 0;
-	} else if (pick === "Custom…") {
+	} else if (pick === "Custom...") {
 		const value = await ctx.ui.input("Days to keep backups (0 = forever)");
 		if (value === undefined) return;
 		const n = Number.parseInt(value.trim(), 10);

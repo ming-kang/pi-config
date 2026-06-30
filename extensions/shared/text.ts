@@ -27,23 +27,29 @@ export interface TruncateTextOptions {
 	word?: boolean;
 	/** Ellipsis to append when truncated. Defaults to `...` (SPEC F6). */
 	ellipsis?: string;
+	/** Collapse runs of whitespace to single spaces and trim before measuring.
+	 * Used by rewind's snapshot-label truncation where a prompt is flattened to
+	 * one line first. Defaults to false. */
+	collapseWhitespace?: boolean;
 }
 
 /**
  * Truncate `text` to at most `max` visible characters, appending the ellipsis
  * when truncation occurs. With `word: true`, cuts at the last space within the
- * prefix (falling back to a hard cut if no space is found early enough).
+ * prefix (falling back to a hard cut if no space is found early enough). With
+ * `collapseWhitespace: true`, whitespace runs are flattened and trimmed first.
  *
  * Replaces deepwiki's `truncate` (max=120) and `truncateAtWord`, and rewind's
  * `truncate` (whitespace-collapsed). Callers pass their own `max`.
  */
 export function truncateText(text: string, max: number, opts: TruncateTextOptions = {}): string {
 	const ellipsis = opts.ellipsis ?? "...";
-	if (text.length <= max) return text;
+	const source = opts.collapseWhitespace ? text.replace(/\s+/g, " ").trim() : text;
+	if (source.length <= max) return source;
 	const ellipsisLen = ellipsis.length;
 	if (ellipsisLen >= max) return ellipsis.slice(0, max);
 
-	const prefix = text.slice(0, max - ellipsisLen);
+	const prefix = source.slice(0, max - ellipsisLen);
 	if (opts.word) {
 		const lastSpace = prefix.lastIndexOf(" ");
 		// Only honor a word boundary if it leaves a reasonable amount of text;

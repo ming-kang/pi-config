@@ -35,7 +35,7 @@ export interface GcResult {
 }
 
 /**
- * Extract a session id from a session JSONL path/filename (`…_<id>.jsonl`).
+ * Extract a session id from a session JSONL path/filename (`..._<id>.jsonl`).
  * Format-agnostic (no hardcoded id shape) so it stays correct if Pi changes its
  * session-id format. Shared with the integration layer (index.ts) so the two
  * parsers can't drift — a stricter parser here could miss active sessions and

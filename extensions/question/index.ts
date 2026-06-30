@@ -11,7 +11,7 @@ import { createQuestionDialog } from "./dialog.ts";
 import { cancelResult, errorResult, successResult, answerScalar } from "./results.ts";
 import { QuestionParams, validateQuestions } from "./schema.ts";
 import type { DialogResult, Question, QuestionToolDetails } from "./types.ts";
-import { callLine, errLine, resultLine } from "../tools-view/shared.ts";
+import { callLine, errorResultLine, resultLine } from "../tools-view/shared.ts";
 
 export default function question(pi: ExtensionAPI) {
 	pi.registerTool({
@@ -47,18 +47,19 @@ export default function question(pi: ExtensionAPI) {
 			let suffix: string;
 			if (qs.length === 1) {
 				const q = qs[0] as Partial<Question>;
-				suffix = theme.fg("muted", String(q.question ?? "…"));
+				suffix = theme.fg("muted", String(q.question ?? "..."));
 			} else {
 				suffix = theme.fg("muted", `${qs.length} questions`);
 			}
-			return new Text(callLine("Question", suffix, theme, "accent"), 0, 0);
+			return new Text(callLine("Question", suffix, theme), 0, 0);
 		},
 		renderResult(result, _options, theme) {
 			const details = result.details as QuestionToolDetails | undefined;
 
 			if (details?.error) {
 				const text = result.content[0];
-				return new Text(errLine(text?.type === "text" ? text.text : `Error: ${details.error}`, theme), 0, 0);
+				const msg = text?.type === "text" ? text.text : `Error: ${details.error}`;
+				return new Text(errorResultLine(msg, false, theme), 0, 0);
 			}
 
 			if (details?.cancelled) {

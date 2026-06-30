@@ -21,12 +21,12 @@ export function createEditRenderer(cwd: string) {
 		renderShell: "self" as const,
 
 		renderCall(args: Record<string, unknown>, theme: Theme) {
-			return new Text(callLine("Edit", String(args.path ?? "…"), theme), 0, 0);
+			return new Text(callLine("Edit", String(args.path ?? "..."), theme), 0, 0);
 		},
 
 		renderResult(result: any, options: ToolRenderResultOptions, theme: Theme, ctx = {} as RenderCtx) {
 			const { expanded, isPartial } = options;
-			if (isPartial) return new Text(activeDotLine("Edit", " Editing…", theme), 0, 0);
+			if (isPartial) return new Text(activeDotLine("Edit", " Editing...", theme), 0, 0);
 
 			const details = result.details as EditToolDetails | undefined;
 			if (ctx.isError) {
@@ -51,7 +51,7 @@ export function createEditRenderer(cwd: string) {
 			text += `\n${indentBlock(shown.join("\n"))}`;
 			const hidden = rendered.length - shown.length;
 			if (hidden > 0) {
-				text += `\n  ${theme.fg("muted", `… ${hidden} more lines (`)}${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+				text += `\n  ${theme.fg("muted", `... ${hidden} more lines (`)}${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
 			} else if (expanded && rendered.length > COLLAPSED_DIFF_LIMIT) {
 				text += `\n  ${theme.fg("muted", "(")}${keyHint("app.tools.expand", "to collapse")}${theme.fg("muted", ")")}`;
 			}

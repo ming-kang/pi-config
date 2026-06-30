@@ -4,10 +4,11 @@
  * Pi does not expose MCP servers as tools. This extension intentionally exposes
  * only one DeepWiki-specific tool and hard-codes DeepWiki's public operations.
  */
-import { getMarkdownTheme, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import { type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 
-import { activeDotLine, callLine, errLine, resultLine } from "../tools-view/shared.ts";
+import { activeDotLine, callLine, errorResultLine, markdownResultBlock, resultLine } from "../tools-view/shared.ts";
+import { truncateText } from "../shared/text.ts";
 
 import { executeDeepWiki, type DeepWikiDetails } from "./execute.ts";
 import { extractContentPages, extractStructureSections } from "./client.ts";
@@ -24,19 +25,6 @@ function firstContentLine(text: string): string {
 		.split("\n")
 		.map((line) => line.trim())
 		.find((line) => line.length > 0) ?? "DeepWiki response";
-}
-
-function truncate(text: string, maxLength = 120): string {
-	if (text.length <= maxLength) return text;
-	return `${text.slice(0, maxLength - 3)}...`;
-}
-
-function truncateAtWord(text: string, maxLength: number): string {
-	if (text.length <= maxLength) return text;
-	const prefix = text.slice(0, maxLength - 3);
-	const lastSpace = prefix.lastIndexOf(" ");
-	if (lastSpace < 40) return `${prefix}...`;
-	return `${prefix.slice(0, lastSpace)}...`;
 }
 
 function extractTopLevelSections(text: string): string[] {
@@ -57,7 +45,7 @@ function getPageTitles(text: string, details: DeepWikiDetails | undefined): stri
 
 function summarizeStructure(text: string, details: DeepWikiDetails | undefined): string {
 	const pages = getPageTitles(text, details);
-	if (pages.length === 0) return truncate(firstContentLine(text));
+	if (pages.length === 0) return truncateText(firstContentLine(text), 120);
 	return `${pages.length} pages · ${formatPageList(pages)}`;
 }
 
@@ -86,14 +74,14 @@ function summarizeQuestion(text: string): string {
 	const cleaned = cleanSummaryText(text);
 	if (!cleaned) return "DeepWiki answered";
 	const sentenceMatch = cleaned.match(/^.{40,}?[.!?](?=\s|$)/);
-	return truncateAtWord(sentenceMatch?.[0] ?? cleaned, 160);
+	return truncateText(sentenceMatch?.[0] ?? cleaned, 160, { word: true });
 }
 
 function summarizeCollapsedResult(text: string, details: DeepWikiDetails | undefined): string {
 	if (details?.action === "structure") return summarizeStructure(text, details);
 	if (details?.action === "contents") return summarizeContents(text, details);
 	if (details?.action === "question") return summarizeQuestion(text);
-	return truncate(firstContentLine(text));
+	return truncateText(firstContentLine(text), 120);
 }
 
 function repoLabel(repoName: DeepWikiParams["repoName"] | undefined): string {
@@ -109,7 +97,7 @@ function callSuffix(args: DeepWikiParams, theme: Theme): string {
 	const action = ACTION_LABEL[args.action] ?? String(args.action ?? "...");
 	let suffix = `${theme.fg("muted", action)} ${theme.fg("accent", repoLabel(args.repoName))}`;
 	if (args.action === "question" && args.question) {
-		suffix += ` ${theme.fg("dim", truncate(args.question, 72))}`;
+		suffix += ` ${theme.fg("dim", truncateText(args.question, 72))}`;
 	}
 	return suffix;
 }
@@ -140,7 +128,7 @@ export default function deepwiki(pi: ExtensionAPI): void {
 		},
 
 		renderCall(args, theme) {
-			return new Text(callLine("DeepWiki", callSuffix(args, theme), theme, "accent"), 0, 0);
+			return new Text(callLine("DeepWiki", callSuffix(args, theme), theme), 0, 0);
 		},
 
 		renderResult(result, options, theme, ctx) {
@@ -153,21 +141,15 @@ export default function deepwiki(pi: ExtensionAPI): void {
 			}
 
 			if (ctx.isError || details?.errorMessage) {
-				const message = details?.errorMessage ?? firstContentLine(text);
-				if (!options.expanded) {
-					return new Text(resultLine(theme.fg("error", `failed · ${message}`), theme), 0, 0);
-				}
-				return new Text(errLine(message, theme), 0, 0);
+				const message = `failed · ${details?.errorMessage ?? firstContentLine(text)}`;
+				return new Text(errorResultLine(message, options.expanded, theme), 0, 0);
 			}
 
 			if (!options.expanded) {
 				return new Text(resultLine(theme.fg("accent", summarizeCollapsedResult(text, details)), theme), 0, 0);
 			}
 
-			const container = new Container();
-			container.addChild(new Spacer(1));
-			container.addChild(new Markdown(text, 1, 0, getMarkdownTheme()));
-			return container;
+			return markdownResultBlock(text);
 		},
 	});
 }
