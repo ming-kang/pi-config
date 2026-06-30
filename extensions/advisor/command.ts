@@ -62,7 +62,6 @@ async function pickReviewer(ctx: ExtensionContext): Promise<AdvisorMenuChoice | 
 	const items = buildAdvisorMenuItems(ctx.modelRegistry.getAvailable(), current).map((item) => ({
 		...item,
 		key: item.choice.kind === "model" ? `model:${item.choice.modelKey}` : item.choice.kind,
-		selectionLabel: item.selectionLabel,
 	}));
 	const title = `Advisor reviewer · Currently ${formatCurrentReviewerLabel(current, getAdvisorEffort())}`;
 

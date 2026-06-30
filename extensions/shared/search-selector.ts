@@ -48,8 +48,6 @@ export class SearchSelectorComponent<TChoice> implements Component, Focusable {
 		this.maxVisibleItems = options.maxVisibleItems ?? 8;
 		this.helpText = options.helpText ?? "Type to search • Enter to select • Esc to cancel • ↑↓ to move";
 		this.noMatchesText = options.noMatchesText ?? "No matches";
-		this.searchInput.onSubmit = () => this.commitSelection();
-		this.searchInput.onEscape = () => this.cancel();
 	}
 
 	invalidate(): void {
@@ -135,7 +133,9 @@ export class SearchSelectorComponent<TChoice> implements Component, Focusable {
 		const detail = item.detail ? this.theme.fg("muted", ` [${item.detail}]`) : "";
 		const currentMark = item.current ? this.theme.fg("success", " ✓") : "";
 		const line = `${prefix}${label}${detail}${currentMark}`;
-		return isSelected ? this.theme.bg("selectedBg", truncateToWidth(line, width, "")) : truncateToWidth(line, width, "");
+		return isSelected
+			? this.theme.bg("selectedBg", truncateToWidth(line, width, "", true))
+			: truncateToWidth(line, width, "");
 	}
 
 	private applyFilter(query: string): void {
