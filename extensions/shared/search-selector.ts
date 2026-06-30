@@ -25,6 +25,11 @@ export class SearchSelectorComponent<TChoice> implements Component, Focusable {
 	private readonly helpText: string;
 	private readonly noMatchesText: string;
 	private _focused = false;
+	// Render cache (mirrors question/dialog.ts): reuse the last output when
+	// width is unchanged and no input/state change has invalidated it. Avoids
+	// re-wrapping/truncating every keystroke-driven redraw.
+	private cachedLines?: string[];
+	private cachedWidth?: number;
 
 	get focused(): boolean {
 		return this._focused;
@@ -33,6 +38,7 @@ export class SearchSelectorComponent<TChoice> implements Component, Focusable {
 	set focused(value: boolean) {
 		this._focused = value;
 		this.searchInput.focused = value;
+		this.cachedLines = undefined;
 	}
 
 	constructor(
@@ -51,10 +57,13 @@ export class SearchSelectorComponent<TChoice> implements Component, Focusable {
 	}
 
 	invalidate(): void {
-		// No cached render state.
+		this.cachedLines = undefined;
 	}
 
 	handleInput(data: string): void {
+		// Any keystroke may change the input cursor, filter, or selection —
+		// drop the render cache so the next render recomputes.
+		this.cachedLines = undefined;
 		const kb = this.keybindings;
 		if (kb.matches(data, "tui.select.up")) {
 			this.moveSelection(-1);
@@ -78,6 +87,7 @@ export class SearchSelectorComponent<TChoice> implements Component, Focusable {
 	}
 
 	render(width: number): string[] {
+		if (this.cachedLines && this.cachedWidth === width) return this.cachedLines;
 		const renderWidth = Math.max(1, width);
 		const lines: string[] = [];
 		const titleLine = ` ${this.theme.fg("accent", this.theme.bold(this.title))}`;
@@ -123,6 +133,8 @@ export class SearchSelectorComponent<TChoice> implements Component, Focusable {
 		}
 
 		lines.push(this.theme.fg("accent", "─".repeat(renderWidth)));
+		this.cachedLines = lines;
+		this.cachedWidth = width;
 		return lines;
 	}
 

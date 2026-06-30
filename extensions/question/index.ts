@@ -12,21 +12,21 @@ import { cancelResult, errorResult, successResult, answerScalar } from "./result
 import { QuestionParams, validateQuestions } from "./schema.ts";
 import type { DialogResult, Question, QuestionToolDetails } from "./types.ts";
 import { callLine, errorResultLine, resultLine } from "../tools-view/shared.ts";
+import {
+	QUESTION_DESCRIPTION,
+	QUESTION_LABEL,
+	QUESTION_PROMPT_GUIDELINES,
+	QUESTION_PROMPT_SNIPPET,
+	QUESTION_TOOL_NAME,
+} from "./constants.ts";
 
 export default function question(pi: ExtensionAPI) {
 	pi.registerTool({
-		name: "question",
-		label: "Question",
-		description:
-			"Ask the user one or more multiple-choice questions to gather preferences, clarify ambiguity, or let them choose a direction. Each question has 2-4 options; the user can always pick 'Type something.' to type a custom answer. Use only when you genuinely need a user decision.",
-		promptSnippet: "Ask the user multiple-choice questions when you need a decision or preference",
-		promptGuidelines: [
-			"Use question only when you genuinely need user input to proceed; do not use it for trivial single-step tasks or informational queries.",
-			"Each question needs a unique question text, a short header chip, and 2-4 options with distinct labels.",
-			"Do not author reserved option labels: Other, Type something., Chat about this, or Next.",
-			"Users can press Tab to attach notes to a concrete focused option or type a custom answer on 'Type something.', Left/Right to switch questions, Space to toggle multi-select options, and Enter to submit.",
-			"Use preview for concrete artifacts like code snippets or layout mockups that users need to visually compare.",
-		],
+		name: QUESTION_TOOL_NAME,
+		label: QUESTION_LABEL,
+		description: QUESTION_DESCRIPTION,
+		promptSnippet: QUESTION_PROMPT_SNIPPET,
+		promptGuidelines: QUESTION_PROMPT_GUIDELINES,
 		parameters: QuestionParams,
 		renderShell: "self",
 

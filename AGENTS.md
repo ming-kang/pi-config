@@ -22,7 +22,8 @@ This file governs work on the code here: cross-cutting conventions live in this 
 
 - Relative imports use the **`.ts`** source suffix — never `.js`.
 - **Pi-native first:** reuse `createXToolDefinition`, `keyHint("app.tools.expand", …)`, `theme.fg/bg/bold`, `completeSimple`, `modelRegistry`, `convertToLlm` instead of reimplementing.
-- **Visual convention:** `●` bullet (`success` / `error` / `warning`) + dim `│ ` prefix; `callLine` (renderCall), `resultLine` (collapsed result), `errLine` (error), `activeDotLine` (partial/progress).
+- **Visual convention:** `●` bullet (`success` / `error` / `warning`) + dim `│ ` prefix; `callLine` (renderCall), `resultLine` (collapsed result), `errLine` (error), `activeDotLine` (partial/progress). The `callLine` dot is always `success` (see `tools-view/README.md` → Dot-color rule).
+- **hasUI guard rule:** when interactive UI is unavailable, behavior depends on the call origin — **command handlers** (`/advisor`, `/todos`, `/rewind`, …) `ctx.ui.notify("… requires an interactive UI.", "warning")` then return; **lifecycle/event handlers** (`session_start`, `session_before_tree`, `session_shutdown`, …) may silent-return; **tool `execute`** returns an error result (e.g. `errorResult("no_ui", …)`). Never assume `ctx.hasUI` is true in any context; never assume `ctx.mode === "tui"` outside terminal-only rendering (footer/widgets).
 - **Guiding rule:** make the smallest possible change to Pi's behavior, reusing native mechanisms, to arrive at an experience that feels like Claude Code. Document unavoidable upstream limits in the extension's header comment.
 
 ## Safety Rails

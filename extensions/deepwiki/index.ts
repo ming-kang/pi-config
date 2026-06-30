@@ -9,6 +9,13 @@ import { Text } from "@earendil-works/pi-tui";
 
 import { activeDotLine, callLine, errorResultLine, markdownResultBlock, resultLine } from "../tools-view/shared.ts";
 import { truncateText } from "../shared/text.ts";
+import {
+	DEEPWIKI_DESCRIPTION,
+	DEEPWIKI_LABEL,
+	DEEPWIKI_PROMPT_GUIDELINES,
+	DEEPWIKI_PROMPT_SNIPPET,
+	DEEPWIKI_TOOL_NAME,
+} from "./constants.ts";
 
 import { executeDeepWiki, type DeepWikiDetails } from "./execute.ts";
 import { extractContentPages, extractStructureSections } from "./client.ts";
@@ -104,21 +111,11 @@ function callSuffix(args: DeepWikiParams, theme: Theme): string {
 
 export default function deepwiki(pi: ExtensionAPI): void {
 	pi.registerTool({
-		name: "deepwiki",
-		label: "DeepWiki",
-		description:
-			"Query DeepWiki's generated documentation for public GitHub repositories. Best for understanding an unfamiliar repo, finding reference patterns while designing or building something, explaining architecture/APIs/implementation details, and comparing up to 10 public repos. Results are generated from indexed public repo snapshots and often include cited source files; they are not local workspace state or guaranteed-latest upstream facts.",
-		promptSnippet:
-			"Use DeepWiki for public GitHub repo architecture, APIs, implementation patterns, reference designs, and repo comparisons",
-		promptGuidelines: [
-			"Use `deepwiki` when the user wants to understand a public GitHub repository: architecture, module layout, APIs, extension points, data flow, onboarding, or where a concept lives.",
-			"Use `deepwiki` as reference research while developing a new feature or project when public repos can provide implementation patterns, design tradeoffs, or examples to adapt.",
-			"Use `question` for targeted questions; use repoName as an array of up to 10 repos when comparing libraries, frameworks, plugin systems, or implementation approaches.",
-			"When these conditions apply, call `deepwiki` yourself instead of asking the user to open DeepWiki or paste docs.",
-			"Use `structure` first when the repo is unfamiliar and you need the topic map; use `contents` only when broad generated docs and source-file citations are worth the larger output.",
-			"Prefer repoName in owner/repo format; GitHub and DeepWiki URLs are accepted as fallback inputs, but do not pass package names or local paths.",
-			"Do not use `deepwiki` for local workspace files, uncommitted changes, private repos, exact current HEAD, release dates, pricing, security advisories, or anything where freshness is required; use local tools or current primary sources instead.",
-		],
+		name: DEEPWIKI_TOOL_NAME,
+		label: DEEPWIKI_LABEL,
+		description: DEEPWIKI_DESCRIPTION,
+		promptSnippet: DEEPWIKI_PROMPT_SNIPPET,
+		promptGuidelines: DEEPWIKI_PROMPT_GUIDELINES,
 		parameters: DeepWikiParamsSchema,
 		prepareArguments: normalizeDeepWikiParams,
 		renderShell: "self",
