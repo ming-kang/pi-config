@@ -2,22 +2,10 @@ import { getSupportedThinkingLevels, type Api, type Model, type ThinkingLevel } 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { findAvailableModel, modelKey, saveAdvisorConfig } from "./config.ts";
+import { buildAdvisorMenuItems, formatCurrentReviewerLabel, type AdvisorMenuChoice } from "./dialog.ts";
 import { reconcileAdvisorTool } from "./reconcile.ts";
+import { SearchSelectorComponent } from "../shared/search-selector.ts";
 import { getAdvisorEffort, getAdvisorModel, setAdvisorEffort, setAdvisorModel } from "./state.ts";
-
-const NO_ADVISOR = "No advisor";
-const MANUAL_ENTRY = "Enter provider/model manually";
-
-function modelLabel(model: Model<Api>, currentKey: string | undefined): string {
-	const key = modelKey(model);
-	const suffix = key === currentKey ? " [current]" : "";
-	return `${model.name} (${key})${suffix}`;
-}
-
-function parseModelLabel(label: string): string | undefined {
-	const match = /\(([^)]+\/[^)]+)\)/.exec(label);
-	return match?.[1];
-}
 
 async function pickManualModel(ctx: ExtensionContext): Promise<Model<Api> | undefined> {
 	const value = (await ctx.ui.input("Advisor model", "provider/model"))?.trim();
@@ -69,6 +57,36 @@ function enableAdvisor(pi: ExtensionAPI, ctx: ExtensionContext, model: Model<Api
 	reconcileAdvisorTool(pi, ctx, { notify: true });
 }
 
+async function pickReviewer(ctx: ExtensionContext): Promise<AdvisorMenuChoice | undefined> {
+	const current = getAdvisorModel();
+	const items = buildAdvisorMenuItems(ctx.modelRegistry.getAvailable(), current).map((item) => ({
+		...item,
+		key: item.choice.kind === "model" ? `model:${item.choice.modelKey}` : item.choice.kind,
+		selectionLabel: item.selectionLabel,
+	}));
+	const title = `Advisor reviewer · Currently ${formatCurrentReviewerLabel(current, getAdvisorEffort())}`;
+
+	if (ctx.mode === "tui") {
+		return ctx.ui.custom<AdvisorMenuChoice | undefined>(
+			(tui, theme, keybindings, done) =>
+				new SearchSelectorComponent(
+					tui,
+					theme,
+					keybindings,
+					title,
+					items,
+					done,
+					{ noMatchesText: "No matching reviewer models", helpText: "Type to search • Enter to select • Esc to cancel • ↑↓ to move" },
+				),
+		);
+	}
+
+	const labels = items.map((item) => item.selectionLabel ?? item.label);
+	const choice = await ctx.ui.select(title, labels);
+	if (!choice) return undefined;
+	return items.find((item) => (item.selectionLabel ?? item.label) === choice)?.choice;
+}
+
 export function registerAdvisorCommand(pi: ExtensionAPI): void {
 	pi.registerCommand("advisor", {
 		description: "Configure the advisor reviewer model",
@@ -78,31 +96,33 @@ export function registerAdvisorCommand(pi: ExtensionAPI): void {
 				return;
 			}
 
-			const available = ctx.modelRegistry
-				.getAvailable()
-				.sort((a, b) => `${a.provider}/${a.name}`.localeCompare(`${b.provider}/${b.name}`));
-			const current = getAdvisorModel();
-			const currentKey = current ? modelKey(current) : undefined;
-			const labels = [
-				currentKey ? `${NO_ADVISOR} (disable)` : `${NO_ADVISOR} [current]`,
-				...available.map((model) => modelLabel(model, currentKey)),
-				MANUAL_ENTRY,
-			];
+			const selection = await pickReviewer(ctx);
+			if (!selection) return;
 
-			const choice = await ctx.ui.select("Advisor reviewer", labels);
-			if (!choice) return;
-			if (choice.startsWith(NO_ADVISOR)) {
-				disableAdvisor(pi, ctx);
-				return;
+			switch (selection.kind) {
+				case "no-advisor":
+					disableAdvisor(pi, ctx);
+					return;
+				case "manual": {
+					const picked = await pickManualModel(ctx);
+					if (!picked) return;
+					const effort = await pickEffort(ctx, picked);
+					if (effort === "cancelled") return;
+					enableAdvisor(pi, ctx, picked, effort);
+					return;
+				}
+				case "model": {
+					const picked = findAvailableModel(ctx, selection.modelKey);
+					if (!picked) {
+						ctx.ui.notify(`Unknown or unauthenticated model: ${selection.modelKey}`, "warning");
+						return;
+					}
+					const effort = await pickEffort(ctx, picked);
+					if (effort === "cancelled") return;
+					enableAdvisor(pi, ctx, picked, effort);
+					return;
+				}
 			}
-
-			const picked =
-				choice === MANUAL_ENTRY ? await pickManualModel(ctx) : findAvailableModel(ctx, parseModelLabel(choice) ?? "");
-			if (!picked) return;
-
-			const effort = await pickEffort(ctx, picked);
-			if (effort === "cancelled") return;
-			enableAdvisor(pi, ctx, picked, effort);
 		},
 	});
 }

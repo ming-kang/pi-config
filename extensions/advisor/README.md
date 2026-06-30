@@ -4,9 +4,10 @@ Adds an `advisor` tool plus an `/advisor` command: a one-shot review from a sepa
 
 ## Behavior
 
-Run `/advisor` to open a small menu:
+Run `/advisor` to open a searchable menu:
 
-- Select an authenticated reviewer model.
+- The title shows the currently configured reviewer model and effort.
+- Search reviewer models by name/provider, like `/model`.
 - Select reasoning effort for reasoning-capable reviewer models.
 - Choose "No advisor" to disable the tool.
 
