@@ -1,4 +1,4 @@
-import type { EditToolDetails, Theme } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, EditToolDetails, Theme } from "@earendil-works/pi-coding-agent";
 import { createEditToolDefinition, keyHint, renderDiff as renderPiDiff, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { activeDotLine, callLine, errLine, resultLine, type RenderCtx } from "./shared.ts";
@@ -24,7 +24,7 @@ export function createEditRenderer(cwd: string) {
 			return new Text(callLine("Edit", String(args.path ?? "..."), theme), 0, 0);
 		},
 
-		renderResult(result: any, options: ToolRenderResultOptions, theme: Theme, ctx = {} as RenderCtx) {
+		renderResult(result: AgentToolResult<EditToolDetails>, options: ToolRenderResultOptions, theme: Theme, ctx: RenderCtx) {
 			const { expanded, isPartial } = options;
 			if (isPartial) return new Text(activeDotLine("Edit", " Editing...", theme), 0, 0);
 

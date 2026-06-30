@@ -1,4 +1,4 @@
-import type { BashToolDetails, Theme } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, BashToolDetails, Theme } from "@earendil-works/pi-coding-agent";
 import { createBashToolDefinition, keyHint, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import {
@@ -62,7 +62,7 @@ export function createBashRenderer(cwd: string) {
 			return new Text(callLine("Bash", cmd + tail, theme), 0, 0);
 		},
 
-		renderResult(result: any, options: ToolRenderResultOptions, theme: Theme, ctx = {} as RenderCtx) {
+		renderResult(result: AgentToolResult<BashToolDetails>, options: ToolRenderResultOptions, theme: Theme, ctx: RenderCtx) {
 			const { expanded, isPartial } = options;
 			const details = result.details as BashToolDetails | undefined;
 			const content = result.content ?? [];

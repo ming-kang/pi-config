@@ -1,4 +1,4 @@
-import type { ReadToolDetails, Theme } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, ReadToolDetails, Theme } from "@earendil-works/pi-coding-agent";
 import { createReadToolDefinition, keyHint, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import {
@@ -63,10 +63,13 @@ export function createReadRenderer(cwd: string) {
 			return new Text(callLine("Read", parts.join(" "), theme), 0, 0);
 		},
 
-		renderResult(result: any, options: ToolRenderResultOptions, theme: Theme, ctx = {} as RenderCtx) {
+		renderResult(result: AgentToolResult<ReadToolDetails>, options: ToolRenderResultOptions, theme: Theme, ctx: RenderCtx) {
 			const { expanded, isPartial } = options;
 			if (isPartial) return new Text(activeDotLine("Read", " Reading...", theme), 0, 0);
-			if (expanded) return base.renderResult(result, options, theme, ctx as any);
+			// base.renderResult expects Pi's full ToolRenderContext (not publicly
+			// exported); RenderCtx is a structural subset, so narrow via the base's
+			// own parameter type rather than `as any`.
+			if (expanded) return base.renderResult(result, options, theme, ctx as Parameters<typeof base.renderResult>[3]);
 
 			const content = result.content ?? [];
 			const details = result.details as ReadToolDetails | undefined;

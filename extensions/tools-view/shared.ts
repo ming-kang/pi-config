@@ -5,6 +5,14 @@ import { type Component, Container, getCapabilities, hyperlink, Markdown, Spacer
 export const BULLET = "●";
 export const RESULT_PREFIX = "│ ";
 
+/**
+ * Structural subset of Pi's `ToolRenderContext` (which is not publicly
+ * exported from `@earendil-works/pi-coding-agent`). Field names match Pi's
+ * internal type so this composes cleanly when passed to base renderers; we
+ * only declare the fields tools-view renderers actually read. Pi's runtime
+ * always supplies the full context, so callers must not default-instantiate
+ * this (the old `ctx = {} as RenderCtx` default was dead code, removed).
+ */
 export interface RenderCtx {
 	args: Record<string, unknown>;
 	state: Record<string, unknown>;

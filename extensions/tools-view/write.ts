@@ -1,4 +1,4 @@
-import { createWriteToolDefinition, keyHint, type Theme, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
+import { type AgentToolResult, createWriteToolDefinition, keyHint, type Theme, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import {
 	activeDotLine,
@@ -23,7 +23,7 @@ export function createWriteRenderer(cwd: string) {
 			return new Text(callLine("Write", `${filePath}${suffix}`, theme), 0, 0);
 		},
 
-		renderResult(result: any, options: ToolRenderResultOptions, theme: Theme, ctx = {} as RenderCtx) {
+		renderResult(result: AgentToolResult<undefined>, options: ToolRenderResultOptions, theme: Theme, ctx: RenderCtx) {
 			const { expanded, isPartial } = options;
 			if (isPartial) return new Text(activeDotLine("Write", " Writing...", theme), 0, 0);
 
