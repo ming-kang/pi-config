@@ -1,9 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
-
 import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
+import { loadJson, saveJson } from "../shared/json-store.ts";
 import { advisorConfigPath } from "../shared/paths.ts";
 import { THINKING_LEVELS } from "./constants.ts";
 
@@ -17,11 +15,6 @@ export interface AdvisorConfig {
 		promptSnippet?: string;
 		promptGuidelines?: string[];
 	};
-}
-
-interface LegacyAdvisorConfig {
-	enabled?: boolean;
-	model?: string;
 }
 
 export function modelKey(model: { provider: string; id: string }): string {
@@ -61,15 +54,7 @@ function isThinkingLevel(value: unknown): value is ThinkingLevel {
 
 function normalizeConfig(raw: unknown): AdvisorConfig {
 	if (!raw || typeof raw !== "object") return {};
-	const record = raw as LegacyAdvisorConfig & Partial<AdvisorConfig>;
-
-	if ("enabled" in record || "model" in record) {
-		if (record.enabled === false) return {};
-		const parsed = parseModelKey(record.model);
-		return {
-			...(parsed ? { modelKey: `${parsed.provider}/${parsed.modelId}` } : {}),
-		};
-	}
+	const record = raw as Partial<AdvisorConfig>;
 
 	const parsed = parseModelKey(record.modelKey);
 	return {
@@ -94,27 +79,16 @@ function isGuidance(value: unknown): value is AdvisorConfig["guidance"] {
 }
 
 export function loadAdvisorConfig(): AdvisorConfig {
-	if (!existsSync(CONFIG_PATH)) return {};
-	try {
-		return normalizeConfig(JSON.parse(readFileSync(CONFIG_PATH, "utf8")));
-	} catch {
-		return {};
-	}
+	return loadJson(CONFIG_PATH, normalizeConfig, {});
 }
 
 export function saveAdvisorConfig(config: AdvisorConfig): boolean {
-	try {
-		const normalized = normalizeConfig(config);
-		mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
-		writeFileSync(CONFIG_PATH, JSON.stringify(normalized, null, 2) + "\n", "utf8");
-		return true;
-	} catch {
-		return false;
-	}
+	return saveJson(CONFIG_PATH, normalizeConfig(config));
 }
 
 export function restoreAdvisorConfig(): AdvisorConfig {
-	const config = loadAdvisorConfig();
-	if (existsSync(CONFIG_PATH)) saveAdvisorConfig(config);
-	return config;
+	// Pure read: load + normalize in memory. Never writes back — the prior
+	// "rewrite on every session_start" was a pointless per-session disk write
+	// (SPEC F11). The only write trigger is the /advisor command path.
+	return loadAdvisorConfig();
 }

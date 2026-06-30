@@ -1,14 +1,13 @@
 /**
  * config.ts — load/save the rewind extension's settings at
- * <rewindDir>/config.json. Mirrors advisor/config.ts: tolerant parse, atomic-ish
- * write, sensible defaults so a missing/corrupt file never breaks the session.
+ * <rewindDir>/config.json. Tolerant parse, atomic-ish write, sensible defaults
+ * so a missing/corrupt file never breaks the session. JSON IO is shared via
+ * `shared/json-store.ts`; this file keeps only the shape + normalize/defaults.
  *
  * Settings are user-editable via the /rewind menu (menu.ts).
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
-
 import { rewindConfigPath } from "../shared/paths.ts";
+import { loadJson, saveJson } from "../shared/json-store.ts";
 
 export interface RewindConfig {
 	/** Master switch. When false, no backups are taken and rewind is inert. */
@@ -41,22 +40,9 @@ function normalize(raw: unknown): RewindConfig {
 }
 
 export function loadRewindConfig(): RewindConfig {
-	const file = rewindConfigPath();
-	if (!existsSync(file)) return { ...DEFAULT_CONFIG };
-	try {
-		return normalize(JSON.parse(readFileSync(file, "utf8")));
-	} catch {
-		return { ...DEFAULT_CONFIG };
-	}
+	return loadJson(rewindConfigPath(), normalize, { ...DEFAULT_CONFIG });
 }
 
 export function saveRewindConfig(config: RewindConfig): boolean {
-	try {
-		const file = rewindConfigPath();
-		mkdirSync(path.dirname(file), { recursive: true });
-		writeFileSync(file, JSON.stringify(normalize(config), null, 2) + "\n", "utf8");
-		return true;
-	} catch {
-		return false;
-	}
+	return saveJson(rewindConfigPath(), normalize(config));
 }
