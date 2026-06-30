@@ -1,5 +1,6 @@
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
-import { getCapabilities, hyperlink } from "@earendil-works/pi-tui";
+import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { type Component, Container, getCapabilities, hyperlink, Markdown, Spacer } from "@earendil-works/pi-tui";
 
 export const BULLET = "●";
 export const RESULT_PREFIX = "│ ";
@@ -42,8 +43,37 @@ export function errLine(message: string, theme: Theme): string {
 	return `${theme.fg("error", BULLET)} ${theme.fg("dim", message)}`;
 }
 
+/**
+ * Render a tool error consistently across collapsed and expanded states.
+ *
+ * Folded (`expanded === false`): a single dim-prefixed line with the message in
+ * error color — matches deepwiki's existing collapsed error branch. Expanded
+ * (`expanded === true`): `errLine`'s `● error` bullet form. Callers wrap the
+ * returned string in `new Text(..., 0, 0)`.
+ *
+ * SPEC F7: codifies the collapsed-vs-expanded convention so advisor/question/todo
+ * render errors the same way deepwiki already did.
+ */
+export function errorResultLine(message: string, expanded: boolean, theme: Theme): string {
+	return expanded ? errLine(message, theme) : resultLine(theme.fg("error", message), theme);
+}
+
 export function emptyLine(label: string, theme: Theme): string {
 	return `  ${theme.fg("muted", label)}`;
+}
+
+/**
+ * The expanded tool-result block: a top spacer + the result text rendered as
+ * Markdown with pi's markdown theme. This is the byte-identical block that was
+ * inlined in `advisor/index.ts` and `deepwiki/index.ts`; factored here so both
+ * (and future tools) share one implementation. `theme` is unused — the markdown
+ * theme comes from `getMarkdownTheme()` to match the prior inlined calls.
+ */
+export function markdownResultBlock(text: string, _theme?: Theme): Component {
+	const container = new Container();
+	container.addChild(new Spacer(1));
+	container.addChild(new Markdown(text, 1, 0, getMarkdownTheme()));
+	return container;
 }
 
 export function renderNumberedLines(lines: string[], startLine: number, theme: Theme): string[] {
