@@ -6,9 +6,11 @@ This file governs work on the code here: cross-cutting conventions live in this 
 
 ## Build & Test
 
-- **No build, no tracked tests.** Pi loads `.ts` directly via jiti; offline experiments go in `scratch/` (git-ignored).
+- **No build.** Pi loads `.ts` directly via jiti; offline experiments go in `scratch/` (git-ignored).
+- **Tracked selftests are limited to Fast Context.** They are pure Node checks for its sandbox, executor, protocol, repo map, scorer, and key-format logic; run the relevant one after touching that area.
 - **Iterate:** `pi -ne -e ./pi-config` loads this checkout for the session only (`-ne` stops installed copies from shadowing it).
 - **Verify a change:** drive the tool and check `renderCall` / `renderResult` in both collapsed and expanded (Ctrl+O) states; for lifecycle extensions (`rewind` / `read-before-edit` / `todo`) also exercise `/reload` and `/tree` navigation.
+- **Upstream references:** use DeepWiki first. If source inspection is unavoidable, clone `earendil-works/pi` temporarily into `references/` (git-ignored), study it, then delete it.
 
 ## Architecture Boundaries
 
@@ -17,6 +19,9 @@ This file governs work on the code here: cross-cutting conventions live in this 
 - **Extension layout:** `extensions/<name>/` owns `index.ts` (registration + lifecycle hooks) plus helpers (`schema` / `state` / `config` / `execute` …). A small extension may be a single `extensions/<name>.ts`.
 - **Shared, non-extension code** lives in `extensions/shared/` — no `index.ts`, no `pi` manifest, so Pi's loader treats it as a pure import target (e.g. `file-state.ts`, the read-state cache `read-before-edit` populates and `rewind` invalidates).
 - **Import rule:** cross-extension imports are allowed **only** for `../tools-view/shared.ts` and `../shared/*`. Never reach into another extension's internal modules.
+- **Fast Context security boundary:** `extensions/fast-context/sandbox.ts` (`PathSandbox`) is the security core. Every model-supplied path must go through `toReal()` / `contains()`; `project_path` must stay inside cwd; TLS must never be downgraded; keys must be saved only to `~/.pi/agent/pi-config/fast-context/config.json` and must never be logged or passed as tool parameters; no credential discovery from Devin/Windsurf/IDE/CLI local state.
+- **Fast Context Pi surface stays minimal:** keep extension/TUI glue at the edge (`index.ts`, `commands.ts`, `render.ts`) and keep non-render Pi integration confined to `storage.ts`, `grep-backend.ts`, and `execute.ts` (via `grep-backend`). Search/security/protocol modules (`client.ts`, `protocol.ts`, `search.ts`, `repo-map.ts`, `directory-scorer.ts`, `executor.ts`, `tree.ts`, `sandbox.ts`, `state.ts`, `key-format.ts`, `prompt.ts`) stay pure and Node-testable; use dependency injection such as `GrepFn` rather than adding Pi imports.
+- **Fast Context backend boundary is fragile:** `client.ts` / `protocol.ts` speak an unofficial third-party `swe-grep` wire format. Protocol constants are env-overridable only for drift/debugging; changes there require live validation with a real search and `<ANSWER>` round-trip, not just selftests.
 
 ## Conventions
 
@@ -34,15 +39,17 @@ This file governs work on the code here: cross-cutting conventions live in this 
 - Write `.js` import specifiers.
 - Exclude `tools-view` when selectively loading — it breaks every other extension's rendering.
 - Copy source from the upstream Pi monorepo (or any third-party project) into this repo. Study it (DeepWiki, a throwaway clone), then translate the idea into your own implementation. This repo must never contain vendored upstream code.
+- Weaken Fast Context's sandbox, key-handling, TLS, credential-discovery, or `project_path` containment invariants.
 
 ### ALWAYS
 - Route tool rendering through the `tools-view/shared.ts` primitives.
 - Verify both collapsed and expanded (Ctrl+O) states for any UI change.
+- Re-run the focused Fast Context selftest after touching `sandbox` / `executor` / `protocol` / `repo-map` / `directory-scorer` / `key-format`.
 - Use Conventional Commits; commit at verified checkpoints.
 
 ## Per-extension design notes
 
-[`advisor`](extensions/advisor/README.md) · [`question`](extensions/question/README.md) · [`todo`](extensions/todo/README.md) · [`rewind`](extensions/rewind/README.md) · [`read-before-edit`](extensions/read-before-edit/README.md) · [`tools-view`](extensions/tools-view/README.md) · [`statusline`](extensions/statusline/README.md)
+[`advisor`](extensions/advisor/README.md) · [`deepwiki`](extensions/deepwiki/README.md) · [`fast-context`](extensions/fast-context/README.md) · [`question`](extensions/question/README.md) · [`todo`](extensions/todo/README.md) · [`rewind`](extensions/rewind/README.md) · [`read-before-edit`](extensions/read-before-edit/README.md) · [`tools-view`](extensions/tools-view/README.md) · [`statusline`](extensions/statusline/README.md)
 
 ## Compact Instructions
 
@@ -50,5 +57,6 @@ Preserve:
 
 1. The centralized-rendering rule and the `../tools-view/shared.ts` import boundary (NEVER summarize away).
 2. Extension structure and the `shared/` vs extension distinction.
-3. Which extension(s) were modified and the verification status (loads / UI states checked).
-4. Open risks, TODOs, rollback notes.
+3. Fast Context's five security invariants, minimal Pi-import surface, fragile backend boundary, and live-validation status.
+4. Which extension(s) were modified and the verification status (loads / UI states checked).
+5. Open risks, TODOs, rollback notes.
