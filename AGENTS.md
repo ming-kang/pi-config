@@ -33,6 +33,7 @@ This file governs work on the code here: cross-cutting conventions live in this 
 - Import another extension's internal modules (only `../tools-view/shared.ts` and `../shared/*` are shared).
 - Write `.js` import specifiers.
 - Exclude `tools-view` when selectively loading — it breaks every other extension's rendering.
+- Copy source from the upstream Pi monorepo (or any third-party project) into this repo. Study it (DeepWiki, a throwaway clone), then translate the idea into your own implementation. This repo must never contain vendored upstream code.
 
 ### ALWAYS
 - Route tool rendering through the `tools-view/shared.ts` primitives.
