@@ -97,7 +97,7 @@ export function createReadRenderer(cwd: string) {
 			const lineCount = noteText.length === 0 ? 0 : fileLines.length;
 			const truncInfo = details?.truncation?.truncated ? ` (truncated from ${details.truncation.totalLines})` : "";
 			let text = resultLine(`Read ${lineCount} ${lineCount === 1 ? "line" : "lines"}${truncInfo}`, theme);
-			if (firstText.text.length === 0) {
+			if (noteText.length === 0) {
 				text += `\n${emptyLine("(empty file)", theme)}`;
 				return new Text(text, 0, 0);
 			}
