@@ -3,6 +3,9 @@ import type { AdvisorMode } from "./schema.ts";
 export const ADVISOR_TOOL_NAME = "advisor";
 export const ADVISOR_LABEL = "Advisor";
 
+export const ADVISOR_DESCRIPTION =
+	"Ask a configured reviewer model for a one-shot, no-tools review of the current task. Use for high-leverage checkpoints: planning, pivots, stuck states, conflicting evidence, or final verification. Provide a focused brief; Pi attaches bounded session context.";
+
 // The advisor system prompt is assembled per call: a shared base + a mode-specific
 // focus + shared output sections. Each mode therefore gets its own full template,
 // while the common parts stay in one place. The Overall Judgment section is always
@@ -46,15 +49,16 @@ export function advisorSystemPrompt(mode: AdvisorMode): string {
 }
 
 export const DEFAULT_PROMPT_SNIPPET =
-	"Ask a configured reviewer model for one-shot guidance using a focused review brief";
+	"Use advisor for high-leverage one-shot review at planning, stuck, pivot, reconcile, or final-verification checkpoints";
 
 export const DEFAULT_PROMPT_GUIDELINES = [
-	"Call `advisor` after initial orientation and before committing to a substantial implementation approach.",
-	"When calling `advisor`, provide a focused brief: situation, reason, specific question, current plan, key evidence, and risks.",
-	"Do not rely on advisor to discover the important facts from transcript alone; put decisive facts in the `evidence` field.",
-	"Default to previousRuns=0 (current run only); set 1 or 2 only when earlier request cycles are directly relevant.",
-	"Call `advisor` when stuck, when results contradict the current hypothesis, before changing approach, or before declaring complex work complete after durable changes have been written.",
-	"Do not call `advisor` for trivial one-step tasks where the next action is already obvious.",
+	"Use `advisor` after initial orientation and before committing to a substantial implementation approach for complex, risky, or ambiguous work.",
+	"Use `advisor` when you are stuck after repeated attempts, evidence contradicts the current hypothesis, you may pivot approaches, or you need final verification for non-trivial durable changes.",
+	"Do not use `advisor` for trivial one-step tasks, obvious next actions, or facts that local read/grep/test tools can verify directly.",
+	"When calling `advisor`, choose the mode that matches the checkpoint: plan, change, stuck, final, or reconcile.",
+	"When calling `advisor`, provide a focused brief: situation, reason, exact question, currentPlan, key evidence, and risks.",
+	"Put decisive facts in `advisor` evidence; do not rely on the reviewer to infer important details from transcript alone, because it cannot run tools or ask follow-up questions.",
+	"Use `advisor` with previousRuns=0 by default; set 1 or 2 only when earlier user-request cycles directly affect this judgment.",
 ];
 
 export const THINKING_LEVELS = ["minimal", "low", "medium", "high", "xhigh"] as const;

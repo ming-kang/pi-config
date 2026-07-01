@@ -6,7 +6,7 @@ const MAX_QUESTION_REPOS = 10;
 
 const DeepWikiActionSchema = StringEnum(DEEPWIKI_ACTIONS, {
 	description:
-		"DeepWiki operation: question answers focused repo/reference/comparison questions, structure lists available wiki pages, contents reads the full generated wiki.",
+		"DeepWiki operation: structure lists generated wiki pages for one repo, contents reads the full generated wiki for one repo, and question answers focused repo/reference/comparison questions across up to 10 repos.",
 });
 
 export const DeepWikiParamsSchema = Type.Object({
@@ -15,7 +15,7 @@ export const DeepWikiParamsSchema = Type.Object({
 		Type.String({
 			minLength: 1,
 			description:
-				'Public GitHub repo in "owner/repo" format. GitHub or DeepWiki URLs are accepted, but owner/repo is preferred.',
+				'Public GitHub repo in "owner/repo" format. GitHub or DeepWiki URLs are accepted fallbacks, but owner/repo is preferred; use one repo for structure/contents.',
 		}),
 		Type.Array(
 			Type.String({
@@ -26,7 +26,7 @@ export const DeepWikiParamsSchema = Type.Object({
 				minItems: 1,
 				maxItems: MAX_QUESTION_REPOS,
 				description:
-					"Only for action question: compare patterns, APIs, or architecture across up to 10 public GitHub repositories.",
+					"Only for action question: compare patterns, APIs, architecture, or implementation approaches across 1-10 public GitHub repositories.",
 			},
 		),
 	]),
@@ -34,7 +34,7 @@ export const DeepWikiParamsSchema = Type.Object({
 		Type.String({
 			minLength: 1,
 			description:
-				"Focused question about public repo architecture, APIs, implementation patterns, onboarding, or cross-repo comparison; required for action question.",
+				"Required for action question. Ask a focused question about architecture, APIs, implementation patterns, extension points, onboarding, or cross-repo comparison.",
 		}),
 	),
 });

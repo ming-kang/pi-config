@@ -7,22 +7,33 @@ const MAX_QUESTIONS = 4;
 const RESERVED_LABELS = ["Other", "Type something.", "Chat about this", "Next"] as const;
 
 const OptionSchema = Type.Object({
-	label: Type.String({ description: "Display text for this option (1-5 words, concise)." }),
-	description: Type.Optional(Type.String({ description: "What this option means or what happens if chosen." })),
+	label: Type.String({ description: "Short user-facing option label (1-5 words), distinct within the question." }),
+	description: Type.Optional(
+		Type.String({ description: "One concise sentence explaining the option's meaning, consequence, or tradeoff." }),
+	),
 	preview: Type.Optional(
 		Type.String({
 			description:
-				"Optional markdown preview shown when this option is focused (single-select only; ignored for multiSelect).",
+				"Optional markdown preview shown only for focused single-select options; use for concrete snippets, layouts, copy, or config comparisons.",
 		}),
 	),
 });
 
 const QuestionSchema = Type.Object({
-	question: Type.String({ description: "The complete question to ask. Clear, specific, ends with a question mark." }),
-	header: Type.String({ description: "Very short label shown as a chip (max ~12 chars), e.g. 'Auth method'." }),
-	options: Type.Array(OptionSchema, { minItems: MIN_OPTIONS, maxItems: MAX_OPTIONS }),
+	question: Type.String({
+		description: "One clear, specific decision or preference question. Ask only what is needed to proceed.",
+	}),
+	header: Type.String({ description: "Very short decision label shown as a chip (max ~12 chars), e.g. 'Auth method'." }),
+	options: Type.Array(OptionSchema, {
+		minItems: MIN_OPTIONS,
+		maxItems: MAX_OPTIONS,
+		description: "Mutually distinct options for this decision; do not include reserved custom-answer labels.",
+	}),
 	multiSelect: Type.Optional(
-		Type.Boolean({ description: "Allow selecting multiple options (comma-separated answer). Defaults to false." }),
+		Type.Boolean({
+			description:
+				"Allow selecting multiple options only when choices can be combined. Defaults to false for mutually exclusive decisions.",
+		}),
 	),
 });
 
@@ -30,7 +41,7 @@ export const QuestionParams = Type.Object({
 	questions: Type.Array(QuestionSchema, {
 		minItems: 1,
 		maxItems: MAX_QUESTIONS,
-		description: "Questions to ask (1-4).",
+		description: "Related decisions to ask now (1-4); ask only what is needed to unblock progress.",
 	}),
 });
 

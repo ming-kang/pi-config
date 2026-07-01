@@ -11,6 +11,7 @@ import { buildStandardRenderer } from "../tools-view/shared.ts";
 import { firstLine } from "../shared/text.ts";
 
 import {
+	ADVISOR_DESCRIPTION,
 	ADVISOR_LABEL,
 	ADVISOR_TOOL_NAME,
 	DEFAULT_PROMPT_GUIDELINES,
@@ -64,8 +65,7 @@ export default function advisor(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: ADVISOR_TOOL_NAME,
 		label: ADVISOR_LABEL,
-		description:
-			"Ask a configured reviewer model for one-shot guidance. Provide a focused review brief; the extension attaches bounded session context.",
+		description: ADVISOR_DESCRIPTION,
 		promptSnippet: DEFAULT_PROMPT_SNIPPET,
 		promptGuidelines: DEFAULT_PROMPT_GUIDELINES,
 		parameters: AdvisorParamsSchema,

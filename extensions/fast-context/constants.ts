@@ -6,22 +6,25 @@ export const TOOL_LABEL = "Fast Context";
 export const CMD = "fast-context";
 
 export const TOOL_DESCRIPTION =
-	"Semantic code retrieval for local repos. Use when the relevant files are unknown and the task is " +
-	"conceptual, cross-module, or in a large/unfamiliar codebase. It returns candidate files, line " +
-	"ranges, and grep keywords; verify with read/grep before editing. For known paths, exact symbols, filenames, " +
-	"or literals, use grep/find/read directly.";
+	"Semantic code discovery for the current local repo. Prefer it when relevant files are unknown and the " +
+	"task needs exploratory, behavioral, architectural, or cross-module understanding, especially in large " +
+	"or unfamiliar codebases. Use concise English queries for best semantic matching, preserving code " +
+	"identifiers and exact literals when useful. Returns candidate paths, line ranges, and grep keywords " +
+	"only; verify with read/grep before editing. For known paths, exact symbols, filenames, literals, or " +
+	"existence checks, use local find/grep/read directly.";
 
 export const PROMPT_SNIPPET =
-	"Use fast_context_search to locate unknown code by behavior/concept in large or unfamiliar local repos. It returns candidate paths/ranges plus grep keywords; read/grep to verify.";
+	"Use fast_context_search first for semantic discovery of unknown local code by behavior/concept, preferably with an English query; verify with read/grep";
 
-// Deliberately positions this as one option among Pi's own grep/read/find, not a
-// mandatory first step: it costs network round-trips against a third-party backend.
+// Deliberately makes Fast Context the early choice for unknown-code semantic
+// discovery only. Exact local questions should still use Pi's grep/read/find.
 export const PROMPT_GUIDELINES = [
-	"Use fast_context_search for exploratory retrieval: architecture tracing, feature/refactor planning, bug-flow discovery, or onboarding in a large or unfamiliar local repo when you do not know the files yet.",
-	"Do not use it for known filenames, paths, exact symbols, or literal strings. Use find/grep/read for those, and use grep when exact existence matters.",
-	"Write a short natural-language query, preferably in English; include domain terms, errors, APIs, or behavior, not just a bare keyword.",
-	"Narrow project_path to the package/subtree you care about when possible. Add exclude_paths for generated, vendored, or bulky directories if results are noisy or payloads/timeouts occur.",
-	"Use small max_results (3-8) for focused work. Use max_turns 1-2 for quick orientation, 3 for normal searches, and 4-5 only for complex cross-cutting flows.",
-	"Treat returned files and ranges as starting context, not proof. Read the returned ranges before editing; use grep keywords only as follow-up search hints.",
-	"If it returns no files or weak/noisy candidates, do not invent relevance. Retry with a narrower behavioral query or fall back to local grep/find/read.",
+	"Prefer `fast_context_search` early for non-trivial local code research when relevant files are unknown, especially for exploratory search, architecture tracing, feature/refactor planning, bug-flow discovery, onboarding, or cross-module behavior.",
+	"Use `fast_context_search` for natural-language code discovery: describe the behavior, flow, error, API, business logic, or domain concept you want to locate rather than only a bare keyword.",
+	"Write `fast_context_search` queries in English for best semantic matching. If the user asks in Chinese, translate the intent into concise English while preserving code identifiers, API names, file names, exact errors, and user-facing literals.",
+	"Do not use `fast_context_search` for known filenames, paths, exact symbols, literal strings, or yes/no existence checks. Use local find/grep/read for those, and use grep when exact existence matters.",
+	"For quick coarse orientation with `fast_context_search`, use tree_depth=1, max_turns=1, and a small max_results. Use defaults for normal searches, and max_turns=4-5 only for complex cross-module tracing.",
+	"For `fast_context_search` in monorepos or known subsystems, set project_path to the focused package/subtree when possible. Add exclude_paths for generated, vendored, build, or bulky directories if results are noisy or payloads/timeouts occur.",
+	"Treat `fast_context_search` output as a reading list, not evidence. Read returned ranges before editing, and use grep keywords only as follow-up search hints.",
+	"If `fast_context_search` returns no files or weak/noisy candidates, do not invent relevance. Retry once with a narrower English behavioral query or fall back to local grep/find/read.",
 ];

@@ -28,27 +28,49 @@ export interface TodoDetails {
 	error?: string;
 }
 
-const StatusSchema = StringEnum(["pending", "in_progress", "completed", "deleted"] as const);
+const StatusSchema = StringEnum(["pending", "in_progress", "completed", "deleted"] as const, {
+	description:
+		"Task status: pending for future work, in_progress for the single active task, completed for verified done work, and deleted for obsolete or no-longer-needed tasks.",
+});
 
-const ActionSchema = StringEnum(["create", "update", "list", "get", "delete", "clear"] as const);
+const ActionSchema = StringEnum(["create", "update", "list", "get", "delete", "clear"] as const, {
+	description:
+		"Todo operation: create a task, update status/details/dependencies, list current tasks, get one task, delete an obsolete task, or clear the list.",
+});
 
 export const TodoParamsSchema = Type.Object({
 	action: ActionSchema,
-	subject: Type.Optional(Type.String({ description: "Short task subject, required for create." })),
-	description: Type.Optional(Type.String({ description: "Longer task notes or acceptance detail." })),
+	subject: Type.Optional(
+		Type.String({
+			description: "Short imperative task subject, required for create; use a reviewable unit of work, not a micro-step.",
+		}),
+	),
+	description: Type.Optional(
+		Type.String({ description: "Longer task notes, acceptance criteria, or verification detail." }),
+	),
 	activeForm: Type.Optional(
-		Type.String({ description: "Present-continuous label shown while in_progress, such as 'reading code'." }),
+		Type.String({
+			description: "Present-continuous label shown while in_progress, such as 'reading code' or 'updating prompts'.",
+		}),
 	),
 	status: Type.Optional(StatusSchema),
-	blockedBy: Type.Optional(Type.Array(Type.Number(), { description: "Initial dependency ids for create." })),
-	addBlockedBy: Type.Optional(Type.Array(Type.Number(), { description: "Dependency ids to add on update." })),
+	blockedBy: Type.Optional(
+		Type.Array(Type.Number(), { description: "Initial dependency ids for create; use only for real ordering constraints." }),
+	),
+	addBlockedBy: Type.Optional(
+		Type.Array(Type.Number(), { description: "Dependency ids to add on update; dependencies must exist and cannot create cycles." }),
+	),
 	removeBlockedBy: Type.Optional(Type.Array(Type.Number(), { description: "Dependency ids to remove on update." })),
-	owner: Type.Optional(Type.String({ description: "Optional owner or agent label." })),
+	owner: Type.Optional(Type.String({ description: "Optional owner or agent label for multi-agent coordination." })),
 	metadata: Type.Optional(
-		Type.Record(Type.String(), Type.Unknown(), { description: "Optional structured metadata; null deletes a key." }),
+		Type.Record(Type.String(), Type.Unknown(), {
+			description: "Optional structured metadata for integrations; null values delete keys on update.",
+		}),
 	),
 	id: Type.Optional(Type.Number({ description: "Task id, required for update, get, and delete." })),
-	includeDeleted: Type.Optional(Type.Boolean({ description: "Include deleted tombstones in list output." })),
+	includeDeleted: Type.Optional(
+		Type.Boolean({ description: "Include deleted tombstones in list output; default is false for active work views." }),
+	),
 });
 
 export type TodoParams = Static<typeof TodoParamsSchema>;

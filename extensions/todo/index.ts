@@ -22,20 +22,16 @@ import {
 	replaceTodoState,
 	replayTodosFromBranch,
 } from "./state.ts";
-import { TODOS_COMMAND_NAME, TODO_TOOL_LABEL, TODO_TOOL_NAME } from "./constants.ts";
+import {
+	TODO_PROMPT_GUIDELINES,
+	TODO_PROMPT_SNIPPET,
+	TODOS_COMMAND_NAME,
+	TODO_TOOL_DESCRIPTION,
+	TODO_TOOL_LABEL,
+	TODO_TOOL_NAME,
+} from "./constants.ts";
 import { TodoParamsSchema, type TodoDetails, type TodoParams, type TodoStatus } from "./schema.ts";
 import { formatCommandList, STATUS_MARK, STATUS_COLOR } from "./view.ts";
-
-const DEFAULT_PROMPT_SNIPPET = "Track multi-step work with a small task list";
-
-const DEFAULT_PROMPT_GUIDELINES = [
-	"Use `todo` for work with three or more meaningful steps, user-provided task lists, or long sessions where progress can drift. Skip it for trivial one-step requests.",
-	"Create short imperative tasks. Mark exactly one task in_progress before working on it, and mark it completed as soon as it is genuinely done.",
-	"Do not mark a task completed when tests are failing, verification has not run, or the implementation is only partial.",
-	"If a completed task turns out to need more work, set it back to in_progress instead of creating a duplicate.",
-	"Use blockedBy for real dependencies. The tool rejects missing dependencies, deleted dependencies, self-dependencies, and dependency cycles.",
-	"Use `list` to inspect current state and `/todos` only when the user asks to see the visible list.",
-];
 
 function safeReplay(ctx: Parameters<typeof replayTodosFromBranch>[0]): void {
 	try {
@@ -51,10 +47,9 @@ export default function todo(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: TODO_TOOL_NAME,
 		label: TODO_TOOL_LABEL,
-		description:
-			"Manage a task list for multi-step coding work. Actions: create, update, list, get, delete, clear. Statuses: pending, in_progress, completed, deleted. Supports blockedBy dependencies with cycle checks.",
-		promptSnippet: DEFAULT_PROMPT_SNIPPET,
-		promptGuidelines: DEFAULT_PROMPT_GUIDELINES,
+		description: TODO_TOOL_DESCRIPTION,
+		promptSnippet: TODO_PROMPT_SNIPPET,
+		promptGuidelines: TODO_PROMPT_GUIDELINES,
 		parameters: TodoParamsSchema,
 		renderShell: "self",
 
