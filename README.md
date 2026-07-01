@@ -18,6 +18,14 @@ This Pi package contains commonly used extensions and themes, maintained for per
 
 Each extension's behavior and design notes live in its own README, linked above.
 
+## Themes
+
+| Theme | What it does |
+|:-:|---|
+| [`ice-cream`](themes/README.md) | Dark pastel Pi theme used with the compact tool renderers and statusline |
+
+Theme details and conventions live in [`themes/README.md`](themes/README.md).
+
 ## Install / Update
 
 Install from GitHub:

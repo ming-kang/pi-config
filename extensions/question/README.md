@@ -23,6 +23,7 @@ Tool results use a structured envelope in `details`: `{ answers, cancelled, erro
 
 ## Files
 
+- `constants.ts` — tool identity and model-facing prompt copy
 - `index.ts` — tool registration, render call/result
 - `dialog.ts` — the interactive custom dialog (self-contained)
 - `schema.ts` — params + `validateQuestions`

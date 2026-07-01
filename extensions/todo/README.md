@@ -19,7 +19,8 @@ Adds a `todo` tool plus `/todos` for multi-step work, with a live overlay above 
 ## Files
 
 - `index.ts` — tool + `/todos` command, lifecycle handlers, render
+- `constants.ts` — tool/command identity and model-facing prompt copy
+- `schema.ts` — params, status/action types, details shape, and empty state
 - `state.ts` — mutation engine (`applyTodoMutation`), transition rules, cycle check, branch replay
 - `view.ts` — overlay/list formatting, status marks and colors
 - `overlay.ts` — the live `TodoOverlay` widget
-- `types.ts` — schema, status/action types, `TODO_TOOL_NAME`

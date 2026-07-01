@@ -28,7 +28,7 @@ When called, the `advisor` tool forwards the resolved current session context to
 
 - `index.ts` — tool + command registration, render, lifecycle hooks
 - `schema.ts` — params (`mode`, `previousRuns`, brief fields) + `clampPreviousRuns`
-- `constants.ts` — `advisorSystemPrompt(mode)`, mode focus table, labels, guidelines
+- `constants.ts` — `ADVISOR_DESCRIPTION`, `advisorSystemPrompt(mode)`, mode focus table, labels, guidelines
 - `context.ts` — builds the review packet from session messages (flatten, select, label)
 - `execute.ts` — runs the one-shot `completeSimple` call, maps the result
 - `config.ts` / `state.ts` — persisted config and in-memory model/effort state
