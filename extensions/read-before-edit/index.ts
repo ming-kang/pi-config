@@ -31,6 +31,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 // because rewind also imports it to invalidate entries after a checkpoint
 // restore — it is a shared utility, not this extension's private module.
 import * as fileState from "../shared/file-state.ts";
+import { appendSoftConstraint } from "../shared/extension-ui.ts";
 
 // Error messages are kept byte-for-byte identical to Claude Code so behavior
 // (and any downstream prompting the model has learned) stays consistent.
@@ -38,13 +39,10 @@ const MSG_NOT_READ = "File has not been read yet. Read it first before writing t
 const MSG_MODIFIED =
 	"File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.";
 
-const SOFT_CONSTRAINT = [
-	"",
-	"<read_before_edit>",
+const SOFT_CONSTRAINT_LINES = [
 	"Before using the edit or write tool on an existing file, you must first read it with the read tool in this session.",
 	"If a file changed on disk since you last read it, read it again before editing. This prevents edits based on stale content.",
-	"</read_before_edit>",
-].join("\n");
+];
 
 export default function readBeforeEdit(pi: ExtensionAPI): void {
 	// ---- record reads, and the agent's own writes/edits ---------------------
@@ -110,7 +108,7 @@ export default function readBeforeEdit(pi: ExtensionAPI): void {
 
 	// ---- soft constraint ----------------------------------------------------
 	pi.on("before_agent_start", (event) => {
-		return { systemPrompt: event.systemPrompt + "\n" + SOFT_CONSTRAINT };
+		return appendSoftConstraint(event, "read_before_edit", SOFT_CONSTRAINT_LINES);
 	});
 }
 

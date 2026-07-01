@@ -1,9 +1,66 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+/**
+ * restore.ts — restore the advisor reviewer from persisted config, plus the
+ * module-level selectedModel / selectedEffort state (the only writer lives
+ * here, so get/set belong with the restore function that uses them).
+ */
+import type { Api, ExtensionAPI, ExtensionContext, Model, ThinkingLevel } from "@earendil-works/pi-coding-agent";
 
+import { ADVISOR_TOOL_NAME } from "./constants.ts";
 import { findAvailableModel, modelKey, restoreAdvisorConfig } from "./config.ts";
-import { reconcileAdvisorTool } from "./reconcile.ts";
-import { setAdvisorEffort, setAdvisorModel } from "./state.ts";
 
+// ---- module-level selected reviewer state (singleton per process) ----------
+//
+// The advisor's reviewer is configured in one process at a time. We keep the
+// selected model + effort in module-level state so the tool's renderCall and
+// execute can read them without re-reading the persisted config on every call.
+// The only writer is `restoreAdvisorState` below; the only readers are
+// `command.ts` (which calls /advisor), `execute.ts`, and `index.ts#renderCall`.
+
+let selectedModel: Model<Api> | undefined;
+let selectedEffort: ThinkingLevel | undefined;
+
+export function getAdvisorModel(): Model<Api> | undefined {
+	return selectedModel;
+}
+
+export function setAdvisorModel(model: Model<Api> | undefined): void {
+	selectedModel = model;
+}
+
+export function getAdvisorEffort(): ThinkingLevel | undefined {
+	return selectedEffort;
+}
+
+export function setAdvisorEffort(effort: ThinkingLevel | undefined): void {
+	selectedEffort = effort;
+}
+
+/**
+ * Keep the advisor tool's active state in sync with whether a reviewer model is
+ * configured: add the tool when a model is selected, remove it when not.
+ *
+ * Advisor is surfaced only through the tool itself (and /advisor notifications);
+ * it deliberately writes no footer status, so it never appears in the status line.
+ */
+export function reconcileAdvisorTool(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	options: { notify?: boolean } = {},
+): void {
+	const advisor = selectedModel;
+	const active = pi.getActiveTools();
+	const hasAdvisor = active.includes(ADVISOR_TOOL_NAME);
+
+	if (!advisor && hasAdvisor) {
+		pi.setActiveTools(active.filter((name) => name !== ADVISOR_TOOL_NAME));
+		if (options.notify && ctx.hasUI) ctx.ui.notify("Advisor disabled.", "info");
+	} else if (advisor && !hasAdvisor) {
+		pi.setActiveTools([...active, ADVISOR_TOOL_NAME]);
+		if (options.notify && ctx.hasUI) ctx.ui.notify(`Advisor enabled: ${modelKey(advisor)}`, "info");
+	}
+}
+
+/** Restore the advisor's reviewer from the persisted config. */
 export function restoreAdvisorState(pi: ExtensionAPI, ctx: ExtensionContext): void {
 	const config = restoreAdvisorConfig();
 

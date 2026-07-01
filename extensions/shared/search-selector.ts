@@ -1,5 +1,7 @@
 import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { fuzzyFilter, Input, truncateToWidth, type Component, type Focusable, type TUI } from "@earendil-works/pi-tui";
+import { ruleBorder } from "./dialog-primitives.ts";
+import { WidthCachedRender } from "./render-cache.ts";
 
 export interface SearchSelectorItem<TChoice> {
 	key: string;
@@ -25,11 +27,9 @@ export class SearchSelectorComponent<TChoice> implements Component, Focusable {
 	private readonly helpText: string;
 	private readonly noMatchesText: string;
 	private _focused = false;
-	// Render cache (mirrors question/dialog.ts): reuse the last output when
-	// width is unchanged and no input/state change has invalidated it. Avoids
-	// re-wrapping/truncating every keystroke-driven redraw.
-	private cachedLines?: string[];
-	private cachedWidth?: number;
+	// Width-keyed render cache: drops the previous output on any keystroke or
+	// state change. Mirrors question/dialog's cache (see render-cache.ts).
+	private cache = new WidthCachedRender();
 
 	get focused(): boolean {
 		return this._focused;
@@ -38,7 +38,7 @@ export class SearchSelectorComponent<TChoice> implements Component, Focusable {
 	set focused(value: boolean) {
 		this._focused = value;
 		this.searchInput.focused = value;
-		this.cachedLines = undefined;
+		this.cache.invalidate();
 	}
 
 	constructor(
@@ -57,13 +57,13 @@ export class SearchSelectorComponent<TChoice> implements Component, Focusable {
 	}
 
 	invalidate(): void {
-		this.cachedLines = undefined;
+		this.cache.invalidate();
 	}
 
 	handleInput(data: string): void {
 		// Any keystroke may change the input cursor, filter, or selection —
 		// drop the render cache so the next render recomputes.
-		this.cachedLines = undefined;
+		this.cache.invalidate();
 		const kb = this.keybindings;
 		if (kb.matches(data, "tui.select.up")) {
 			this.moveSelection(-1);
@@ -87,13 +87,16 @@ export class SearchSelectorComponent<TChoice> implements Component, Focusable {
 	}
 
 	render(width: number): string[] {
-		if (this.cachedLines && this.cachedWidth === width) return this.cachedLines;
+		return this.cache.get(width, (w) => this.compute(w));
+	}
+
+	private compute(width: number): string[] {
 		const renderWidth = Math.max(1, width);
 		const lines: string[] = [];
 		const titleLine = ` ${this.theme.fg("accent", this.theme.bold(this.title))}`;
 		const helpLine = ` ${this.theme.fg("muted", this.helpText)}`;
 
-		lines.push(this.theme.fg("accent", "─".repeat(renderWidth)));
+		lines.push(ruleBorder(this.theme, renderWidth));
 		lines.push(truncateToWidth(titleLine, renderWidth, ""));
 		lines.push(truncateToWidth(helpLine, renderWidth, ""));
 		lines.push("");
@@ -132,9 +135,7 @@ export class SearchSelectorComponent<TChoice> implements Component, Focusable {
 			lines.push(truncateToWidth(`  ${this.theme.fg("muted", selected.detail)}`, renderWidth, ""));
 		}
 
-		lines.push(this.theme.fg("accent", "─".repeat(renderWidth)));
-		this.cachedLines = lines;
-		this.cachedWidth = width;
+		lines.push(ruleBorder(this.theme, renderWidth));
 		return lines;
 	}
 

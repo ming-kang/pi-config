@@ -5,9 +5,8 @@
  * only one DeepWiki-specific tool and hard-codes DeepWiki's public operations.
  */
 import { type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
 
-import { activeDotLine, callLine, errorResultLine, markdownResultBlock, resultLine } from "../tools-view/shared.ts";
+import { buildStandardRenderer } from "../tools-view/shared.ts";
 import { truncateText } from "../shared/text.ts";
 import {
 	DEEPWIKI_DESCRIPTION,
@@ -109,6 +108,14 @@ function callSuffix(args: DeepWikiParams, theme: Theme): string {
 	return suffix;
 }
 
+const DEEPWIKI_RENDERER = buildStandardRenderer<DeepWikiDetails>({
+	name: "DeepWiki",
+	callSuffix: (args, theme) => callSuffix(args as DeepWikiParams, theme),
+	partialLabel: (details) => ` Querying${details?.repoName ? ` ${details.repoName}` : ""}...`,
+	errorMessage: (text, details) => `failed · ${details?.errorMessage ?? firstContentLine(text)}`,
+	collapsedLine: (text, details) => summarizeCollapsedResult(text, details),
+});
+
 export default function deepwiki(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: DEEPWIKI_TOOL_NAME,
@@ -124,29 +131,7 @@ export default function deepwiki(pi: ExtensionAPI): void {
 			return executeDeepWiki(params, signal, onUpdate);
 		},
 
-		renderCall(args, theme) {
-			return new Text(callLine("DeepWiki", callSuffix(args, theme), theme), 0, 0);
-		},
-
-		renderResult(result, options, theme, ctx) {
-			const details = result.details as DeepWikiDetails | undefined;
-			const text = result.content.find((part) => part.type === "text")?.text ?? "";
-
-			if (options.isPartial) {
-				const target = details?.repoName ? ` ${details.repoName}` : "";
-				return new Text(activeDotLine("DeepWiki", ` Querying${target}...`, theme), 0, 0);
-			}
-
-			if (ctx.isError || details?.errorMessage) {
-				const message = `failed · ${details?.errorMessage ?? firstContentLine(text)}`;
-				return new Text(errorResultLine(message, options.expanded, theme), 0, 0);
-			}
-
-			if (!options.expanded) {
-				return new Text(resultLine(theme.fg("accent", summarizeCollapsedResult(text, details)), theme), 0, 0);
-			}
-
-			return markdownResultBlock(text);
-		},
+		renderCall: DEEPWIKI_RENDERER.renderCall,
+		renderResult: DEEPWIKI_RENDERER.renderResult,
 	});
 }

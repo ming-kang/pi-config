@@ -7,8 +7,9 @@ import {
 	matchesKey,
 	type TUI,
 	visibleWidth,
-	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import { ruleBorder, wrapWithPrefix } from "../shared/dialog-primitives.ts";
+import { WidthCachedRender } from "../shared/render-cache.ts";
 import {
 	displayOptions,
 	hasAnswer,
@@ -27,8 +28,7 @@ export function createQuestionDialog(questions: Question[]) {
 		let inputMode: InputMode;
 		let noteTarget: string | undefined;
 		let dialogFocused = false;
-		let cachedLines: string[] | undefined;
-		let cachedWidth: number | undefined;
+		const cache = new WidthCachedRender();
 		const states = questions.map(() => newQuestionState());
 
 		const editorTheme: EditorTheme = {
@@ -47,7 +47,7 @@ export function createQuestionDialog(questions: Question[]) {
 		const currentState = () => states[currentIdx];
 
 		function refresh(): void {
-			cachedLines = undefined;
+			cache.invalidate();
 			tui.requestRender();
 		}
 
@@ -273,7 +273,10 @@ export function createQuestionDialog(questions: Question[]) {
 		}
 
 		function render(width: number): string[] {
-			if (cachedLines && cachedWidth === width) return cachedLines;
+			return cache.get(width, compute);
+		}
+
+		function compute(width: number): string[] {
 			const lines: string[] = [];
 			const renderWidth = Math.max(1, width);
 			const question = currentQuestion();
@@ -281,24 +284,7 @@ export function createQuestionDialog(questions: Question[]) {
 			const options = displayOptions(question);
 			const isMulti = question.multiSelect === true;
 
-			function addWrapped(text: string): void {
-				lines.push(...wrapTextWithAnsi(text, renderWidth));
-			}
-
-			function addWrappedWithPrefix(prefix: string, text: string): void {
-				const prefixWidth = visibleWidth(prefix);
-				if (prefixWidth >= renderWidth) {
-					addWrapped(prefix + text);
-					return;
-				}
-				const wrapped = wrapTextWithAnsi(text, renderWidth - prefixWidth);
-				const continuationPrefix = " ".repeat(prefixWidth);
-				for (let i = 0; i < wrapped.length; i++) {
-					lines.push(`${i === 0 ? prefix : continuationPrefix}${wrapped[i]}`);
-				}
-			}
-
-			lines.push(theme.fg("accent", "─".repeat(renderWidth)));
+			lines.push(ruleBorder(theme, renderWidth));
 			if (questions.length >= 2) {
 				const tabs = questions
 					.map((q, i) => {
@@ -308,29 +294,16 @@ export function createQuestionDialog(questions: Question[]) {
 						return theme.fg(answered ? "success" : "muted", label);
 					})
 					.join(" ");
-				addWrappedWithPrefix(" ", tabs);
+				wrapWithPrefix(" ", tabs, renderWidth, lines);
 				lines.push("");
 			}
-			addWrappedWithPrefix(" ", `${theme.fg("accent", question.header)}  ${theme.fg("text", question.question)}`);
+			wrapWithPrefix(" ", `${theme.fg("accent", question.header)}  ${theme.fg("text", question.question)}`, renderWidth, lines);
 			lines.push("");
 
 			const optionLines: string[] = [];
 			const hasPreview = !isMulti && options.some((o) => o.kind === "option" && o.preview);
 			const showPreviewSideBySide = hasPreview && renderWidth >= 60;
 			const listWidth = showPreviewSideBySide ? Math.max(20, Math.floor(renderWidth * 0.4)) : renderWidth;
-
-			function addOptionLine(prefix: string, text: string): void {
-				const prefixWidth = visibleWidth(prefix);
-				if (prefixWidth >= listWidth) {
-					optionLines.push(...wrapTextWithAnsi(prefix + text, listWidth));
-					return;
-				}
-				const wrapped = wrapTextWithAnsi(text, listWidth - prefixWidth);
-				const cont = " ".repeat(prefixWidth);
-				for (let i = 0; i < wrapped.length; i++) {
-					optionLines.push(`${i === 0 ? prefix : cont}${wrapped[i]}`);
-				}
-			}
 
 			for (let i = 0; i < options.length; i++) {
 				const option = options[i];
@@ -362,14 +335,14 @@ export function createQuestionDialog(questions: Question[]) {
 				const labelText = customText ? `${option.label}  ✎ ${customText}` : option.label;
 				const label = `${i + 1}. ${labelText}${selectedSingle ? " ✓" : ""}${note}`;
 				const color = focused ? "accent" : selectedSingle || checked ? "success" : "text";
-				addOptionLine(`${focusArrow} ${marker} `, theme.fg(color, label));
-				if (option.kind === "option" && option.description) addOptionLine("       ", theme.fg("muted", option.description));
+				wrapWithPrefix(`${focusArrow} ${marker} `, theme.fg(color, label), listWidth, optionLines);
+				if (option.kind === "option" && option.description) wrapWithPrefix("       ", theme.fg("muted", option.description), listWidth, optionLines);
 			}
 
 			if (inputMode) {
 				optionLines.push("");
 				const label = inputMode === "notes" ? `Notes for ${noteTarget ?? "option"}:` : "Your answer:";
-				addOptionLine(" ", theme.fg("muted", label));
+				wrapWithPrefix(" ", theme.fg("muted", label), listWidth, optionLines);
 				for (const line of editor.render(Math.max(1, listWidth - 2))) {
 					optionLines.push(` ${line}`);
 				}
@@ -397,7 +370,7 @@ export function createQuestionDialog(questions: Question[]) {
 					const previewText = focused?.kind === "option" && focused.preview ? focused.preview : "";
 					if (previewText) {
 						lines.push("");
-						lines.push(theme.fg("dim", "─".repeat(renderWidth)));
+						lines.push(ruleBorder(theme, renderWidth, "dim"));
 						const md = new Markdown(previewText, 1, 0, getMarkdownTheme());
 						lines.push(...md.render(renderWidth));
 					}
@@ -406,29 +379,30 @@ export function createQuestionDialog(questions: Question[]) {
 
 			lines.push("");
 			if (state.warning) {
-				addWrappedWithPrefix(" ", theme.fg("warning", state.warning));
+				wrapWithPrefix(" ", theme.fg("warning", state.warning), renderWidth, lines);
 				lines.push("");
 			}
 			if (inputMode === "notes") {
-				addWrappedWithPrefix(" ", theme.fg("dim", "Enter to save notes • Esc to go back"));
+				wrapWithPrefix(" ", theme.fg("dim", "Enter to save notes • Esc to go back"), renderWidth, lines);
 			} else if (inputMode === "custom") {
 				const hint = isMulti ? "Enter to save custom answer • Esc to go back" : "Enter to submit • Esc to go back";
-				addWrappedWithPrefix(" ", theme.fg("dim", hint));
+				wrapWithPrefix(" ", theme.fg("dim", hint), renderWidth, lines);
 			} else if (isMulti) {
-				addWrappedWithPrefix(
+				wrapWithPrefix(
 					" ",
 					theme.fg("dim", "Space to toggle • Tab for notes/custom • Enter to submit • ←/→ questions • Esc to cancel"),
+					renderWidth,
+					lines,
 				);
 			} else {
-				addWrappedWithPrefix(
+				wrapWithPrefix(
 					" ",
 					theme.fg("dim", "Tab for notes/custom • Enter to submit answer • ←/→ questions • Esc to cancel"),
+					renderWidth,
+					lines,
 				);
 			}
-			lines.push(theme.fg("accent", "─".repeat(renderWidth)));
-
-			cachedLines = lines;
-			cachedWidth = width;
+			lines.push(ruleBorder(theme, renderWidth));
 			return lines;
 		}
 
@@ -442,7 +416,7 @@ export function createQuestionDialog(questions: Question[]) {
 			},
 			render,
 			invalidate: () => {
-				cachedLines = undefined;
+				cache.invalidate();
 			},
 			handleInput,
 		};

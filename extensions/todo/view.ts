@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 
-import type { TodoItem, TodoState, TodoStatus } from "./types.ts";
+import type { TodoItem, TodoState, TodoStatus } from "./schema.ts";
 
 export const STATUS_MARK: Record<TodoStatus, string> = {
 	pending: "[ ]",

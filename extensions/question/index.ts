@@ -11,7 +11,7 @@ import { createQuestionDialog } from "./dialog.ts";
 import { cancelResult, errorResult, successResult, answerScalar } from "./results.ts";
 import { QuestionParams, validateQuestions } from "./schema.ts";
 import type { DialogResult, Question, QuestionToolDetails } from "./types.ts";
-import { callLine, errorResultLine, resultLine } from "../tools-view/shared.ts";
+import { callLine, errorResultLine, firstText, resultLine } from "../tools-view/shared.ts";
 import {
 	QUESTION_DESCRIPTION,
 	QUESTION_LABEL,
@@ -57,8 +57,7 @@ export default function question(pi: ExtensionAPI) {
 			const details = result.details as QuestionToolDetails | undefined;
 
 			if (details?.error) {
-				const text = result.content[0];
-				const msg = text?.type === "text" ? text.text : `Error: ${details.error}`;
+				const msg = firstText(result) || `Error: ${details.error}`;
 				return new Text(errorResultLine(msg, false, theme), 0, 0);
 			}
 

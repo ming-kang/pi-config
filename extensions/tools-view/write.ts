@@ -5,6 +5,7 @@ import {
 	callLine,
 	emptyLine,
 	errLine,
+	firstLineError,
 	linkifyUrlsInText,
 	renderNumberedLines,
 	RESULT_PREFIX,
@@ -28,9 +29,7 @@ export function createWriteRenderer(cwd: string) {
 			if (isPartial) return new Text(activeDotLine("Write", " Writing...", theme), 0, 0);
 
 			if (ctx.isError) {
-				const textBlock = (result.content ?? []).find((c: any) => c?.type === "text");
-				const msg = textBlock?.type === "text" ? textBlock.text.split("\n")[0] : "write failed";
-				return new Text(errLine(msg, theme), 0, 0);
+				return new Text(errLine(firstLineError(result, "write failed"), theme), 0, 0);
 			}
 
 			const filePath = String(ctx.args?.path ?? "");

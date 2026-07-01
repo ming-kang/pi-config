@@ -1,7 +1,7 @@
 import type { AgentToolResult, EditToolDetails, Theme } from "@earendil-works/pi-coding-agent";
 import { createEditToolDefinition, keyHint, renderDiff as renderPiDiff, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { activeDotLine, callLine, errLine, resultLine, type RenderCtx } from "./shared.ts";
+import { activeDotLine, callLine, errLine, firstLineError, resultLine, type RenderCtx } from "./shared.ts";
 
 // Collapsed edit results cap the diff at this many lines; expand (Ctrl+O) shows
 // the full diff. Diffs are the core signal of an edit, so the cap is generous —
@@ -30,9 +30,7 @@ export function createEditRenderer(cwd: string) {
 
 			const details = result.details as EditToolDetails | undefined;
 			if (ctx.isError) {
-				const textBlock = (result.content ?? []).find((c: any) => c?.type === "text");
-				const msg = textBlock?.type === "text" ? textBlock.text.split("\n")[0] : "edit failed";
-				return new Text(errLine(msg, theme), 0, 0);
+				return new Text(errLine(firstLineError(result, "edit failed"), theme), 0, 0);
 			}
 
 			if (!details?.diff) return new Text(resultLine("applied", theme), 0, 0);

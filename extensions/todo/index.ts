@@ -10,7 +10,8 @@ import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-ag
 import { Text } from "@earendil-works/pi-tui";
 
 import { TodoOverlay } from "./overlay.ts";
-import { activeDotLine, callLine, errorResultLine, resultLine } from "../tools-view/shared.ts";
+import { activeDotLine, callLine, errorResultLine, firstText, resultLine } from "../tools-view/shared.ts";
+import { requireInteractiveUI } from "../shared/extension-ui.ts";
 import { firstLine } from "../shared/text.ts";
 import {
 	applyTodoMutation,
@@ -21,7 +22,8 @@ import {
 	replaceTodoState,
 	replayTodosFromBranch,
 } from "./state.ts";
-import { TODOS_COMMAND_NAME, TODO_TOOL_LABEL, TODO_TOOL_NAME, TodoParamsSchema, type TodoDetails, type TodoParams, type TodoStatus } from "./types.ts";
+import { TODOS_COMMAND_NAME, TODO_TOOL_LABEL, TODO_TOOL_NAME } from "./constants.ts";
+import { TodoParamsSchema, type TodoDetails, type TodoParams, type TodoStatus } from "./schema.ts";
 import { formatCommandList, STATUS_MARK, STATUS_COLOR } from "./view.ts";
 
 const DEFAULT_PROMPT_SNIPPET = "Track multi-step work with a small task list";
@@ -91,7 +93,7 @@ export default function todo(pi: ExtensionAPI): void {
 				return new Text(errorResultLine(details.error, options.expanded, theme), 0, 0);
 			}
 
-			const textContent = result.content.find((part) => part.type === "text")?.text ?? "";
+			const textContent = firstText(result);
 
 			let status: TodoStatus | undefined;
 			if (details) {
@@ -124,10 +126,7 @@ export default function todo(pi: ExtensionAPI): void {
 	pi.registerCommand(TODOS_COMMAND_NAME, {
 		description: "Show todos for the current conversation branch",
 		handler: async (_args, ctx) => {
-			if (!ctx.hasUI) {
-				ctx.ui.notify("/todos requires an interactive UI.", "warning");
-				return;
-			}
+			if (!requireInteractiveUI(ctx, "/todos")) return;
 			ctx.ui.notify(formatCommandList(getTodoState()), "info");
 		},
 	});

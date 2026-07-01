@@ -14,8 +14,8 @@ import type {
 import { advisorSystemPrompt } from "./constants.ts";
 import { buildAdvisorMessage } from "./context.ts";
 import { modelKey } from "./config.ts";
+import { getAdvisorEffort, getAdvisorModel } from "./restore.ts";
 import { clampPreviousRuns, type AdvisorParams } from "./schema.ts";
-import { getAdvisorEffort, getAdvisorModel } from "./state.ts";
 
 export interface AdvisorDetails {
 	advisorModel?: string;

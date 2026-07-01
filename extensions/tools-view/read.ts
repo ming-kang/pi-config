@@ -1,12 +1,14 @@
 import type { AgentToolResult, ReadToolDetails, Theme } from "@earendil-works/pi-coding-agent";
-import { createReadToolDefinition, keyHint, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
+import { createReadToolDefinition, formatSize, keyHint, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import {
 	activeDotLine,
 	callLine,
 	emptyLine,
 	errLine,
-	fmtSize,
+	firstImage,
+	firstLineError,
+	firstText,
 	linkifyUrlsInText,
 	resultLine,
 	type RenderCtx,
@@ -71,30 +73,28 @@ export function createReadRenderer(cwd: string) {
 			// own parameter type rather than `as any`.
 			if (expanded) return base.renderResult(result, options, theme, ctx as Parameters<typeof base.renderResult>[3]);
 
-			const content = result.content ?? [];
 			const details = result.details as ReadToolDetails | undefined;
-			const imageBlock = content.find((c: any) => c?.type === "image");
-			const firstText = content.find((c: any) => c?.type === "text");
-			const noteText = firstText?.type === "text" ? firstText.text : "";
-			const isImage = !!imageBlock || noteText.startsWith("Read image file");
+			const image = firstImage(result);
+			const noteText = firstText(result);
+			const isImage = !!image || noteText.startsWith("Read image file");
 
 			if (ctx.isError) {
-				return new Text(errLine(noteText.split("\n")[0] || "read failed", theme), 0, 0);
+				return new Text(errLine(firstLineError(result, "read failed"), theme), 0, 0);
 			}
 
 			if (isImage) {
 				const mimeMatch = noteText.match(/\[([^\]]+)\]/);
 				const mime = mimeMatch ? mimeMatch[1] : "";
-				const size = imageBlock?.type === "image" && imageBlock.data ? fmtSize(imageBlock.data.length) : "";
+				const size = image ? formatSize(Math.floor((image.data.length * 3) / 4)) : "";
 				const detail = [mime, size].filter(Boolean).join(", ");
 				const text = resultLine(`Read image${detail ? ` (${detail})` : ""}`, theme);
 				return new Text(text, 0, 0);
 			}
 
-			if (!firstText || firstText.type !== "text") return new Text(errLine("no content", theme), 0, 0);
+			if (!noteText) return new Text(errLine("no content", theme), 0, 0);
 
-			const { fileLines, noticeLines } = splitReadOutput(firstText.text);
-			const lineCount = firstText.text.length === 0 ? 0 : fileLines.length;
+			const { fileLines, noticeLines } = splitReadOutput(noteText);
+			const lineCount = noteText.length === 0 ? 0 : fileLines.length;
 			const truncInfo = details?.truncation?.truncated ? ` (truncated from ${details.truncation.totalLines})` : "";
 			let text = resultLine(`Read ${lineCount} ${lineCount === 1 ? "line" : "lines"}${truncInfo}`, theme);
 			if (firstText.text.length === 0) {

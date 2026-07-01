@@ -1,6 +1,9 @@
-import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, Theme, ThemeColor, ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
-import { type Component, Container, getCapabilities, hyperlink, Markdown, Spacer } from "@earendil-works/pi-tui";
+import { type Component, Container, getCapabilities, hyperlink, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import type { ImageContent, TextContent } from "@earendil-works/pi-ai/compat";
+
+import { firstLine } from "../shared/text.ts";
 
 export const BULLET = "●";
 export const RESULT_PREFIX = "│ ";
@@ -24,11 +27,37 @@ export function textLineCount(text: string): number {
 	return text.length === 0 ? 0 : text.split("\n").length;
 }
 
-export function fmtSize(base64Len: number): string {
-	const bytes = Math.floor((base64Len * 3) / 4);
-	if (bytes < 1024) return `${bytes} B`;
-	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+/**
+ * Pull the first text content block out of a tool result, or "" if none. Used
+ * by every tool renderer; centralizing avoids 9 inline `find((c: any) => c.type === "text")`
+ * sites and the `result.content[0]` shortcut that breaks when a result has both
+ * image and text blocks.
+ */
+export function firstText(result: AgentToolResult<unknown>): string {
+	for (const part of result.content ?? []) {
+		if ((part as TextContent | undefined)?.type === "text" && typeof (part as TextContent).text === "string") {
+			return (part as TextContent).text;
+		}
+	}
+	return "";
+}
+
+/**
+ * Pull the first image content block out of a tool result. `data` is base64;
+ * `mimeType` may be empty. Used by the read renderer to detect image results.
+ */
+export function firstImage(result: AgentToolResult<unknown>): ImageContent | undefined {
+	for (const part of result.content ?? []) {
+		if ((part as ImageContent | undefined)?.type === "image" && typeof (part as ImageContent).data === "string") {
+			return part as ImageContent;
+		}
+	}
+	return undefined;
+}
+
+/** First line of the result's text content, or `fallback` if empty/missing. */
+export function firstLineError(result: AgentToolResult<unknown>, fallback: string): string {
+	return firstLine(firstText(result), fallback);
 }
 
 export function callLine(toolName: string, args: string, theme: Theme, dotColor: ThemeColor = "success"): string {
@@ -118,4 +147,55 @@ const URL_RE = /https?:\/\/[^\s"'<>\\]+/g;
 export function linkifyUrlsInText(content: string): string {
 	if (!getCapabilities().hyperlinks) return content;
 	return content.replace(URL_RE, (url) => hyperlink(url, url));
+}
+
+// ============================================================================
+// buildStandardRenderer
+// ============================================================================
+//
+// Folds the 4-branch renderResult skeleton shared by tools whose collapsed +
+// expanded output is a text summary / markdown block. Each branch is a small
+// callback, so the surrounding control flow lives in one place:
+//
+//   1. isPartial         → activeDotLine(name, partialLabel)
+//   2. error / details   → errorResultLine(errorMessage)
+//   3. !expanded         → resultLine(accent(collapsedLine))
+//   4. expanded          → markdownResultBlock(text)
+//
+// Tools with domain-specific rendering (e.g. question's multi-answer layout,
+// todo's status-mark coloring) keep their custom renderResult — the builder
+// would need a per-tool escape hatch that defeats the savings.
+
+export interface StandardRendererConfig<TDetails> {
+	name: string;
+	callSuffix: (args: Record<string, unknown>, theme: Theme) => string;
+	partialLabel: (details: TDetails | undefined, theme: Theme) => string;
+	errorMessage: (text: string, details: TDetails | undefined) => string;
+	collapsedLine: (text: string, details: TDetails | undefined, theme: Theme) => string;
+}
+
+export function buildStandardRenderer<TDetails>(cfg: StandardRendererConfig<TDetails>) {
+	return {
+		renderCall(args: Record<string, unknown>, theme: Theme): Component {
+			return new Text(callLine(cfg.name, cfg.callSuffix(args, theme), theme), 0, 0);
+		},
+		renderResult(
+			result: AgentToolResult<TDetails>,
+			options: ToolRenderResultOptions,
+			theme: Theme,
+			ctx: RenderCtx,
+		): Component {
+			if (options.isPartial) {
+				return new Text(activeDotLine(cfg.name, cfg.partialLabel(result.details, theme), theme), 0, 0);
+			}
+			const text = firstText(result);
+			if (ctx.isError || (result.details as { errorMessage?: unknown } | undefined)?.errorMessage) {
+				return new Text(errorResultLine(cfg.errorMessage(text, result.details), options.expanded, theme), 0, 0);
+			}
+			if (!options.expanded) {
+				return new Text(resultLine(theme.fg("accent", cfg.collapsedLine(text, result.details, theme)), theme), 0, 0);
+			}
+			return markdownResultBlock(text);
+		},
+	};
 }

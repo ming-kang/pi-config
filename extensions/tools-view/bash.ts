@@ -5,6 +5,7 @@ import {
 	BULLET,
 	activeDotLine,
 	callLine,
+	firstText,
 	linkifyUrlsInText,
 	resultLine,
 	tryJsonFormatContent,
@@ -65,9 +66,7 @@ export function createBashRenderer(cwd: string) {
 		renderResult(result: AgentToolResult<BashToolDetails>, options: ToolRenderResultOptions, theme: Theme, ctx: RenderCtx) {
 			const { expanded, isPartial } = options;
 			const details = result.details as BashToolDetails | undefined;
-			const content = result.content ?? [];
-			const textBlock = content.find((c: any) => c?.type === "text");
-			const output = textBlock?.type === "text" ? textBlock.text : "";
+			const output = firstText(result);
 			const { bodyLines, failureLabel } = splitBashOutput(output, ctx.isError);
 			const visible = bodyLines.filter((line) => line.trim());
 			const bodyCount = visible.length;

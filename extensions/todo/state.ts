@@ -1,4 +1,5 @@
-import { EMPTY_TODO_STATE, TODO_TOOL_NAME, type TodoDetails, type TodoItem, type TodoParams, type TodoState, type TodoStatus } from "./types.ts";
+import { TODO_TOOL_NAME } from "./constants.ts";
+import { EMPTY_TODO_STATE, type TodoDetails, type TodoItem, type TodoParams, type TodoState, type TodoStatus } from "./schema.ts";
 
 type Operation =
 	| { kind: "create"; id: number }

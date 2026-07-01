@@ -1,9 +1,7 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
 
-export const TODO_TOOL_NAME = "todo";
-export const TODO_TOOL_LABEL = "Todo";
-export const TODOS_COMMAND_NAME = "todos";
+import { TODO_TOOL_NAME } from "./constants.ts";
 
 export type TodoStatus = "pending" | "in_progress" | "completed" | "deleted";
 export type TodoAction = "create" | "update" | "list" | "get" | "delete" | "clear";
@@ -58,3 +56,6 @@ export const TodoParamsSchema = Type.Object({
 export type TodoParams = Static<typeof TodoParamsSchema>;
 
 export const EMPTY_TODO_STATE: TodoState = { items: [], nextId: 1 };
+
+// Re-export so existing call sites that import from schema.ts still work.
+export { TODO_TOOL_NAME };

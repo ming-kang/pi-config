@@ -6,9 +6,8 @@
  * provider auth. It intentionally gives the reviewer no tools.
  */
 import { type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
 
-import { activeDotLine, callLine, errorResultLine, markdownResultBlock, resultLine } from "../tools-view/shared.ts";
+import { buildStandardRenderer } from "../tools-view/shared.ts";
 import { firstLine } from "../shared/text.ts";
 
 import {
@@ -20,10 +19,8 @@ import {
 import { executeAdvisor, type AdvisorDetails } from "./execute.ts";
 import { registerAdvisorCommand } from "./command.ts";
 import { modelKey } from "./config.ts";
-import { reconcileAdvisorTool } from "./reconcile.ts";
-import { restoreAdvisorState } from "./restore.ts";
+import { getAdvisorEffort, getAdvisorModel, reconcileAdvisorTool, restoreAdvisorState } from "./restore.ts";
 import { AdvisorParamsSchema } from "./schema.ts";
-import { getAdvisorEffort, getAdvisorModel } from "./state.ts";
 
 function stripBold(text: string): string {
 	return text.replace(/\*\*/g, "");
@@ -51,6 +48,18 @@ function extractSummary(text: string): string {
 	return stripBold(first.replace(/^###?\s+/, "")).trim();
 }
 
+const ADVISOR_RENDERER = buildStandardRenderer<AdvisorDetails>({
+	name: "Advisor",
+	callSuffix: (_args, _theme) => {
+		const advisor = getAdvisorModel();
+		const effort = getAdvisorEffort();
+		return advisor ? `${modelKey(advisor)}${effort ? ` · ${effort}` : ""}` : "";
+	},
+	partialLabel: (details, _theme) => ` Consulting ${details?.advisorModel ?? ""}...`,
+	errorMessage: (text, _details) => firstLine(text, "advisor call failed"),
+	collapsedLine: (text, _details, _theme) => extractSummary(text),
+});
+
 export default function advisor(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: ADVISOR_TOOL_NAME,
@@ -66,34 +75,8 @@ export default function advisor(pi: ExtensionAPI): void {
 			return executeAdvisor(params, ctx, signal, onUpdate);
 		},
 
-		renderCall(_args, theme) {
-			const advisor = getAdvisorModel();
-			const effort = getAdvisorEffort();
-			const suffix = advisor ? `${modelKey(advisor)}${effort ? ` · ${effort}` : ""}` : "";
-			return new Text(callLine("Advisor", suffix, theme), 0, 0);
-		},
-
-		renderResult(result, options, theme, ctx) {
-			const details = result.details as AdvisorDetails | undefined;
-			const block = result.content.find((part) => part.type === "text");
-			const text = block?.type === "text" ? block.text : "";
-
-			if (options.isPartial) {
-				const modelInfo = details?.advisorModel ?? "";
-				return new Text(activeDotLine("Advisor", ` Consulting ${modelInfo}...`, theme), 0, 0);
-			}
-
-			if (ctx.isError || details?.errorMessage) {
-				const msg = firstLine(text, "advisor call failed");
-				return new Text(errorResultLine(msg, options.expanded, theme), 0, 0);
-			}
-
-			if (!options.expanded) {
-				return new Text(resultLine(theme.fg("accent", extractSummary(text)), theme), 0, 0);
-			}
-
-			return markdownResultBlock(text);
-		},
+		renderCall: ADVISOR_RENDERER.renderCall,
+		renderResult: ADVISOR_RENDERER.renderResult,
 	});
 
 	registerAdvisorCommand(pi);

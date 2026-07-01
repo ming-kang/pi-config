@@ -20,6 +20,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { isTui } from "../shared/extension-ui.ts";
 
 /** Shorten a path to ~ relative to home. */
 function shortCwd(cwd: string): string {
@@ -64,7 +65,7 @@ function currentThinkingLevel(branch: SessionEntry[]): ThinkingLevel {
 
 export default function (pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
-		if (ctx.mode !== "tui") return;
+		if (!isTui(ctx)) return;
 
 		ctx.ui.setFooter((tui, theme, footerData) => {
 			const unsub = footerData.onBranchChange(() => tui.requestRender());
@@ -157,6 +158,6 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
-		if (ctx.mode === "tui") ctx.ui.setFooter(undefined);
+		if (isTui(ctx)) ctx.ui.setFooter(undefined);
 	});
 }

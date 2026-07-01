@@ -1,11 +1,105 @@
 import { getSupportedThinkingLevels, type Api, type Model, type ThinkingLevel } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
+import { ADVISOR_TOOL_NAME } from "./constants.ts";
 import { findAvailableModel, modelKey, saveAdvisorConfig } from "./config.ts";
-import { buildAdvisorMenuItems, formatCurrentReviewerLabel, type AdvisorMenuChoice } from "./dialog.ts";
-import { reconcileAdvisorTool } from "./reconcile.ts";
+import { getAdvisorEffort, getAdvisorModel, setAdvisorEffort, setAdvisorModel } from "./restore.ts";
 import { SearchSelectorComponent } from "../shared/search-selector.ts";
-import { getAdvisorEffort, getAdvisorModel, setAdvisorEffort, setAdvisorModel } from "./state.ts";
+import { requireInteractiveUI } from "../shared/extension-ui.ts";
+
+// ============================================================================
+// Advisor menu: choice types + item builders
+// ============================================================================
+//
+// The /advisor command's searchable selector uses these builders. They live
+// with the command (the only caller) so a reader sees the menu shape next to
+// the command that uses it — splitting them into their own file added friction
+// without adding clarity.
+
+export type AdvisorMenuChoice =
+	| { kind: "model"; modelKey: string }
+	| { kind: "no-advisor" }
+	| { kind: "manual" };
+
+export interface AdvisorMenuItem {
+	choice: AdvisorMenuChoice;
+	label: string;
+	selectionLabel: string;
+	searchText: string;
+	detail?: string;
+	current?: boolean;
+}
+
+function modelChoice(model: Model<Api>, current: boolean): AdvisorMenuItem {
+	const key = modelKey(model);
+	const label = model.name;
+	const detail = key;
+	return {
+		choice: { kind: "model", modelKey: key },
+		label,
+		selectionLabel: `${label} (${detail})${current ? " [current]" : ""}`,
+		searchText: `${label} ${detail} ${model.provider} ${model.id} ${model.provider}/${model.id} ${current ? "current" : ""}`,
+		detail,
+		current,
+	};
+}
+
+function noAdvisorChoice(current: boolean): AdvisorMenuItem {
+	return {
+		choice: { kind: "no-advisor" },
+		label: "No advisor",
+		selectionLabel: current ? "No advisor [current]" : "No advisor (disable)",
+		searchText: `${current ? "current " : ""}no advisor disable off`,
+		detail: "Disables the advisor tool",
+		current,
+	};
+}
+
+function manualChoice(): AdvisorMenuItem {
+	return {
+		choice: { kind: "manual" },
+		label: "Enter provider/model manually",
+		selectionLabel: "Enter provider/model manually",
+		searchText: "enter provider model manually",
+		detail: "Open a provider/model prompt",
+	};
+}
+
+function sortedModels(models: Model<Api>[]): Model<Api>[] {
+	return [...models].sort((a, b) => `${a.provider}/${a.name}`.localeCompare(`${b.provider}/${b.name}`));
+}
+
+export function buildAdvisorMenuItems(available: Model<Api>[], current: Model<Api> | undefined): AdvisorMenuItem[] {
+	const currentKey = current ? modelKey(current) : undefined;
+	const items: AdvisorMenuItem[] = [];
+	const ordered = sortedModels(available);
+
+	if (current) {
+		items.push(modelChoice(current, true));
+		items.push(noAdvisorChoice(false));
+		for (const model of ordered) {
+			if (modelKey(model) === currentKey) continue;
+			items.push(modelChoice(model, false));
+		}
+	} else {
+		items.push(noAdvisorChoice(true));
+		for (const model of ordered) {
+			items.push(modelChoice(model, false));
+		}
+	}
+
+	items.push(manualChoice());
+	return items;
+}
+
+export function formatCurrentReviewerLabel(model: Model<Api> | undefined, effort: ThinkingLevel | undefined): string {
+	if (!model) return "No advisor";
+	return effort ? `${model.name} · ${effort}` : model.name;
+}
+
+// ============================================================================
+// /advisor command handler
+// ============================================================================
 
 async function pickManualModel(ctx: ExtensionContext): Promise<Model<Api> | undefined> {
 	const value = (await ctx.ui.input("Advisor model", "provider/model"))?.trim();
@@ -34,6 +128,27 @@ async function pickEffort(ctx: ExtensionContext, model: Model<Api>): Promise<Thi
 	if (!choice) return "cancelled";
 	if (choice === "off") return undefined;
 	return choice.split(" ", 1)[0] as ThinkingLevel;
+}
+
+/**
+ * Keep the advisor tool's active state in sync with whether a reviewer model is
+ * configured: add the tool when a model is selected, remove it when not.
+ *
+ * Advisor is surfaced only through the tool itself (and /advisor notifications);
+ * it deliberately writes no footer status, so it never appears in the status line.
+ */
+function reconcileAdvisorTool(pi: ExtensionAPI, ctx: ExtensionContext, options: { notify?: boolean } = {}): void {
+	const advisor = getAdvisorModel();
+	const active = pi.getActiveTools();
+	const hasAdvisor = active.includes(ADVISOR_TOOL_NAME);
+
+	if (!advisor && hasAdvisor) {
+		pi.setActiveTools(active.filter((name) => name !== ADVISOR_TOOL_NAME));
+		if (options.notify && ctx.hasUI) ctx.ui.notify("Advisor disabled.", "info");
+	} else if (advisor && !hasAdvisor) {
+		pi.setActiveTools([...active, ADVISOR_TOOL_NAME]);
+		if (options.notify && ctx.hasUI) ctx.ui.notify(`Advisor enabled: ${modelKey(advisor)}`, "info");
+	}
 }
 
 function disableAdvisor(pi: ExtensionAPI, ctx: ExtensionContext): void {
@@ -90,10 +205,7 @@ export function registerAdvisorCommand(pi: ExtensionAPI): void {
 	pi.registerCommand("advisor", {
 		description: "Configure the advisor reviewer model",
 		handler: async (_args, ctx) => {
-			if (!ctx.hasUI) {
-				ctx.ui.notify("Advisor configuration requires an interactive UI.", "warning");
-				return;
-			}
+			if (!requireInteractiveUI(ctx, "Advisor configuration")) return;
 
 			const selection = await pickReviewer(ctx);
 			if (!selection) return;
