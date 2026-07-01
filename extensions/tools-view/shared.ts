@@ -28,18 +28,29 @@ export function textLineCount(text: string): number {
 }
 
 /**
- * Pull the first text content block out of a tool result, or "" if none. Used
- * by every tool renderer; centralizing avoids 9 inline `find((c: any) => c.type === "text")`
- * sites and the `result.content[0]` shortcut that breaks when a result has both
- * image and text blocks.
+ * Pull the first text content block out of a tool result, or undefined if none.
+ * Use this (rather than `firstText`) when the caller must distinguish "no text
+ * block" from "an empty text block" — e.g. read.ts treats an empty file
+ * (text block with `text: ""`) as a successful empty read, not "no content".
  */
-export function firstText(result: AgentToolResult<unknown>): string {
+export function firstTextBlock(result: AgentToolResult<unknown>): TextContent | undefined {
 	for (const part of result.content ?? []) {
 		if ((part as TextContent | undefined)?.type === "text" && typeof (part as TextContent).text === "string") {
-			return (part as TextContent).text;
+			return part as TextContent;
 		}
 	}
-	return "";
+	return undefined;
+}
+
+/**
+ * Pull the first text content block's text out of a tool result, or "" if none.
+ * Used by every tool renderer; centralizing avoids 9 inline `find((c: any) => c.type === "text")`
+ * sites and the `result.content[0]` shortcut that breaks when a result has both
+ * image and text blocks. Callers that need to tell "no block" from "empty
+ * block" apart should use `firstTextBlock` instead.
+ */
+export function firstText(result: AgentToolResult<unknown>): string {
+	return firstTextBlock(result)?.text ?? "";
 }
 
 /**

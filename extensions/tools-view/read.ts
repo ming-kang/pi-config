@@ -1,5 +1,5 @@
 import type { AgentToolResult, ReadToolDetails, Theme } from "@earendil-works/pi-coding-agent";
-import { createReadToolDefinition, formatSize, keyHint, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
+import { createReadToolDefinition, keyHint, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import {
 	activeDotLine,
@@ -8,11 +8,12 @@ import {
 	errLine,
 	firstImage,
 	firstLineError,
-	firstText,
+	firstTextBlock,
 	linkifyUrlsInText,
 	resultLine,
 	type RenderCtx,
 } from "./shared.ts";
+import { formatSize } from "../shared/text.ts";
 
 interface ReadDisplayLines {
 	fileLines: string[];
@@ -75,7 +76,10 @@ export function createReadRenderer(cwd: string) {
 
 			const details = result.details as ReadToolDetails | undefined;
 			const image = firstImage(result);
-			const noteText = firstText(result);
+			// Distinguish "no text block" (error) from "empty text block" (success:
+			// an empty file). firstText() collapses both to "", so read the block.
+			const textBlock = firstTextBlock(result);
+			const noteText = textBlock?.text ?? "";
 			const isImage = !!image || noteText.startsWith("Read image file");
 
 			if (ctx.isError) {
@@ -91,7 +95,7 @@ export function createReadRenderer(cwd: string) {
 				return new Text(text, 0, 0);
 			}
 
-			if (!noteText) return new Text(errLine("no content", theme), 0, 0);
+			if (!textBlock) return new Text(errLine("no content", theme), 0, 0);
 
 			const { fileLines, noticeLines } = splitReadOutput(noteText);
 			const lineCount = noteText.length === 0 ? 0 : fileLines.length;

@@ -13,7 +13,7 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { loadRewindConfig, saveRewindConfig } from "./config.ts";
 import { listSessions, removeSession, runGc } from "./gc.ts";
 import { requireInteractiveUI } from "../shared/extension-ui.ts";
-import { fmtBytes } from "../shared/text.ts";
+import { formatSize } from "../shared/text.ts";
 
 const RETENTION_PRESETS = [7, 14, 30, 60, 90];
 
@@ -28,7 +28,7 @@ export async function runRewindMenu(ctx: ExtensionCommandContext): Promise<void>
 
 		const enabledLabel = `Rewind: ${cfg.enabled ? "on" : "off"}`;
 		const retentionLabel = `Auto-clean backups: ${cfg.retentionDays > 0 ? `after ${cfg.retentionDays} days` : "never (keep forever)"}`;
-		const storageLabel = `Storage: ${fmtBytes(total)} across ${sessions.length} session${sessions.length === 1 ? "" : "s"}`;
+		const storageLabel = `Storage: ${formatSize(total)} across ${sessions.length} session${sessions.length === 1 ? "" : "s"}`;
 
 		const pick = await ctx.ui.select("Rewind settings (Esc to close)", [enabledLabel, retentionLabel, storageLabel]);
 		if (!pick) return;
@@ -82,14 +82,14 @@ async function storageMenu(ctx: ExtensionCommandContext, sid: string | undefined
 		const allLabel = `Remove all except current (${others.length})`;
 
 		const pick = await ctx.ui.select(
-			`Rewind storage — ${fmtBytes(total)}, ${sessions.length} session${sessions.length === 1 ? "" : "s"} (Esc to close)`,
+			`Rewind storage — ${formatSize(total)}, ${sessions.length} session${sessions.length === 1 ? "" : "s"} (Esc to close)`,
 			[cleanLabel, orphanLabel, allLabel],
 		);
 		if (!pick) return;
 
 		if (pick === cleanLabel) {
 			const r = runGc(loadRewindConfig().retentionDays, sid);
-			ctx.ui.notify(r.removed > 0 ? `Removed ${r.removed} session(s), reclaimed ${fmtBytes(r.reclaimedBytes)}.` : "Nothing to clean.", "info");
+			ctx.ui.notify(r.removed > 0 ? `Removed ${r.removed} session(s), reclaimed ${formatSize(r.reclaimedBytes)}.` : "Nothing to clean.", "info");
 		} else if (pick === orphanLabel) {
 			if (orphans.length === 0) {
 				ctx.ui.notify("No orphaned backups.", "info");
@@ -106,7 +106,7 @@ async function storageMenu(ctx: ExtensionCommandContext, sid: string | undefined
 					removed++;
 				}
 			}
-			ctx.ui.notify(`Removed ${removed} orphaned session(s), reclaimed ${fmtBytes(bytes)}.`, "info");
+			ctx.ui.notify(`Removed ${removed} orphaned session(s), reclaimed ${formatSize(bytes)}.`, "info");
 		} else if (pick === allLabel) {
 			if (others.length === 0) {
 				ctx.ui.notify("No other sessions' backups.", "info");
@@ -123,7 +123,7 @@ async function storageMenu(ctx: ExtensionCommandContext, sid: string | undefined
 					removed++;
 				}
 			}
-			ctx.ui.notify(`Removed ${removed} session(s), reclaimed ${fmtBytes(bytes)}.`, "info");
+			ctx.ui.notify(`Removed ${removed} session(s), reclaimed ${formatSize(bytes)}.`, "info");
 		}
 	}
 }

@@ -61,10 +61,17 @@ export function truncateText(text: string, max: number, opts: TruncateTextOption
 	return `${prefix}${ellipsis}`;
 }
 
-/** Format a byte count as a human-readable string (B / KB / MB / GB). */
-export function fmtBytes(bytes: number): string {
-	if (bytes < 1024) return `${bytes} B`;
-	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-	if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-	return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+/**
+ * Format a byte count as a human-readable string (B / KB / MB / GB). Mirrors
+ * Pi's upstream `formatSize` style (no space, 1 decimal place for KB/MB) but
+ * adds a GB tier so rewind's "keep forever" storage totals stay readable past
+ * the gigabyte range. This is the single `formatSize` in the codebase — both
+ * read.ts (image sizes) and rewind (storage totals) import from here, so the
+ * two stay consistent rather than drifting against each other.
+ */
+export function formatSize(bytes: number): string {
+	if (bytes < 1024) return `${bytes}B`;
+	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+	if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+	return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)}GB`;
 }
