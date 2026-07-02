@@ -4,6 +4,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 import { callDeepWiki, type DeepWikiResponse } from "./client.ts";
+import { truncateContentsByPages } from "./contents.ts";
 import { normalizeDeepWikiParams, type DeepWikiAction, type DeepWikiParams } from "./schema.ts";
 
 export interface DeepWikiDetails {
@@ -16,6 +17,9 @@ export interface DeepWikiDetails {
 	cacheHit?: boolean;
 	pageCount?: number;
 	pageTitles?: string[];
+	/** Set only when a contents response was truncated to the char budget. */
+	shownPages?: number;
+	truncatedChars?: number;
 	/** Legacy fields kept so older session entries still render. */
 	sectionCount?: number;
 	sectionTitles?: string[];
@@ -72,5 +76,19 @@ export async function executeDeepWiki(
 			: {}),
 	};
 
-	return buildResult(normalizedParams, response.text, extra);
+	// Bounded model-facing output: the cache keeps the full response
+	// (outputLength/pageTitles describe it); only the returned text is cut.
+	// truncateContentsByPages is deterministic, so cached and fresh calls
+	// produce identical text.
+	let resultText = response.text;
+	if (normalizedParams.action === "contents") {
+		const truncation = truncateContentsByPages(response.text);
+		if (truncation.truncated) {
+			resultText = truncation.text;
+			extra.shownPages = truncation.shownPages;
+			extra.truncatedChars = truncation.truncatedChars;
+		}
+	}
+
+	return buildResult(normalizedParams, resultText, extra);
 }

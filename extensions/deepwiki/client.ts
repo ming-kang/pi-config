@@ -1,4 +1,5 @@
 import { fetchWithRetry } from "../shared/http.ts";
+import { PAGE_HEADER_RE } from "./contents.ts";
 import { normalizeDeepWikiParams, type DeepWikiParams } from "./schema.ts";
 
 const DEEPWIKI_MCP_URL = "https://mcp.deepwiki.com/mcp";
@@ -168,7 +169,7 @@ export function extractContentPages(text: string): string[] {
 	return uniqueTitles(
 		text
 			.split("\n")
-			.map((line) => line.match(/^#\s+Page:\s+(.+)$/)?.[1]?.trim()),
+			.map((line) => line.match(PAGE_HEADER_RE)?.[1]?.trim()),
 	);
 }
 

@@ -57,6 +57,11 @@ function summarizeStructure(text: string, details: DeepWikiDetails | undefined):
 
 function summarizeContents(text: string, details: DeepWikiDetails | undefined): string {
 	const pages = getPageTitles(text, details);
+	if (details?.shownPages !== undefined) {
+		const total = details.pageCount ?? pages.length;
+		const pagesPart = total > 0 ? `${details.shownPages}/${total} pages` : "partial";
+		return `Wiki loaded · ${pagesPart} (truncated) · expand for contents`;
+	}
 	if (pages.length === 0) return "Wiki loaded · expand for full contents";
 	return `Wiki loaded · ${pages.length} pages · expand for full contents`;
 }

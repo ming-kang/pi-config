@@ -40,7 +40,8 @@ Avoid DeepWiki when the authoritative source is local or time-sensitive:
 
 - DeepWiki currently exposes this data through its public MCP HTTP endpoint; this extension calls only the three DeepWiki operations above.
 - DeepWiki may return generated explanations with source-file citations and "related pages" links; collapsed rendering strips the navigation tail for concise summaries.
+- `contents` responses are truncated at a ~60k-character budget on `# Page:` boundaries (whole pages kept in order; at least the first page survives, cut mid-page if it alone exceeds the budget). A trailing notice reports shown/total pages, the full length, up to 20 omitted page titles, and points at `action: "question"` for the rest. Details carry `shownPages` / `truncatedChars` when this happens; `outputLength` always reflects the full untruncated response.
 - A repository may not be indexed. DeepWiki can return that as normal text, so the extension treats repository-not-found messages as tool errors.
-- Successful responses are cached in-process for 10 minutes, keyed by action, repo, and question. Failed, aborted, and timed-out requests are not cached.
+- Successful responses are cached in-process for 10 minutes, keyed by action, repo, and question. Failed, aborted, and timed-out requests are not cached. The cache stores the full response; `contents` truncation is recomputed per call, so cached and fresh calls return identical text.
 - Network requests time out after 45 seconds and surface as Pi tool errors.
 - Use local Pi tools (`read`, `grep`, `find`, `ls`) for workspace state. DeepWiki answers describe repository snapshots indexed by DeepWiki, not local uncommitted files.
