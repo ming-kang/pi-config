@@ -4,6 +4,10 @@ const DEEPWIKI_MCP_URL = "https://mcp.deepwiki.com/mcp";
 const MCP_PROTOCOL_VERSION = "2024-11-05";
 const REQUEST_TIMEOUT_MS = 45_000;
 const CACHE_TTL_MS = 10 * 60_000;
+/** Long-lived process guard: entries are only otherwise dropped on re-read after expiry. */
+const MAX_CACHE_ENTRIES = 50;
+/** Transient-failure retries (network blips, 5xx, 429). Aborts/timeouts are not retried. */
+const MAX_RETRIES = 2;
 
 type DeepWikiToolName = "read_wiki_structure" | "read_wiki_contents" | "ask_question";
 
@@ -52,20 +56,19 @@ function toolNameForAction(action: DeepWikiParams["action"]): DeepWikiToolName {
 	return "ask_question";
 }
 
+// Callers pass params already normalized by callDeepWiki's entry gate; no re-normalization.
 function argumentsForParams(params: DeepWikiParams): Record<string, unknown> {
-	const normalized = normalizeDeepWikiParams(params);
-	if (normalized.action === "question") {
-		const question = normalized.question?.trim();
+	if (params.action === "question") {
+		const question = params.question?.trim();
 		if (!question) throw new Error("question is required when action is question");
-		return { repoName: normalized.repoName, question };
+		return { repoName: params.repoName, question };
 	}
-	return { repoName: normalized.repoName };
+	return { repoName: params.repoName };
 }
 
 function cacheKey(params: DeepWikiParams): string {
-	const normalized = normalizeDeepWikiParams(params);
-	const repos = Array.isArray(normalized.repoName) ? normalized.repoName : [normalized.repoName];
-	return JSON.stringify([normalized.action, repos, normalized.question ?? ""]);
+	const repos = Array.isArray(params.repoName) ? params.repoName : [params.repoName];
+	return JSON.stringify([params.action, repos, params.question ?? ""]);
 }
 
 function cloneResponse(response: DeepWikiResponse, cacheHit: boolean): DeepWikiResponse {
@@ -214,6 +217,63 @@ function createRequestSignal(signal: AbortSignal | undefined): {
 	};
 }
 
+/** Abortable backoff sleep between retry attempts. */
+function delay(ms: number, signal: AbortSignal | undefined): Promise<void> {
+	return new Promise((resolve, reject) => {
+		const onAbort = () => {
+			cleanup();
+			reject(new Error("DeepWiki request aborted"));
+		};
+		const timer = setTimeout(() => {
+			cleanup();
+			resolve();
+		}, ms);
+		const cleanup = () => {
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", onAbort);
+		};
+		if (signal?.aborted) {
+			onAbort();
+			return;
+		}
+		signal?.addEventListener("abort", onAbort, { once: true });
+	});
+}
+
+/** One POST attempt. Throws non-retryable errors for abort/timeout, retryable for network blips. */
+async function postOnce(
+	bodyJson: string,
+	signal: AbortSignal | undefined,
+): Promise<{ response: Response; text: string; retryable: false } | { retryable: true; error: Error }> {
+	const requestSignal = createRequestSignal(signal);
+	try {
+		const response = await fetch(DEEPWIKI_MCP_URL, {
+			method: "POST",
+			headers: {
+				Accept: "application/json, text/event-stream",
+				"Content-Type": "application/json",
+				"MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
+			},
+			body: bodyJson,
+			signal: requestSignal.signal,
+		});
+		const text = await response.text();
+		return { response, text, retryable: false };
+	} catch (error) {
+		// Timeout already waited 45s and an abort is the caller's decision —
+		// neither is worth another attempt. Plain network blips are.
+		if (requestSignal.timedOut()) {
+			throw new Error(`DeepWiki request timed out after ${REQUEST_TIMEOUT_MS / 1000}s`);
+		}
+		if (signal?.aborted) {
+			throw new Error("DeepWiki request aborted");
+		}
+		return { retryable: true, error: error instanceof Error ? error : new Error(String(error)) };
+	} finally {
+		requestSignal.cleanup();
+	}
+}
+
 export async function callDeepWiki(params: DeepWikiParams, signal: AbortSignal | undefined): Promise<DeepWikiResponse> {
 	const normalizedParams = normalizeDeepWikiParams(params);
 	const key = cacheKey(normalizedParams);
@@ -224,7 +284,7 @@ export async function callDeepWiki(params: DeepWikiParams, signal: AbortSignal |
 	if (cached) responseCache.delete(key);
 
 	const toolName = toolNameForAction(normalizedParams.action);
-	const body = {
+	const bodyJson = JSON.stringify({
 		jsonrpc: "2.0",
 		id: 1,
 		method: "tools/call",
@@ -232,34 +292,30 @@ export async function callDeepWiki(params: DeepWikiParams, signal: AbortSignal |
 			name: toolName,
 			arguments: argumentsForParams(normalizedParams),
 		},
-	};
+	});
 
-	const requestSignal = createRequestSignal(signal);
-	let response: Response;
-	let text: string;
-	try {
-		response = await fetch(DEEPWIKI_MCP_URL, {
-			method: "POST",
-			headers: {
-				Accept: "application/json, text/event-stream",
-				"Content-Type": "application/json",
-				"MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
-			},
-			body: JSON.stringify(body),
-			signal: requestSignal.signal,
-		});
-		text = await response.text();
-	} catch (error) {
-		if (requestSignal.timedOut()) {
-			throw new Error(`DeepWiki request timed out after ${REQUEST_TIMEOUT_MS / 1000}s`);
+	// Bounded retry for transient failures (same policy as fast-context's
+	// streamingRequest): network errors, 5xx, and 429 get MAX_RETRIES more
+	// attempts with linear backoff; other 4xx and parse errors fail fast.
+	let response: Response | undefined;
+	let text = "";
+	let lastError: Error | undefined;
+	for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+		if (attempt > 0) await delay(1000 * attempt, signal);
+		const outcome = await postOnce(bodyJson, signal);
+		if (outcome.retryable) {
+			lastError = outcome.error;
+			continue;
 		}
-		if (signal?.aborted) {
-			throw new Error("DeepWiki request aborted");
+		if (!outcome.response.ok && (outcome.response.status >= 500 || outcome.response.status === 429)) {
+			lastError = new Error(`DeepWiki HTTP ${outcome.response.status}: ${truncate(outcome.text)}`);
+			continue;
 		}
-		throw error;
-	} finally {
-		requestSignal.cleanup();
+		response = outcome.response;
+		text = outcome.text;
+		break;
 	}
+	if (!response) throw lastError ?? new Error("DeepWiki request failed");
 
 	if (!response.ok) {
 		throw new Error(`DeepWiki HTTP ${response.status}: ${truncate(text)}`);
@@ -279,5 +335,10 @@ export async function callDeepWiki(params: DeepWikiParams, signal: AbortSignal |
 		...(pageTitles.length ? { pageTitles } : {}),
 	};
 	responseCache.set(key, { expiresAt: Date.now() + CACHE_TTL_MS, response: cloneResponse(result, false) });
+	while (responseCache.size > MAX_CACHE_ENTRIES) {
+		const oldest = responseCache.keys().next().value;
+		if (oldest === undefined) break;
+		responseCache.delete(oldest);
+	}
 	return result;
 }
