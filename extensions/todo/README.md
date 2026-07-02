@@ -4,7 +4,7 @@ Adds a `todo` tool plus `/todos` for multi-step work, with a live overlay above 
 
 ## Behavior
 
-- Actions: `create`, `update`, `list`, `get`, `delete`, `clear`. Statuses: `pending`, `in_progress`, `completed`, `deleted`.
+- Actions: `create`, `update`, `list`, `get`, `delete`, `clear`. Statuses: `pending`, `in_progress`, `completed`, `deleted`. `list` accepts an optional `status` filter and `includeDeleted`.
 - The live overlay renders above the editor and hides itself when there are no visible tasks.
 - `blockedBy` dependencies are supported for sequencing; missing dependencies, deleted dependencies, self-dependencies, and cycles are rejected.
 - Completed tasks remain visible briefly, then drop from the overlay on the next agent turn so active work stays prominent.

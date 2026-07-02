@@ -30,12 +30,12 @@ export interface TodoDetails {
 
 const StatusSchema = StringEnum(["pending", "in_progress", "completed", "deleted"] as const, {
 	description:
-		"Task status: pending for future work, in_progress for the single active task, completed for verified done work, and deleted for obsolete or no-longer-needed tasks.",
+		"Task status: pending for future work, in_progress for the single active task, completed for verified done work, and deleted for obsolete or no-longer-needed tasks. With action list, status also acts as a filter: only tasks with this status are listed.",
 });
 
 const ActionSchema = StringEnum(["create", "update", "list", "get", "delete", "clear"] as const, {
 	description:
-		"Todo operation: create a task, update status/details/dependencies, list current tasks, get one task, delete an obsolete task, or clear the list.",
+		"Todo operation: create a task, update status/details/dependencies, list current tasks (optionally filtered by status), get one task, delete an obsolete task, or clear the list.",
 });
 
 export const TodoParamsSchema = Type.Object({
