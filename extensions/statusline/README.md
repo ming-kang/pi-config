@@ -13,13 +13,32 @@ advisor: …                                            ← line 2, only when se
 - **Right:** input / output / cache-read token counts and cost, right-aligned. Each part is omitted when zero (no `↑0 ↓0` noise).
 - **Line 2:** extension statuses from `ctx.ui.setStatus()`, sorted by key. The custom footer replaces the built-in one, so without this any extension status text would silently vanish.
 
+## Configuration
+
+Optional, hand-edited at `~/.pi/agent/pi-config/statusline.json`; applied on `session_start` / `/reload` (the render callback runs every frame, so the file is read once per session, not per frame). Every field may be omitted — defaults reproduce the historical behavior:
+
+```json
+{
+	"ctxWarnPct": 70,
+	"ctxErrorPct": 90,
+	"showUsageStats": true,
+	"showStatusLine2": true
+}
+```
+
+- `ctxWarnPct` / `ctxErrorPct` — CTX% color-tier thresholds (accent → warning → error). Clamped to 0–100; `ctxErrorPct` never below `ctxWarnPct`; invalid values fall back per-field.
+- `showUsageStats` — the right-aligned `↑in ↓out Rcache $cost` cluster.
+- `showStatusLine2` — the second line forwarding `ctx.ui.setStatus()` extension statuses.
+
 ## Design notes
 
 - **Theme-agnostic colors.** All coloring goes through `theme.fg(...)` / `theme.getThinkingBorderColor(level)`, so it adapts to any loaded theme, not just `ice-cream`. Context % shifts accent → warning → error by usage tier.
+- **Usage stats are recomputed here by design.** `setFooter` fully replaces Pi's built-in footer and `footerData` exposes no precomputed stats (upstream: "token stats are available via `ctx.sessionManager`") — the built-in `FooterComponent` does the same iteration internally.
 - **Live data.** Pi's `setFooter` returns a renderable that re-reads `ctx.sessionManager` / `ctx.model` / `ctx.getContextUsage()` on each render, so the line stays current; an `onBranchChange` subscription requests a render on branch switches. Effort (thinking level) is recovered by scanning session branch entries.
 - **Narrow terminals.** When the line doesn't fit, the right-side token/cost stats are kept intact and the left side is truncated — stats are more useful than a long cwd.
 - **Helpers.** `fmtTokens` is tiered (`999`, `1.2k`, `34k`, `1.5M`); `shortCwd` strips trailing separators before folding the home prefix to `~`; `sanitizeStatus` flattens status text to one line.
 
 ## Files
 
-- `index.ts` — the whole extension (footer renderable + helpers)
+- `index.ts` — the footer renderable + helpers
+- `config.ts` — statusline.json load/validation (thresholds, toggles)

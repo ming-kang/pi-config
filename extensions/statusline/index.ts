@@ -16,11 +16,21 @@
  * Auto-enables on session_start. Pi's setFooter returns a renderable that
  * re-reads live data each render, so the line stays current without manual
  * refresh. Effort (thinking level) is recovered from session branch entries.
+ *
+ * Note: the usage/cost cluster is recomputed here BY DESIGN — setFooter fully
+ * replaces Pi's built-in footer, and footerData exposes no precomputed stats
+ * (upstream docs: "token stats are available via ctx.sessionManager"). The
+ * built-in FooterComponent does the same iteration internally.
+ *
+ * Config: ~/.pi/agent/pi-config/statusline.json (see config.ts) — CTX color
+ * thresholds and toggles for the usage cluster / status line 2. Loaded once
+ * per session_start (the render callback runs every frame; no disk reads there).
  */
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { isTui } from "../shared/extension-ui.ts";
+import { loadStatuslineConfig } from "./config.ts";
 
 /** Shorten a path to ~ relative to home. */
 function shortCwd(cwd: string): string {
@@ -66,6 +76,8 @@ function currentThinkingLevel(branch: SessionEntry[]): ThinkingLevel {
 export default function (pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
 		if (!isTui(ctx)) return;
+		// Once per session (+ /reload): the render callback below runs every frame.
+		const config = loadStatuslineConfig();
 
 		ctx.ui.setFooter((tui, theme, footerData) => {
 			const unsub = footerData.onBranchChange(() => tui.requestRender());
@@ -73,27 +85,31 @@ export default function (pi: ExtensionAPI) {
 				dispose: unsub,
 				invalidate() {},
 				render(width: number): string[] {
-					// Right side: token stats + cost from the current branch.
 					const branchEntries = ctx.sessionManager.getBranch();
-					let input = 0;
-					let output = 0;
-					let cacheRead = 0;
-					let cost = 0;
-					for (const e of branchEntries) {
-						if (e.type === "message" && e.message.role === "assistant") {
-							const m = e.message as AssistantMessage;
-							input += m.usage?.input ?? 0;
-							output += m.usage?.output ?? 0;
-							cost += m.usage?.cost?.total ?? 0;
-							cacheRead += m.usage?.cacheRead ?? 0;
+
+					// Right side: token stats + cost from the current branch.
+					let right = "";
+					if (config.showUsageStats) {
+						let input = 0;
+						let output = 0;
+						let cacheRead = 0;
+						let cost = 0;
+						for (const e of branchEntries) {
+							if (e.type === "message" && e.message.role === "assistant") {
+								const m = e.message as AssistantMessage;
+								input += m.usage?.input ?? 0;
+								output += m.usage?.output ?? 0;
+								cost += m.usage?.cost?.total ?? 0;
+								cacheRead += m.usage?.cacheRead ?? 0;
+							}
 						}
+						const statParts: string[] = [];
+						if (input > 0) statParts.push(`↑${fmtTokens(input)}`);
+						if (output > 0) statParts.push(`↓${fmtTokens(output)}`);
+						if (cacheRead > 0) statParts.push(`R${fmtTokens(cacheRead)}`);
+						if (cost > 0) statParts.push(`$${cost.toFixed(3)}`);
+						if (statParts.length > 0) right = theme.fg("dim", statParts.join(" "));
 					}
-					const statParts: string[] = [];
-					if (input > 0) statParts.push(`↑${fmtTokens(input)}`);
-					if (output > 0) statParts.push(`↓${fmtTokens(output)}`);
-					if (cacheRead > 0) statParts.push(`R${fmtTokens(cacheRead)}`);
-					if (cost > 0) statParts.push(`$${cost.toFixed(3)}`);
-					const right = statParts.length > 0 ? theme.fg("dim", statParts.join(" ")) : "";
 
 					// Left side: Model · Effort · CTX% · CWD · Branch
 					const model = ctx.model;
@@ -106,14 +122,15 @@ export default function (pi: ExtensionAPI) {
 						if (level !== "off") parts.push(theme.getThinkingBorderColor(level)(level));
 					}
 
-					// Context percentage.
+					// Context percentage: accent below the warn threshold, then
+					// warning/error tiers (thresholds from statusline.json).
 					const usage = ctx.getContextUsage();
 					const ctxPct = usage?.percent;
 					if (ctxPct == null) {
 						parts.push(theme.fg("accent", "CTX ?%"));
-					} else if (ctxPct > 90) {
+					} else if (ctxPct > config.ctxErrorPct) {
 						parts.push(theme.fg("error", `CTX ${ctxPct.toFixed(1)}%`));
-					} else if (ctxPct > 70) {
+					} else if (ctxPct > config.ctxWarnPct) {
 						parts.push(theme.fg("warning", `CTX ${ctxPct.toFixed(1)}%`));
 					} else {
 						parts.push(theme.fg("accent", `CTX ${ctxPct.toFixed(1)}%`));
@@ -143,13 +160,15 @@ export default function (pi: ExtensionAPI) {
 					// Extension statuses (e.g. advisor) on a second line, mirroring Pi's
 					// built-in footer. The custom footer replaces the built-in, so without
 					// this any ctx.ui.setStatus() text would silently vanish. Sorted by key.
-					const statuses = footerData.getExtensionStatuses();
-					if (statuses.size > 0) {
-						const statusLine = Array.from(statuses.entries())
-							.sort(([a], [b]) => a.localeCompare(b))
-							.map(([, text]) => sanitizeStatus(text))
-							.join("  ");
-						lines.push(truncateToWidth(statusLine, width, theme.fg("dim", "...")));
+					if (config.showStatusLine2) {
+						const statuses = footerData.getExtensionStatuses();
+						if (statuses.size > 0) {
+							const statusLine = Array.from(statuses.entries())
+								.sort(([a], [b]) => a.localeCompare(b))
+								.map(([, text]) => sanitizeStatus(text))
+								.join("  ");
+							lines.push(truncateToWidth(statusLine, width, theme.fg("dim", "...")));
+						}
 					}
 					return lines;
 				},

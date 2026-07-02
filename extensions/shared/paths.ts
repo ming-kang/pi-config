@@ -9,6 +9,7 @@
  * Layout:
  *   <agentDir>/pi-config/
  *     advisor.json                       advisor config (see advisor/config.ts)
+ *     statusline.json                    statusline settings (see statusline/config.ts)
  *     rewind/
  *       config.json                      rewind settings { enabled, retentionDays, maxSnapshots }
  *       backups/<sessionId>/<hash>@v<n>  rewind file-history backup blobs
@@ -25,6 +26,11 @@ export function piConfigDir(): string {
 /** advisor's config file. */
 export function advisorConfigPath(): string {
 	return join(piConfigDir(), "advisor.json");
+}
+
+/** statusline's settings file. */
+export function statuslineConfigPath(): string {
+	return join(piConfigDir(), "statusline.json");
 }
 
 /** Root for the rewind extension's storage. */
