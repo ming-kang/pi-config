@@ -4,7 +4,7 @@ export const ADVISOR_TOOL_NAME = "advisor";
 export const ADVISOR_LABEL = "Advisor";
 
 export const ADVISOR_DESCRIPTION =
-	"Ask a configured reviewer model for a one-shot, no-tools review of the current task. Use for high-leverage checkpoints: planning, pivots, stuck states, conflicting evidence, or final verification. Provide a focused brief; Pi attaches bounded session context.";
+	"Request a one-shot review from an independent reviewer model at a high-leverage checkpoint. Modes: plan (pressure-test an approach before committing), change (judge a mid-task pivot), stuck (fresh hypotheses after repeated failures), final (hunt verification gaps before declaring done), reconcile (weigh conflicting evidence or advice). The reviewer cannot run tools or ask follow-ups — it sees only your brief plus bounded session context, so put every decisive fact in the brief: situation, reason, one concrete question, currentPlan, evidence, risks. Not for trivial tasks or facts local read/grep/tests can verify directly.";
 
 // The advisor system prompt is assembled per call: a shared base + a mode-specific
 // focus + shared output sections. Each mode therefore gets its own full template,
@@ -49,16 +49,12 @@ export function advisorSystemPrompt(mode: AdvisorMode): string {
 }
 
 export const DEFAULT_PROMPT_SNIPPET =
-	"Use advisor for high-leverage one-shot review at planning, stuck, pivot, reconcile, or final-verification checkpoints";
+	"One-shot independent review at planning, pivot, stuck, reconcile, or final-verification checkpoints";
 
 export const DEFAULT_PROMPT_GUIDELINES = [
-	"Use `advisor` after initial orientation and before committing to a substantial implementation approach for complex, risky, or ambiguous work.",
-	"Use `advisor` when you are stuck after repeated attempts, evidence contradicts the current hypothesis, you may pivot approaches, or you need final verification for non-trivial durable changes.",
-	"Do not use `advisor` for trivial one-step tasks, obvious next actions, or facts that local read/grep/test tools can verify directly.",
-	"When calling `advisor`, choose the mode that matches the checkpoint: plan, change, stuck, final, or reconcile.",
-	"When calling `advisor`, provide a focused brief: situation, reason, exact question, currentPlan, key evidence, and risks.",
-	"Put decisive facts in `advisor` evidence; do not rely on the reviewer to infer important details from transcript alone, because it cannot run tools or ask follow-up questions.",
-	"Use `advisor` with previousRuns=0 by default; set 1 or 2 only when earlier user-request cycles directly affect this judgment.",
+	"Call `advisor` at high-leverage checkpoints of complex, risky, or ambiguous work: before committing to a substantial approach, before pivoting, when stuck after repeated failures, when evidence conflicts, and before declaring non-trivial work done.",
+	"Do not call `advisor` for trivial one-step tasks, obvious next actions, or facts that local read/grep/test tools can verify directly.",
+	"Put decisive facts in the `advisor` brief itself (evidence, risks, currentPlan) — the reviewer cannot run tools or ask follow-up questions.",
 ];
 
 export const THINKING_LEVELS = ["minimal", "low", "medium", "high", "xhigh"] as const;

@@ -10,17 +10,13 @@ export const QUESTION_TOOL_NAME = "question";
 export const QUESTION_LABEL = "Question";
 
 export const QUESTION_DESCRIPTION =
-	"Ask the user one to four structured multiple-choice questions when a real user decision, preference, or missing requirement blocks progress. Each question has 2-4 model-authored options plus an automatic custom-answer path. Use previews only for concrete alternatives the user should visually compare. Do not use this for facts you can inspect, infer with high confidence, or verify with tools.";
+	"Ask the user 1-4 structured multiple-choice questions. Use it only when you are blocked on a decision that is genuinely the user's to make — one you cannot resolve from the request, the code, or sensible defaults: product direction, subjective preference, credentials/permissions, or destructive/irreversible choices. For low-risk details, pick a reasonable default yourself and state it instead of asking. Write each question as one concrete decision with a short header and 2-4 mutually distinct options that explain their consequences; never author vague labels ('Option A') or an 'Other'-style option — the UI adds a custom-answer path automatically. If you recommend an option, put it first and append ' (Recommended)' to its label. Use multiSelect only when options can validly be combined. Use option previews only for concrete artifacts the user must visually compare (code snippets, UI mockups, copy or config variants); previews render for single-select questions only.";
 
 export const QUESTION_PROMPT_SNIPPET =
-	"Ask structured multiple-choice questions when a user decision, preference, or missing requirement blocks progress";
+	"Ask the user structured multiple-choice questions when blocked on a decision only they can make (preference, direction, permissions, destructive choices)";
 
 export const QUESTION_PROMPT_GUIDELINES = [
-	"Use `question` only when a real user decision, preference, or missing requirement blocks progress; do not use it for facts you can inspect, infer with high confidence, or verify with tools.",
-	"Prefer making a reasonable default choice yourself for low-risk details; ask the user only for consequential ambiguity, product direction, credentials/permissions, destructive choices, or subjective preferences.",
-	"Batch related independent decisions into one `question` call with 1-4 questions, but do not combine unrelated topics or ask more than needed to unblock the next step.",
-	"Write each `question` as one concrete decision with a short header and 2-4 mutually distinct options; avoid vague labels like 'Option A' or bare 'Yes/No' without explaining consequences.",
-	"Do not author reserved option labels: Other, Type something., Chat about this, or Next; the UI provides a custom-answer path automatically.",
-	"Use multiSelect only when multiple options can validly be chosen together; use single-select for mutually exclusive directions.",
-	"Use preview only for concrete artifacts like code snippets, UI layouts, copy variants, or config examples that users need to visually compare.",
+	"Use `question` only for decisions you cannot resolve from the request, the code, or sensible defaults (direction, preference, permissions, destructive choices); for everything else choose a reasonable default and state it.",
+	"Batch related decisions into one `question` call (1-4 questions); ask no more than needed to unblock the next step.",
+	"Treat `question` answers as decisions: act on them without re-litigating, and do not re-ask unless circumstances change.",
 ];

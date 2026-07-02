@@ -10,17 +10,12 @@ export const DEEPWIKI_TOOL_NAME = "deepwiki";
 export const DEEPWIKI_LABEL = "DeepWiki";
 
 export const DEEPWIKI_DESCRIPTION =
-	"Query DeepWiki's generated documentation for public GitHub repositories. Use for architecture, APIs, module layout, implementation patterns, onboarding, extension points, or cross-repo comparisons while designing or building. Supports topic maps, full generated wiki contents, and focused questions over up to 10 repos. Results describe indexed public snapshots and may include source citations; they are not local workspace state, private code, or guaranteed-fresh facts.";
+	"Query DeepWiki's AI-generated documentation for public GitHub repositories. Actions: structure lists a repo's wiki topics; contents reads the full generated wiki (large output); question — the preferred action — answers a focused query and accepts up to 10 repos for comparisons. Use it for architecture, module layout, APIs, extension points, and implementation patterns when designing or building. Results describe indexed public snapshots and may cite sources; they are not local workspace state, private code, or guaranteed-fresh facts.";
 
 export const DEEPWIKI_PROMPT_SNIPPET =
-	"Use deepwiki for public GitHub repo architecture, APIs, implementation patterns, generated docs, and cross-repo comparisons";
+	"Query AI-generated docs for public GitHub repos: architecture, APIs, implementation patterns, cross-repo comparisons";
 
 export const DEEPWIKI_PROMPT_GUIDELINES = [
-	"Use `deepwiki` to understand a public GitHub repo's architecture, module layout, APIs, extension points, data flow, onboarding path, or where a concept lives.",
-	"Use `deepwiki` as reference research while developing a feature or project when public repos can provide implementation patterns, design tradeoffs, or examples to adapt.",
-	"Call `deepwiki` yourself when those conditions apply; do not ask the user to open DeepWiki or paste generated docs unless the repo is private, unknown, or not identifiable.",
-	"For `deepwiki`, use action `question` for targeted repo questions and compare up to 10 repos by passing repoName as an array.",
-	"For `deepwiki`, use action `structure` before deep reading an unfamiliar repo; use action `contents` only when broad generated docs and source-file citations are worth the larger output.",
-	"Pass repoName to `deepwiki` as owner/repo whenever possible. GitHub and DeepWiki URLs are accepted fallback inputs; package names and local paths are not valid repoName values.",
-	"Do not use `deepwiki` for local workspace files, uncommitted changes, private repos, exact current HEAD, release dates, pricing, security advisories, or freshness-sensitive facts; use local tools or current primary sources instead.",
+	"Use `deepwiki` to understand a public GitHub repo's design or to mine reference implementations while building; prefer action question, run structure before deep-reading an unfamiliar repo, and pass repoName as an array to compare up to 10 repos.",
+	"Do not use `deepwiki` for local workspace files, private repos, exact current HEAD, or freshness-sensitive facts (releases, pricing, advisories); use local tools or current primary sources instead.",
 ];

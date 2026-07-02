@@ -7,7 +7,10 @@ const MAX_QUESTIONS = 4;
 const RESERVED_LABELS = ["Other", "Type something.", "Chat about this", "Next"] as const;
 
 const OptionSchema = Type.Object({
-	label: Type.String({ description: "Short user-facing option label (1-5 words), distinct within the question." }),
+	label: Type.String({
+		description:
+			"Short user-facing option label (1-5 words), distinct within the question. Reserved labels ('Other', 'Type something.', 'Chat about this', 'Next') are rejected — the UI adds the custom-answer path itself.",
+	}),
 	description: Type.Optional(
 		Type.String({ description: "One concise sentence explaining the option's meaning, consequence, or tradeoff." }),
 	),
