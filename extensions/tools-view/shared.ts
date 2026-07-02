@@ -1,5 +1,5 @@
 import type { AgentToolResult, Theme, ThemeColor, ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
-import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
 import { type Component, Container, getCapabilities, hyperlink, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai/compat";
 
@@ -19,7 +19,6 @@ export const RESULT_PREFIX = "│ ";
 export interface RenderCtx {
 	args: Record<string, unknown>;
 	state: Record<string, unknown>;
-	invalidate: () => void;
 	isError: boolean;
 }
 
@@ -71,20 +70,32 @@ export function firstLineError(result: AgentToolResult<unknown>, fallback: strin
 	return firstLine(firstText(result), fallback);
 }
 
-export function callLine(toolName: string, args: string, theme: Theme, dotColor: ThemeColor = "success"): string {
+export function callLine(toolName: string, args: string, theme: Theme): string {
 	// Trim args so a caller passing a stray leading/trailing space doesn't render
 	// "Tool( args)". The value is theme-colored text, so trimming only removes the
 	// literal padding around it, never the visible content or its color codes.
+	// The dot is ALWAYS the success color: line form conveys state, not dot color
+	// (see tools-view/README.md → Dot-color rule).
 	const a = args.trim();
-	return `${theme.fg(dotColor, BULLET)} ${theme.fg("toolTitle", theme.bold(toolName))}${a ? theme.fg("dim", `(${a})`) : ""}`;
+	return `${theme.fg("success", BULLET)} ${theme.fg("toolTitle", theme.bold(toolName))}${a ? theme.fg("dim", `(${a})`) : ""}`;
 }
 
 export function activeDotLine(toolName: string, body: string, theme: Theme): string {
 	return `${theme.fg("warning", BULLET)} ${theme.fg("toolTitle", theme.bold(toolName))}${theme.fg("dim", body)}`;
 }
 
-export function resultLine(info: string, theme: Theme): string {
-	return `${theme.fg("dim", RESULT_PREFIX)}${theme.fg("dim", info)}`;
+/** The dim `│ ` collapsed-result prefix, for callers composing multi-colored lines. */
+export function resultPrefix(theme: Theme): string {
+	return theme.fg("dim", RESULT_PREFIX);
+}
+
+/**
+ * Collapsed result line: dim `│ ` prefix + `info` in `color` (default dim).
+ * Pass an explicit color instead of nesting theme.fg calls inside `info`;
+ * for genuinely multi-colored info, compose on `resultPrefix()` instead.
+ */
+export function resultLine(info: string, theme: Theme, color: ThemeColor = "dim"): string {
+	return `${resultPrefix(theme)}${theme.fg(color, info)}`;
 }
 
 export function errLine(message: string, theme: Theme): string {
@@ -103,21 +114,47 @@ export function errLine(message: string, theme: Theme): string {
  * render errors the same way deepwiki already did.
  */
 export function errorResultLine(message: string, expanded: boolean, theme: Theme): string {
-	return expanded ? errLine(message, theme) : resultLine(theme.fg("error", message), theme);
+	return expanded ? errLine(message, theme) : resultLine(message, theme, "error");
 }
 
 export function emptyLine(label: string, theme: Theme): string {
 	return `  ${theme.fg("muted", label)}`;
 }
 
+// ---- expand/collapse footer hints ------------------------------------------
+// One wording for the affordance across every preview renderer. Callers prepend
+// their own newline/indent ("\n  " for footer rows, " " for inline suffixes).
+
+/** `... N more lines (<key> to expand)` — collapsed footer under a bounded preview. */
+export function moreLinesHint(hidden: number, theme: Theme): string {
+	return `${theme.fg("muted", `... ${hidden} more lines (`)}${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+}
+
+/** `(<key> to collapse)` — expanded footer. */
+export function collapseHint(theme: Theme): string {
+	return `${theme.fg("muted", "(")}${keyHint("app.tools.expand", "to collapse")}${theme.fg("muted", ")")}`;
+}
+
+/** `(<key> to expand)` — inline suffix on a one-line collapsed summary. */
+export function expandHint(theme: Theme): string {
+	return `${theme.fg("muted", "(")}${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+}
+
+/** Two-space-indented `toolOutput` body: `\n  <line>` per input line. */
+export function indentedOutput(lines: string[], theme: Theme): string {
+	let text = "";
+	for (const line of lines) text += `\n  ${theme.fg("toolOutput", line)}`;
+	return text;
+}
+
 /**
  * The expanded tool-result block: a top spacer + the result text rendered as
- * Markdown with pi's markdown theme. This is the byte-identical block that was
- * inlined in `advisor/index.ts` and `deepwiki/index.ts`; factored here so both
- * (and future tools) share one implementation. `theme` is unused — the markdown
- * theme comes from `getMarkdownTheme()` to match the prior inlined calls.
+ * Markdown with pi's markdown theme (via `getMarkdownTheme()`). This is the
+ * byte-identical block that was inlined in `advisor/index.ts` and
+ * `deepwiki/index.ts`; factored here so both (and future tools) share one
+ * implementation.
  */
-export function markdownResultBlock(text: string, _theme?: Theme): Component {
+export function markdownResultBlock(text: string): Component {
 	const container = new Container();
 	container.addChild(new Spacer(1));
 	container.addChild(new Markdown(text, 1, 0, getMarkdownTheme()));
@@ -204,7 +241,7 @@ export function buildStandardRenderer<TDetails>(cfg: StandardRendererConfig<TDet
 				return new Text(errorResultLine(cfg.errorMessage(text, result.details), options.expanded, theme), 0, 0);
 			}
 			if (!options.expanded) {
-				return new Text(resultLine(theme.fg("accent", cfg.collapsedLine(text, result.details, theme)), theme), 0, 0);
+				return new Text(resultLine(cfg.collapsedLine(text, result.details, theme), theme, "accent"), 0, 0);
 			}
 			return markdownResultBlock(text);
 		},

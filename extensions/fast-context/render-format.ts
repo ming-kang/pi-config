@@ -10,7 +10,9 @@ import type { FastContextDetails } from "./execute.ts";
 /** The dim/accent one-liner for a successful collapsed result (no expand hint). */
 export function buildCollapsedSummary(details: FastContextDetails | undefined, theme: Theme): string {
 	const n = details?.fileCount ?? 0;
-	if (n <= 0) return "No relevant files found";
+	// Dim explicitly: the caller composes on resultPrefix(), which no longer
+	// dim-wraps the summary for us.
+	if (n <= 0) return theme.fg("dim", "No relevant files found");
 	const kw = details?.keywords ?? [];
 	const count = theme.fg("accent", `${n} file${n === 1 ? "" : "s"}`);
 	const tail = kw.length ? theme.fg("dim", ` · grep: ${kw.slice(0, 4).join(", ")}`) : "";

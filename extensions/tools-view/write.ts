@@ -1,4 +1,4 @@
-import { type AgentToolResult, createWriteToolDefinition, keyHint, type Theme, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
+import { type AgentToolResult, createWriteToolDefinition, type Theme, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import {
 	activeDotLine,
@@ -7,8 +7,9 @@ import {
 	errLine,
 	firstLineError,
 	linkifyUrlsInText,
+	moreLinesHint,
 	renderNumberedLines,
-	RESULT_PREFIX,
+	resultLine,
 	textLineCount,
 	type RenderCtx,
 } from "./shared.ts";
@@ -36,9 +37,7 @@ export function createWriteRenderer(cwd: string) {
 			const writtenContent = String(ctx.args?.content ?? "");
 			const lineCount = textLineCount(writtenContent);
 			const pathDisplay = filePath.split(/[/\\]/).pop() || filePath;
-			let text =
-				theme.fg("dim", RESULT_PREFIX) +
-				theme.fg("success", `Wrote ${lineCount} ${lineCount === 1 ? "line" : "lines"} to ${pathDisplay}`);
+			let text = resultLine(`Wrote ${lineCount} ${lineCount === 1 ? "line" : "lines"} to ${pathDisplay}`, theme, "success");
 
 			if (writtenContent.length === 0) {
 				text += `\n${emptyLine("(empty content)", theme)}`;
@@ -50,7 +49,7 @@ export function createWriteRenderer(cwd: string) {
 			for (const line of renderNumberedLines(allWriteLines.slice(0, maxLines), 1, theme)) text += `\n${line}`;
 			const remaining = allWriteLines.length - maxLines;
 			if (remaining > 0) {
-				text += `\n  ${theme.fg("muted", `... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+				text += `\n  ${moreLinesHint(remaining, theme)}`;
 			}
 			return new Text(text, 0, 0);
 		},

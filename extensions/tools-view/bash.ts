@@ -1,12 +1,15 @@
 import type { AgentToolResult, BashToolDetails, Theme } from "@earendil-works/pi-coding-agent";
-import { createBashToolDefinition, keyHint, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
+import { createBashToolDefinition, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import {
 	BULLET,
-	activeDotLine,
 	callLine,
+	collapseHint,
+	errLine,
 	firstText,
+	indentedOutput,
 	linkifyUrlsInText,
+	moreLinesHint,
 	resultLine,
 	tryJsonFormatContent,
 	type RenderCtx,
@@ -89,7 +92,7 @@ export function createBashRenderer(cwd: string) {
 
 			let text: string;
 			if (ctx.isError || failureLabel) {
-				text = `${theme.fg("error", BULLET)} ${theme.fg("dim", failureLabel ?? "failed")}`;
+				text = errLine(failureLabel ?? "failed", theme);
 			} else if (bodyCount === 0) {
 				text = resultLine("done (no output)", theme);
 			} else {
@@ -100,15 +103,13 @@ export function createBashRenderer(cwd: string) {
 			if (visible.length > 0) {
 				if (expanded) {
 					const displayContent = linkifyUrlsInText(tryJsonFormatContent(bodyLines.join("\n")));
-					for (const line of displayContent.split("\n")) text += `\n  ${theme.fg("toolOutput", line)}`;
+					text += indentedOutput(displayContent.split("\n"), theme);
 				} else {
-					for (const line of visible.slice(-5)) text += `\n  ${theme.fg("toolOutput", line)}`;
+					text += indentedOutput(visible.slice(-5), theme);
 				}
 				const hidden = Math.max(0, bodyCount - 5);
 				if (hidden > 0) {
-					text += expanded
-						? `\n  ${theme.fg("muted", "(")}${keyHint("app.tools.expand", "to collapse")}${theme.fg("muted", ")")}`
-						: `\n  ${theme.fg("muted", `... ${hidden} more lines (`)}${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+					text += `\n  ${expanded ? collapseHint(theme) : moreLinesHint(hidden, theme)}`;
 				}
 			}
 			return new Text(text, 0, 0);

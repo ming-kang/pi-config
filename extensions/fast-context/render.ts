@@ -10,18 +10,16 @@
  *   • expanded  → colorized envelope: file headers, grep keywords, config notes
  */
 import type { AgentToolResult, Theme, ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
-import { keyHint } from "@earendil-works/pi-coding-agent";
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
-import { activeDotLine, callLine, errLine, resultLine } from "../tools-view/shared.ts";
+import { activeDotLine, callLine, errLine, expandHint, resultPrefix } from "../tools-view/shared.ts";
 import { TOOL_LABEL } from "./constants.ts";
 import type { FastContextDetails } from "./execute.ts";
 import { buildCollapsedSummary, colorizeEnvelope } from "./render-format.ts";
 import type { FastContextParams } from "./schema.ts";
 
 /** "(ctrl-? to expand)" — only when there's more than the collapsed line shows. */
-function expandHint(text: string, theme: Theme): string {
-	if (!text.includes("\n")) return "";
-	return ` ${theme.fg("muted", "(")}${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+function expandHintIfMultiline(text: string, theme: Theme): string {
+	return text.includes("\n") ? ` ${expandHint(theme)}` : "";
 }
 
 export function renderCall(args: FastContextParams, theme: Theme): Text {
@@ -57,8 +55,8 @@ export function renderResult(
 
 	if (details?.errorMessage) {
 		const msg = text.split("\n")[0] || details.errorMessage;
-		return new Text(errLine(msg, theme) + expandHint(text, theme), 0, 0);
+		return new Text(errLine(msg, theme) + expandHintIfMultiline(text, theme), 0, 0);
 	}
 
-	return new Text(resultLine(buildCollapsedSummary(details, theme), theme) + expandHint(text, theme), 0, 0);
+	return new Text(resultPrefix(theme) + buildCollapsedSummary(details, theme) + expandHintIfMultiline(text, theme), 0, 0);
 }

@@ -16,7 +16,7 @@ import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-ag
 import { Text } from "@earendil-works/pi-tui";
 
 import { TodoOverlay } from "./overlay.ts";
-import { activeDotLine, callLine, errorResultLine, firstText, resultLine } from "../tools-view/shared.ts";
+import { activeDotLine, callLine, errorResultLine, firstText, indentedOutput, resultLine } from "../tools-view/shared.ts";
 import { requireInteractiveUI } from "../shared/extension-ui.ts";
 import { firstLine } from "../shared/text.ts";
 import {
@@ -117,19 +117,15 @@ export default function todo(pi: ExtensionAPI): void {
 
 			if (status) {
 				const label = `${STATUS_MARK[status]} ${status}`;
-				return new Text(resultLine(theme.fg(STATUS_COLOR[status], label), theme), 0, 0);
+				return new Text(resultLine(label, theme, STATUS_COLOR[status]), 0, 0);
 			}
 
 			if (!options.expanded) {
 				const summary = firstLine(textContent, "ok");
-				return new Text(resultLine(theme.fg("success", summary), theme), 0, 0);
+				return new Text(resultLine(summary, theme, "success"), 0, 0);
 			}
 
-			let text = "";
-			for (const line of textContent.split("\n")) {
-				text += `\n  ${theme.fg("toolOutput", line)}`;
-			}
-			return new Text(text, 0, 0);
+			return new Text(indentedOutput(textContent.split("\n"), theme), 0, 0);
 		},
 	});
 

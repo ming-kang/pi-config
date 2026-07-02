@@ -1,7 +1,7 @@
 import type { AgentToolResult, EditToolDetails, Theme } from "@earendil-works/pi-coding-agent";
-import { createEditToolDefinition, keyHint, renderDiff as renderPiDiff, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
+import { createEditToolDefinition, renderDiff as renderPiDiff, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { activeDotLine, callLine, errLine, firstLineError, resultLine, type RenderCtx } from "./shared.ts";
+import { activeDotLine, callLine, collapseHint, errLine, firstLineError, moreLinesHint, resultLine, type RenderCtx } from "./shared.ts";
 
 // Collapsed edit results cap the diff at this many lines; expand (Ctrl+O) shows
 // the full diff. Diffs are the core signal of an edit, so the cap is generous —
@@ -49,9 +49,9 @@ export function createEditRenderer(cwd: string) {
 			text += `\n${indentBlock(shown.join("\n"))}`;
 			const hidden = rendered.length - shown.length;
 			if (hidden > 0) {
-				text += `\n  ${theme.fg("muted", `... ${hidden} more lines (`)}${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+				text += `\n  ${moreLinesHint(hidden, theme)}`;
 			} else if (expanded && rendered.length > COLLAPSED_DIFF_LIMIT) {
-				text += `\n  ${theme.fg("muted", "(")}${keyHint("app.tools.expand", "to collapse")}${theme.fg("muted", ")")}`;
+				text += `\n  ${collapseHint(theme)}`;
 			}
 			return new Text(text, 0, 0);
 		},

@@ -1,11 +1,12 @@
 import type { AgentToolResult, ReadToolDetails, Theme } from "@earendil-works/pi-coding-agent";
-import { createReadToolDefinition, keyHint, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
+import { createReadToolDefinition, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import {
 	activeDotLine,
 	callLine,
 	emptyLine,
 	errLine,
+	expandHint,
 	firstImage,
 	firstLineError,
 	firstTextBlock,
@@ -106,7 +107,7 @@ export function createReadRenderer(cwd: string) {
 				return new Text(text, 0, 0);
 			}
 
-			text += ` ${theme.fg("muted", "(")}${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+			text += ` ${expandHint(theme)}`;
 			if (noticeLines.length > 0) for (const line of noticeLines) text += `\n${renderReadNotice(line, theme)}`;
 			return new Text(text, 0, 0);
 		},
