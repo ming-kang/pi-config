@@ -12,7 +12,7 @@ Adds a `question` tool for asking one to four multiple-choice questions when the
 - `Type something.` is appended automatically for custom answers; authored options may not use reserved labels (`Other`, `Type something.`, `Chat about this`, `Next`).
 - `preview` shows a side-by-side markdown panel for the focused option (single-select only) — for code snippets or layout mockups to compare.
 
-Tool results use a structured envelope in `details`: `{ answers, cancelled, error? }`. Each answer records its question index, kind (`option` / `custom` / `multi`), selected labels, optional notes, and optional selected preview text.
+Tool results use a structured envelope in `details`: `{ answers, cancelled, error? }` — `cancelled` is true only when the user dismisses or declines the dialog; validation and no-UI failures set `error` (e.g. `invalid_option_count`) with `cancelled: false`. Each answer records its question index, kind (`option` / `custom` / `multi`), selected labels, optional notes, and optional selected preview text.
 
 ## Design notes
 

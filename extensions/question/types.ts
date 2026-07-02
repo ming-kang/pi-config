@@ -17,7 +17,7 @@ export type QuestionToolError =
 	| "no_ui"
 	| "no_questions"
 	| "too_many_questions"
-	| "empty_options"
+	| "invalid_option_count"
 	| "duplicate_question"
 	| "duplicate_option_label"
 	| "reserved_label";

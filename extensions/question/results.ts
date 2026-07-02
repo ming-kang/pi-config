@@ -16,7 +16,9 @@ export function errorResult(
 	error: QuestionToolError,
 	message: string,
 ): AgentToolResult<QuestionToolDetails> {
-	return buildToolResult(`Error: ${message}`, { answers: [], cancelled: true, error });
+	// An error is not a user decision: `cancelled` stays false so the envelope
+	// distinguishes "the user declined" from "the call itself was invalid".
+	return buildToolResult(`Error: ${message}`, { answers: [], cancelled: false, error });
 }
 
 export function answerScalar(answer: QuestionAnswer): string {

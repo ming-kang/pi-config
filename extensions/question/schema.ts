@@ -66,7 +66,7 @@ export function validateQuestions(
 		if (q.options.length < MIN_OPTIONS || q.options.length > MAX_OPTIONS) {
 			return {
 				ok: false,
-				error: "empty_options",
+				error: "invalid_option_count",
 				message: `Each question requires ${MIN_OPTIONS}-${MAX_OPTIONS} options`,
 			};
 		}
