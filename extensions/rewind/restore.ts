@@ -9,11 +9,10 @@
  * cache entries. Without this, the next edit would be wrongly blocked as
  * "modified since read".
  */
-import path from "node:path";
-
 // Shared read-cache contract (extensions/shared/file-state.ts): read-before-edit
 // records reads into it; rewind drops stale entries here after rewriting files.
 import { del as dropReadState } from "../shared/file-state.ts";
+import { resolveToolPath } from "../shared/tool-path.ts";
 import { applySnapshot, countChanges } from "./engine.ts";
 import type { FileHistorySnapshot } from "./snapshot.ts";
 
@@ -68,7 +67,8 @@ export async function restoreToSnapshot(
 ): Promise<string[]> {
 	const changed = await applySnapshot(sessionId, snapshot);
 	for (const filePath of changed) {
-		dropReadState(path.isAbsolute(filePath) ? filePath : path.resolve(filePath));
+		// applySnapshot returns absolute paths; resolve defensively anyway.
+		dropReadState(resolveToolPath(filePath, process.cwd()));
 	}
 	return changed;
 }

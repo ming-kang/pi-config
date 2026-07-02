@@ -1,3 +1,4 @@
+import { fetchWithRetry } from "../shared/http.ts";
 import { normalizeDeepWikiParams, type DeepWikiParams } from "./schema.ts";
 
 const DEEPWIKI_MCP_URL = "https://mcp.deepwiki.com/mcp";
@@ -188,92 +189,6 @@ function extractPageTitles(toolName: DeepWikiToolName, text: string): string[] {
 	return [];
 }
 
-function createRequestSignal(signal: AbortSignal | undefined): {
-	signal: AbortSignal;
-	timedOut: () => boolean;
-	cleanup: () => void;
-} {
-	const controller = new AbortController();
-	let timedOut = false;
-	const abortFromParent = () => controller.abort(signal?.reason);
-	const timeout = setTimeout(() => {
-		timedOut = true;
-		controller.abort();
-	}, REQUEST_TIMEOUT_MS);
-
-	if (signal?.aborted) {
-		abortFromParent();
-	} else {
-		signal?.addEventListener("abort", abortFromParent, { once: true });
-	}
-
-	return {
-		signal: controller.signal,
-		timedOut: () => timedOut,
-		cleanup: () => {
-			clearTimeout(timeout);
-			signal?.removeEventListener("abort", abortFromParent);
-		},
-	};
-}
-
-/** Abortable backoff sleep between retry attempts. */
-function delay(ms: number, signal: AbortSignal | undefined): Promise<void> {
-	return new Promise((resolve, reject) => {
-		const onAbort = () => {
-			cleanup();
-			reject(new Error("DeepWiki request aborted"));
-		};
-		const timer = setTimeout(() => {
-			cleanup();
-			resolve();
-		}, ms);
-		const cleanup = () => {
-			clearTimeout(timer);
-			signal?.removeEventListener("abort", onAbort);
-		};
-		if (signal?.aborted) {
-			onAbort();
-			return;
-		}
-		signal?.addEventListener("abort", onAbort, { once: true });
-	});
-}
-
-/** One POST attempt. Throws non-retryable errors for abort/timeout, retryable for network blips. */
-async function postOnce(
-	bodyJson: string,
-	signal: AbortSignal | undefined,
-): Promise<{ response: Response; text: string; retryable: false } | { retryable: true; error: Error }> {
-	const requestSignal = createRequestSignal(signal);
-	try {
-		const response = await fetch(DEEPWIKI_MCP_URL, {
-			method: "POST",
-			headers: {
-				Accept: "application/json, text/event-stream",
-				"Content-Type": "application/json",
-				"MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
-			},
-			body: bodyJson,
-			signal: requestSignal.signal,
-		});
-		const text = await response.text();
-		return { response, text, retryable: false };
-	} catch (error) {
-		// Timeout already waited 45s and an abort is the caller's decision —
-		// neither is worth another attempt. Plain network blips are.
-		if (requestSignal.timedOut()) {
-			throw new Error(`DeepWiki request timed out after ${REQUEST_TIMEOUT_MS / 1000}s`);
-		}
-		if (signal?.aborted) {
-			throw new Error("DeepWiki request aborted");
-		}
-		return { retryable: true, error: error instanceof Error ? error : new Error(String(error)) };
-	} finally {
-		requestSignal.cleanup();
-	}
-}
-
 export async function callDeepWiki(params: DeepWikiParams, signal: AbortSignal | undefined): Promise<DeepWikiResponse> {
 	const normalizedParams = normalizeDeepWikiParams(params);
 	const key = cacheKey(normalizedParams);
@@ -294,28 +209,21 @@ export async function callDeepWiki(params: DeepWikiParams, signal: AbortSignal |
 		},
 	});
 
-	// Bounded retry for transient failures (same policy as fast-context's
-	// streamingRequest): network errors, 5xx, and 429 get MAX_RETRIES more
-	// attempts with linear backoff; other 4xx and parse errors fail fast.
-	let response: Response | undefined;
-	let text = "";
-	let lastError: Error | undefined;
-	for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-		if (attempt > 0) await delay(1000 * attempt, signal);
-		const outcome = await postOnce(bodyJson, signal);
-		if (outcome.retryable) {
-			lastError = outcome.error;
-			continue;
-		}
-		if (!outcome.response.ok && (outcome.response.status >= 500 || outcome.response.status === 429)) {
-			lastError = new Error(`DeepWiki HTTP ${outcome.response.status}: ${truncate(outcome.text)}`);
-			continue;
-		}
-		response = outcome.response;
-		text = outcome.text;
-		break;
-	}
-	if (!response) throw lastError ?? new Error("DeepWiki request failed");
+	// Timeout + bounded transient retry live in shared/http.ts; non-retryable
+	// statuses come back here for the domain-specific HTTP error below.
+	const { response, text } = await fetchWithRetry(
+		DEEPWIKI_MCP_URL,
+		{
+			method: "POST",
+			headers: {
+				Accept: "application/json, text/event-stream",
+				"Content-Type": "application/json",
+				"MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
+			},
+			body: bodyJson,
+		},
+		{ timeoutMs: REQUEST_TIMEOUT_MS, retries: MAX_RETRIES, signal, label: "DeepWiki" },
+	);
 
 	if (!response.ok) {
 		throw new Error(`DeepWiki HTTP ${response.status}: ${truncate(text)}`);

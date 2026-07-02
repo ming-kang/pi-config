@@ -14,7 +14,7 @@ This file governs work on the code here: cross-cutting conventions live in this 
 ## Build & Test
 
 - **No build.** Pi loads `.ts` directly via jiti; offline experiments go in `scratch/` (git-ignored).
-- **Tracked selftests are limited to Fast Context.** They are pure Node checks for its sandbox, executor, protocol, repo map, scorer, and key-format logic; run the relevant one after touching that area.
+- **Tracked selftests are limited to Fast Context.** They are pure Node checks for its sandbox, executor, protocol, repo map, scorer, client parsing, search pure layer, and key-format logic; run the relevant one after touching that area.
 - **Iterate:** `pi -ne -e ./pi-config` loads this checkout for the session only (`-ne` stops installed copies from shadowing it).
 - **Verify a change:** drive the tool and check `renderCall` / `renderResult` in both collapsed and expanded (Ctrl+O) states; for lifecycle extensions (`rewind` / `read-before-edit` / `todo`) also exercise `/reload` and `/tree` navigation.
 - **Upstream references:** use DeepWiki first. If source inspection is unavoidable, put temporary upstream clones, reference projects, and research material under `references/` (git-ignored and often skipped by normal searches), study them there, then delete them when no longer needed. Treat `references/` as read-only research input: never vendor or copy source from it into this repo.
@@ -54,7 +54,7 @@ This file governs work on the code here: cross-cutting conventions live in this 
 ### ALWAYS
 - Route tool rendering through the `tools-view/shared.ts` primitives.
 - Verify both collapsed and expanded (Ctrl+O) states for any UI change.
-- Re-run the focused Fast Context selftest after touching `sandbox` / `executor` / `protocol` / `repo-map` / `directory-scorer` / `key-format`.
+- Re-run the focused Fast Context selftest after touching `sandbox` / `executor` / `protocol` / `repo-map` / `directory-scorer` / `client` / `search` / `key-format`.
 - Use Conventional Commits; commit at verified checkpoints.
 
 ## Per-extension design notes

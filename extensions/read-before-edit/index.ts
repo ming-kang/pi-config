@@ -26,13 +26,15 @@
  */
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 // The read-state cache lives in extensions/shared/ (not inside this extension)
 // because rewind also imports it to invalidate entries after a checkpoint
 // restore — it is a shared utility, not this extension's private module.
 import * as fileState from "../shared/file-state.ts";
 import { appendSoftConstraint } from "../shared/extension-ui.ts";
+// Path extraction/resolution is shared with rewind so the two lifecycle
+// extensions agree on "which file did this edit/write touch".
+import { editWriteTargetPath, resolveToolPath } from "../shared/tool-path.ts";
 
 // Error messages are kept byte-for-byte identical to Claude Code so behavior
 // (and any downstream prompting the model has learned) stays consistent.
@@ -57,18 +59,18 @@ export default function readBeforeEdit(pi: ExtensionAPI): void {
 	pi.on("tool_result", (event, ctx) => {
 		if (event.isError) return;
 		if (event.toolName !== "read" && event.toolName !== "edit" && event.toolName !== "write") return;
-		const rawPath = (event.input as { path?: unknown }).path;
-		if (typeof rawPath !== "string" || rawPath.length === 0) return;
+		const rawPath = editWriteTargetPath(event.input);
+		if (!rawPath) return;
 		recordReadState(rawPath, ctx.cwd);
 	});
 
 	// ---- gate edits / writes ------------------------------------------------
 	pi.on("tool_call", (event, ctx) => {
 		if (event.toolName !== "edit" && event.toolName !== "write") return;
-		const rawPath = (event.input as { path?: unknown }).path;
-		if (typeof rawPath !== "string" || rawPath.length === 0) return;
+		const rawPath = editWriteTargetPath(event.input);
+		if (!rawPath) return;
 
-		const abs = resolvePath(rawPath, ctx.cwd);
+		const abs = resolveToolPath(rawPath, ctx.cwd);
 
 		// New-file exemption: a target that doesn't exist can't have been read.
 		// Let the write create it (or let edit produce its own not-found error).
@@ -123,7 +125,7 @@ export default function readBeforeEdit(pi: ExtensionAPI): void {
  */
 function recordReadState(rawPath: string, cwd: string): void {
 	try {
-		const abs = resolvePath(rawPath, cwd);
+		const abs = resolveToolPath(rawPath, cwd);
 		const stat = statSync(abs);
 		let contentHash: string | undefined;
 		if (stat.size <= fileState.MAX_CONTENT_BYTES) {
@@ -142,13 +144,4 @@ function recordReadState(rawPath: string, cwd: string): void {
 /** sha-256 (hex) of a file's raw bytes. Throws on IO errors; callers handle. */
 function hashFile(absPath: string): string {
 	return createHash("sha256").update(readFileSync(absPath)).digest("hex");
-}
-
-/**
- * Resolve a tool path the way the read tool would, so a relative read and an
- * absolute edit of the same file agree. We don't normalize case here — that's
- * done inside file-state's key normalization.
- */
-function resolvePath(rawPath: string, cwd: string): string {
-	return path.isAbsolute(rawPath) ? rawPath : path.resolve(cwd, rawPath);
 }

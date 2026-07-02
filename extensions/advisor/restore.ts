@@ -5,6 +5,7 @@
  */
 import type { Api, ExtensionAPI, ExtensionContext, Model, ThinkingLevel } from "@earendil-works/pi-coding-agent";
 
+import { reconcileToolActive } from "../shared/tool-toggle.ts";
 import { ADVISOR_TOOL_NAME } from "./constants.ts";
 import { findAvailableModel, modelKey, restoreAdvisorConfig } from "./config.ts";
 
@@ -48,16 +49,10 @@ export function reconcileAdvisorTool(
 	options: { notify?: boolean } = {},
 ): void {
 	const advisor = selectedModel;
-	const active = pi.getActiveTools();
-	const hasAdvisor = active.includes(ADVISOR_TOOL_NAME);
-
-	if (!advisor && hasAdvisor) {
-		pi.setActiveTools(active.filter((name) => name !== ADVISOR_TOOL_NAME));
-		if (options.notify && ctx.hasUI) ctx.ui.notify("Advisor disabled.", "info");
-	} else if (advisor && !hasAdvisor) {
-		pi.setActiveTools([...active, ADVISOR_TOOL_NAME]);
-		if (options.notify && ctx.hasUI) ctx.ui.notify(`Advisor enabled: ${modelKey(advisor)}`, "info");
-	}
+	const change = reconcileToolActive(pi, ADVISOR_TOOL_NAME, !!advisor);
+	if (!options.notify || !ctx.hasUI) return;
+	if (change === "removed") ctx.ui.notify("Advisor disabled.", "info");
+	else if (change === "added" && advisor) ctx.ui.notify(`Advisor enabled: ${modelKey(advisor)}`, "info");
 }
 
 /** Restore the advisor's reviewer from the persisted config. */

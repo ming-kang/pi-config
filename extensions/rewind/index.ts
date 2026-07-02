@@ -26,13 +26,14 @@
  * Architecture informed by oh-my-pi (GPL-3.0) and Claude Code's file-history;
  * independent implementation. No ANSI: all UI is native (ctx.ui.* + theme).
  */
-import path from "node:path";
-
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { rewindBackupsRoot, sessionsDir } from "../shared/paths.ts";
 import { truncateText } from "../shared/text.ts";
+// Path extraction/resolution is shared with read-before-edit so both lifecycle
+// extensions agree on "which file did this edit/write touch".
+import { editWriteTargetPath, resolveToolPath } from "../shared/tool-path.ts";
 import { type RewindConfig, loadRewindConfig } from "./config.ts";
 import {
 	beginTurn,
@@ -123,9 +124,9 @@ export default function rewind(pi: ExtensionAPI): void {
 		if (!config.enabled) return;
 		const sid = ctx.sessionManager.getSessionId();
 		if (!sid) return;
-		const rawPath = (event.input as { path?: unknown }).path;
-		if (typeof rawPath !== "string" || rawPath.length === 0) return;
-		const abs = path.isAbsolute(rawPath) ? rawPath : path.resolve(ctx.cwd, rawPath);
+		const rawPath = editWriteTargetPath(event.input);
+		if (!rawPath) return;
+		const abs = resolveToolPath(rawPath, ctx.cwd);
 		try {
 			trackEdit(sid, abs);
 		} catch {
