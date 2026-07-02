@@ -1,13 +1,13 @@
 /**
- * config.ts — statusline settings, hand-edited at
- * ~/.pi/agent/pi-config/statusline.json (+ /reload). No interactive menu:
- * these are set-once preferences, not session-level state.
+ * config.ts — statusline settings, persisted at
+ * ~/.pi/agent/pi-config/statusline.json. Edited via the /statusline menu
+ * (menu.ts) or by hand (+ /reload).
  *
- * Every field is optional; the defaults reproduce the extension's historical
- * behavior exactly. Invalid values fall back per-field, never rejecting the
- * whole file.
+ * Every field is optional on disk; the defaults reproduce the extension's
+ * historical behavior exactly. Invalid values fall back per-field, never
+ * rejecting the whole file.
  */
-import { loadJson } from "../shared/json-store.ts";
+import { loadJson, saveJson } from "../shared/json-store.ts";
 import { statuslineConfigPath } from "../shared/paths.ts";
 
 /** CTX% turns warning past this (historical hard-coded 70). */
@@ -51,4 +51,9 @@ function normalizeConfig(raw: unknown): StatuslineConfig {
 /** Load statusline.json (missing/corrupt file → all defaults). */
 export function loadStatuslineConfig(): StatuslineConfig {
 	return loadJson(statuslineConfigPath(), normalizeConfig, normalizeConfig({}));
+}
+
+/** Persist statusline.json (normalized). Returns false when the write failed. */
+export function saveStatuslineConfig(config: StatuslineConfig): boolean {
+	return saveJson(statuslineConfigPath(), normalizeConfig(config));
 }

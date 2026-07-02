@@ -1,6 +1,6 @@
 # statusline — compact footer
 
-Replaces Pi's built-in footer with a compact, color-coded status line. This is a footer-only extension — it registers no tool. It auto-enables on `session_start` in TUI mode and clears itself on `session_shutdown`.
+Replaces Pi's built-in footer with a compact, color-coded status line. It registers no tool — just the footer plus a `/statusline` settings menu. It auto-enables on `session_start` in TUI mode and clears itself on `session_shutdown`.
 
 ## What it shows
 
@@ -15,7 +15,13 @@ advisor: …                                            ← line 2, only when se
 
 ## Configuration
 
-Optional, hand-edited at `~/.pi/agent/pi-config/statusline.json`; applied on `session_start` / `/reload` (the render callback runs every frame, so the file is read once per session, not per frame). Every field may be omitted — defaults reproduce the historical behavior:
+Run `/statusline` for a settings menu (mirrors `/rewind`'s select loop; changes persist and apply to the footer immediately):
+
+- **Usage stats** — toggle the right-aligned `↑in ↓out Rcache $cost` cluster.
+- **Extension status line** — toggle the second line forwarding `ctx.ui.setStatus()` statuses.
+- **CTX warning / error color from** — the CTX% color-tier thresholds (accent → warning → error), presets or custom. The tiers stay ordered: raising warn drags error up, lowering error pulls warn down.
+
+Settings persist at `~/.pi/agent/pi-config/statusline.json` and may also be hand-edited (+ `/reload`; the render callback runs every frame, so the file is read once per session, not per frame). Every field may be omitted — defaults reproduce the historical behavior:
 
 ```json
 {
@@ -26,9 +32,7 @@ Optional, hand-edited at `~/.pi/agent/pi-config/statusline.json`; applied on `se
 }
 ```
 
-- `ctxWarnPct` / `ctxErrorPct` — CTX% color-tier thresholds (accent → warning → error). Clamped to 0–100; `ctxErrorPct` never below `ctxWarnPct`; invalid values fall back per-field.
-- `showUsageStats` — the right-aligned `↑in ↓out Rcache $cost` cluster.
-- `showStatusLine2` — the second line forwarding `ctx.ui.setStatus()` extension statuses.
+Thresholds are clamped to 0–100 with `ctxErrorPct` never below `ctxWarnPct`; invalid values fall back per-field.
 
 ## Design notes
 
@@ -40,5 +44,6 @@ Optional, hand-edited at `~/.pi/agent/pi-config/statusline.json`; applied on `se
 
 ## Files
 
-- `index.ts` — the footer renderable + helpers
-- `config.ts` — statusline.json load/validation (thresholds, toggles)
+- `index.ts` — the footer renderable + helpers, `/statusline` registration
+- `config.ts` — statusline.json load/save/validation (thresholds, toggles)
+- `menu.ts` — the `/statusline` settings menu (live-applies via `onChange`)

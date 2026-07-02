@@ -7,7 +7,7 @@ This Pi package contains commonly used extensions and themes, maintained for per
 | Extension | What it does |
 |:-:|---|
 | [`question`](extensions/question/README.md) | `question` tool — multiple-choice prompts to the user, including multi-select and custom "Other" answers |
-| [`statusline`](extensions/statusline/README.md) | Compact color-coded footer (model · effort · ctx% · cwd · branch · tokens · cost) |
+| [`statusline`](extensions/statusline/README.md) | Compact color-coded footer (model · effort · ctx% · cwd · branch · tokens · cost) with a `/statusline` settings menu |
 | [`tools-view`](extensions/tools-view/README.md) | Compact rendering for built-in tools (read/bash/edit/write) and **central style hub** — all extensions import rendering primitives from `tools-view/shared.ts` |
 | [`advisor`](extensions/advisor/README.md) | `advisor` tool + `/advisor` command — one-shot review from a configured reviewer model via Pi's own model registry and provider auth |
 | [`deepwiki`](extensions/deepwiki/README.md) | `deepwiki` tool — query DeepWiki repository docs for GitHub repos without adding generic MCP support to Pi |

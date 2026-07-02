@@ -23,14 +23,16 @@
  * built-in FooterComponent does the same iteration internally.
  *
  * Config: ~/.pi/agent/pi-config/statusline.json (see config.ts) — CTX color
- * thresholds and toggles for the usage cluster / status line 2. Loaded once
- * per session_start (the render callback runs every frame; no disk reads there).
+ * thresholds and toggles for the usage cluster / status line 2. Edited via the
+ * /statusline menu (applies live) or by hand (+ /reload); loaded once per
+ * session_start (the render callback runs every frame; no disk reads there).
  */
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { isTui } from "../shared/extension-ui.ts";
 import { loadStatuslineConfig } from "./config.ts";
+import { runStatuslineMenu } from "./menu.ts";
 
 /** Shorten a path to ~ relative to home. */
 function shortCwd(cwd: string): string {
@@ -74,10 +76,24 @@ function currentThinkingLevel(branch: SessionEntry[]): ThinkingLevel {
 }
 
 export default function (pi: ExtensionAPI) {
+	// Extension-scope binding: the footer's render closure reads it every frame,
+	// the /statusline menu reassigns it — changes apply without /reload.
+	let config = loadStatuslineConfig();
+
+	pi.registerCommand("statusline", {
+		description: "Statusline settings (CTX thresholds, usage stats, status line)",
+		handler: async (_args, ctx) => {
+			await runStatuslineMenu(ctx, (next) => {
+				config = next;
+			});
+		},
+	});
+
 	pi.on("session_start", (_event, ctx) => {
 		if (!isTui(ctx)) return;
-		// Once per session (+ /reload): the render callback below runs every frame.
-		const config = loadStatuslineConfig();
+		// Refresh once per session (+ /reload): the render callback below runs
+		// every frame and must not touch the disk.
+		config = loadStatuslineConfig();
 
 		ctx.ui.setFooter((tui, theme, footerData) => {
 			const unsub = footerData.onBranchChange(() => tui.requestRender());
