@@ -56,6 +56,12 @@ function summarizeStructure(text: string, details: DeepWikiDetails | undefined):
 }
 
 function summarizeContents(text: string, details: DeepWikiDetails | undefined): string {
+	if (details?.requestedPage) {
+		const position =
+			details.pageIndex !== undefined && details.pageCount ? `${details.pageIndex}/${details.pageCount} · ` : "";
+		const cut = details.truncatedChars ? " (truncated)" : "";
+		return `Page ${position}${details.requestedPage}${cut}`;
+	}
 	const pages = getPageTitles(text, details);
 	if (details?.shownPages !== undefined) {
 		const total = details.pageCount ?? pages.length;
@@ -109,6 +115,8 @@ function callSuffix(args: DeepWikiParams, theme: Theme): string {
 	let suffix = `${theme.fg("muted", action)} ${theme.fg("accent", repoLabel(args.repoName))}`;
 	if (args.action === "question" && args.question) {
 		suffix += ` ${theme.fg("dim", truncateText(args.question, 72))}`;
+	} else if (args.action === "contents" && args.page !== undefined) {
+		suffix += ` ${theme.fg("dim", truncateText(String(args.page), 48))}`;
 	}
 	return suffix;
 }

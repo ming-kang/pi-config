@@ -10,7 +10,9 @@
  * hundreds of KB. Past CONTENTS_CHAR_BUDGET the text is cut at "# Page:"
  * boundaries — whole pages are kept in order, at least the beginning of the
  * first page always survives — and a trailing notice states what was omitted
- * and how to get it (call again with action "question").
+ * and how to get it (read a single page via the `page` parameter, or ask a
+ * focused question). extractPage implements that single-page read: upstream
+ * has no per-page fetch, so a page is sliced locally out of the full text.
  *
  * Determinism matters: callDeepWiki caches the FULL response and the caller
  * re-truncates on every call, so cached and fresh calls must produce
@@ -82,9 +84,10 @@ function buildNotice(opts: {
 		const shown = opts.omittedTitles.slice(0, OMITTED_TITLES_MAX).join("; ");
 		const more = opts.omittedTitles.length - OMITTED_TITLES_MAX;
 		lines.push(`Omitted pages: ${shown}${more > 0 ? ` … +${more} more` : ""}.`);
+		lines.push(`Read an omitted page with {action: "contents", page: "<title>"}, or use action "question" for a targeted answer.]`);
+	} else {
+		lines.push(`For the missing remainder, use action "question" with a focused question.]`);
 	}
-	const target = opts.totalPages > 0 ? "material from the omitted pages" : "specific topics";
-	lines.push(`For ${target}, call deepwiki again with action "question" and a focused question.]`);
 	return lines.join("\n");
 }
 
@@ -148,4 +151,54 @@ export function truncateContentsByPages(text: string, budget = CONTENTS_CHAR_BUD
 		shownPages,
 		truncatedChars: text.length - kept.length,
 	};
+}
+
+export interface PageSlice {
+	/** Resolved page title as it appears in the header line. */
+	title: string;
+	/** Page text from its header line up to the next page header (or EOF). */
+	text: string;
+	/** 1-based position among the page chunks. */
+	index: number;
+}
+
+export interface PageLookup {
+	found?: PageSlice;
+	/** All page titles in document order — for self-healing not-found errors. */
+	titles: string[];
+}
+
+/**
+ * Slice one wiki page out of a full contents response. `pageRef` is matched
+ * leniently, in this order: case-insensitive exact title, unique partial
+ * title, or a 1-based index for purely numeric refs (matching the order shown
+ * by structure and truncation notices). No match (or a wiki without page
+ * markers) returns just the title list so the caller can report what exists.
+ */
+export function extractPage(text: string, pageRef: string | number): PageLookup {
+	const chunks = pageOffsets(text);
+	const titles = chunks.map((chunk) => chunk.title);
+	if (chunks.length === 0) return { titles };
+
+	const ref = String(pageRef).trim();
+	let idx = -1;
+	if (/^\d+$/.test(ref)) {
+		const ordinal = Number.parseInt(ref, 10);
+		if (ordinal >= 1 && ordinal <= chunks.length) idx = ordinal - 1;
+	} else if (ref) {
+		const lower = ref.toLowerCase();
+		idx = titles.findIndex((title) => title.toLowerCase() === lower);
+		if (idx === -1) {
+			const partial = titles.reduce<number[]>((acc, title, i) => {
+				if (title.toLowerCase().includes(lower)) acc.push(i);
+				return acc;
+			}, []);
+			if (partial.length === 1) idx = partial[0]!;
+		}
+	}
+	if (idx === -1) return { titles };
+
+	const start = chunks[idx]!.start;
+	const end = idx + 1 < chunks.length ? chunks[idx + 1]!.start : text.length;
+	return { found: { title: titles[idx]!, text: text.slice(start, end), index: idx + 1 }, titles };
 }

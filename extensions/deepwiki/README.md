@@ -7,7 +7,7 @@ It is intentionally not a general MCP bridge. The extension exposes one dedicate
 | Action | Behavior |
 |---|---|
 | `structure` | List the generated wiki topics for a repository. |
-| `contents` | Read the generated repository wiki. |
+| `contents` | Read the generated wiki — one page via `page` (recommended), or everything when `page` is omitted (truncated past ~120k chars). |
 | `question` | Ask a focused question about a repository. |
 
 ## Tool Parameters
@@ -15,10 +15,22 @@ It is intentionally not a general MCP bridge. The extension exposes one dedicate
 - `action`: `structure`, `contents`, or `question`
 - `repoName`: GitHub repository in `owner/repo` format, or an array of up to 10 repositories for `question`
 - `question`: required only for `action: "question"`
+- `page`: optional, only for `action: "contents"` — a page title (exact or unique partial match, case-insensitive) or 1-based index, as listed by `structure` or a truncation notice; reads that single page instead of the whole wiki. An unknown `page` fails with the available page titles listed.
 
-`repoName` is normalized before validation. `owner/repo` is the expected form, but common GitHub and DeepWiki URLs are accepted as a fallback. For model tolerance, comma-separated repo strings are also accepted and normalized into repo lists. If `action` is omitted, the tool defaults to `question` when a question is present and `structure` otherwise. `structure` and `contents` require exactly one repository.
+`repoName` is normalized before validation. `owner/repo` is the expected form, but common GitHub and DeepWiki URLs are accepted as a fallback. For model tolerance, comma-separated repo strings are also accepted and normalized into repo lists, and `pageName`/`pageTitle` are accepted as `page` aliases. If `action` is omitted, the tool defaults to `question` when a question is present, `contents` when a `page` is present, and `structure` otherwise. `structure` and `contents` require exactly one repository.
+
+## How it works
+
+DeepWiki's public MCP endpoint exposes exactly three operations: list a wiki's page titles, return the whole generated wiki as one document, and answer a question. There is no per-page fetch upstream — `page` is implemented by this extension: it fetches the full wiki (or reuses the 10-minute cache) and slices out the requested page locally. The first `contents` call for a repo pays the network cost; subsequent page reads within the cache window are instant and free.
 
 ## Usage Strategy
+
+Recommended flow for studying a repo:
+
+1. `structure` — get the page outline.
+2. `contents` + `page` — read the specific pages you need, one at a time.
+3. Avoid `contents` without `page` (the full wiki) unless the wiki is genuinely small; oversized output is truncated at ~120k chars.
+4. `question` — when the wiki pages don't cover what you need, or directly for a quick answer without reading.
 
 Use DeepWiki when generated docs for public repositories are useful context:
 
@@ -40,7 +52,7 @@ Avoid DeepWiki when the authoritative source is local or time-sensitive:
 
 - DeepWiki currently exposes this data through its public MCP HTTP endpoint; this extension calls only the three DeepWiki operations above.
 - DeepWiki may return generated explanations with source-file citations and "related pages" links; collapsed rendering strips the navigation tail for concise summaries.
-- `contents` responses are truncated at a ~120k-character budget on `# Page:` boundaries (whole pages kept in order; at least the first page survives, cut mid-page if it alone exceeds the budget). A trailing notice reports shown/total pages, the full length, up to 20 omitted page titles, and points at `action: "question"` for the rest. Details carry `shownPages` / `truncatedChars` when this happens; `outputLength` always reflects the full untruncated response.
+- `contents` responses are truncated at a ~120k-character budget on `# Page:` boundaries (whole pages kept in order; at least the first page survives, cut mid-page if it alone exceeds the budget). A trailing notice reports shown/total pages, the full length, up to 20 omitted page titles, and points at `page` reads and `action: "question"` for the rest. Details carry `shownPages` / `truncatedChars` when this happens; `outputLength` always reflects the full untruncated response. Single-page reads set `requestedPage` / `pageIndex` instead and share the same budget.
 - A repository may not be indexed. DeepWiki can return that as normal text, so the extension treats repository-not-found messages as tool errors.
 - Successful responses are cached in-process for 10 minutes, keyed by action, repo, and question. Failed, aborted, and timed-out requests are not cached. The cache stores the full response; `contents` truncation is recomputed per call, so cached and fresh calls return identical text.
 - Network requests time out after 45 seconds and surface as Pi tool errors.

@@ -37,6 +37,12 @@ export const DeepWikiParamsSchema = Type.Object({
 				"Required for action question. Ask a focused question about architecture, APIs, implementation patterns, extension points, onboarding, or cross-repo comparison.",
 		}),
 	),
+	page: Type.Optional(
+		Type.Union([Type.String({ minLength: 1 }), Type.Number()], {
+			description:
+				"Only for action contents: read a single wiki page by title (exact or unique partial match, case-insensitive) or 1-based index, as listed by structure or a truncation notice. Prefer reading specific pages over fetching the whole wiki.",
+		}),
+	),
 });
 
 export type DeepWikiAction = (typeof DEEPWIKI_ACTIONS)[number];
@@ -70,10 +76,23 @@ function readString(record: Record<string, unknown>, keys: string[]): string | u
 	return undefined;
 }
 
-function normalizeAction(action: unknown, question: string | undefined): DeepWikiAction {
+function readPageRef(record: Record<string, unknown>): string | number | undefined {
+	for (const key of ["page", "pageName", "pageTitle"]) {
+		const value = record[key];
+		if (typeof value === "number" && Number.isFinite(value)) return value;
+		if (typeof value === "string" && value.trim()) return value.trim();
+	}
+	return undefined;
+}
+
+function normalizeAction(
+	action: unknown,
+	question: string | undefined,
+	page: string | number | undefined,
+): DeepWikiAction {
 	if (typeof action === "string") {
 		const key = action.trim().toLowerCase().replace(/[\s-]+/g, "_");
-		if (!key) return question ? "question" : "structure";
+		if (!key) return inferAction(question, page);
 		const normalized = ACTION_ALIASES[key];
 		if (normalized) return normalized;
 		throw new Error(`unsupported deepwiki action: ${action}`);
@@ -81,7 +100,12 @@ function normalizeAction(action: unknown, question: string | undefined): DeepWik
 	if (action !== undefined && action !== null) {
 		throw new Error("deepwiki action must be a string");
 	}
+	return inferAction(question, page);
+}
+
+function inferAction(question: string | undefined, page: string | number | undefined): DeepWikiAction {
 	if (question) return "question";
+	if (page !== undefined) return "contents";
 	return "structure";
 }
 
@@ -153,7 +177,8 @@ export function normalizeDeepWikiParams(input: unknown): DeepWikiParams {
 
 	const record = input as Record<string, unknown>;
 	const question = readString(record, ["question", "query", "prompt"]);
-	const action = normalizeAction(record.action, question);
+	const page = readPageRef(record);
+	const action = normalizeAction(record.action, question, page);
 	const rawRepoName =
 		record.repoName ??
 		record.repo ??
@@ -177,5 +202,10 @@ export function normalizeDeepWikiParams(input: unknown): DeepWikiParams {
 		throw new Error(`${action} action requires exactly one repository`);
 	}
 
-	return { action, repoName: repoNames[0] };
+	// page is meaningful only for contents; structure/question ignore it.
+	return {
+		action,
+		repoName: repoNames[0],
+		...(action === "contents" && page !== undefined ? { page } : {}),
+	};
 }

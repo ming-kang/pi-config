@@ -4,7 +4,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 import { callDeepWiki, type DeepWikiResponse } from "./client.ts";
-import { truncateContentsByPages } from "./contents.ts";
+import { extractPage, truncateContentsByPages } from "./contents.ts";
 import { normalizeDeepWikiParams, type DeepWikiAction, type DeepWikiParams } from "./schema.ts";
 
 export interface DeepWikiDetails {
@@ -17,6 +17,9 @@ export interface DeepWikiDetails {
 	cacheHit?: boolean;
 	pageCount?: number;
 	pageTitles?: string[];
+	/** Resolved title and 1-based position of a single-page contents read. */
+	requestedPage?: string;
+	pageIndex?: number;
 	/** Set only when a contents response was truncated to the char budget. */
 	shownPages?: number;
 	truncatedChars?: number;
@@ -78,15 +81,38 @@ export async function executeDeepWiki(
 
 	// Bounded model-facing output: the cache keeps the full response
 	// (outputLength/pageTitles describe it); only the returned text is cut.
-	// truncateContentsByPages is deterministic, so cached and fresh calls
-	// produce identical text.
+	// truncateContentsByPages/extractPage are deterministic, so cached and
+	// fresh calls produce identical text.
 	let resultText = response.text;
 	if (normalizedParams.action === "contents") {
-		const truncation = truncateContentsByPages(response.text);
-		if (truncation.truncated) {
+		if (normalizedParams.page !== undefined) {
+			// Single-page read: upstream has no per-page fetch, so slice the page
+			// out of the (cached) full wiki locally.
+			const lookup = extractPage(response.text, normalizedParams.page);
+			if (!lookup.found) {
+				if (lookup.titles.length === 0) {
+					throw new Error(
+						`page "${normalizedParams.page}" not found: this wiki has no page structure. Call contents without page.`,
+					);
+				}
+				const list = lookup.titles.slice(0, 30).join("; ");
+				const more = lookup.titles.length > 30 ? ` … +${lookup.titles.length - 30} more` : "";
+				throw new Error(
+					`page "${normalizedParams.page}" not found in ${repoLabel} wiki (${lookup.titles.length} pages).\nAvailable pages: ${list}${more}`,
+				);
+			}
+			const truncation = truncateContentsByPages(lookup.found.text);
 			resultText = truncation.text;
-			extra.shownPages = truncation.shownPages;
-			extra.truncatedChars = truncation.truncatedChars;
+			extra.requestedPage = lookup.found.title;
+			extra.pageIndex = lookup.found.index;
+			if (truncation.truncated) extra.truncatedChars = truncation.truncatedChars;
+		} else {
+			const truncation = truncateContentsByPages(response.text);
+			if (truncation.truncated) {
+				resultText = truncation.text;
+				extra.shownPages = truncation.shownPages;
+				extra.truncatedChars = truncation.truncatedChars;
+			}
 		}
 	}
 
