@@ -26,6 +26,8 @@
  * Architecture informed by oh-my-pi (GPL-3.0) and Claude Code's file-history;
  * independent implementation. No ANSI: all UI is native (ctx.ui.* + theme).
  */
+import path from "node:path";
+
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -47,7 +49,7 @@ import {
 } from "./engine.ts";
 import { runGc, sessionIdFromFile } from "./gc.ts";
 import { runRewindMenu } from "./menu.ts";
-import { restoreToSnapshot, snapshotChangeCount, snapshotForEntry } from "./restore.ts";
+import { restoreToSnapshot, snapshotChangedPaths, snapshotForEntry } from "./restore.ts";
 import { type FileHistorySnapshot, SNAPSHOT_ENTRY_TYPE, isSnapshot } from "./snapshot.ts";
 import { configureStorage } from "./storage.ts";
 
@@ -84,6 +86,31 @@ function rebuildSnapshots(ctx: ExtensionContext): FileHistorySnapshot[] {
 		}
 	}
 	return out;
+}
+
+/** Max files listed in the /tree restore confirmation before "+N more". */
+const RESTORE_PREVIEW_LIMIT = 8;
+/** Max characters per previewed path (leading-truncated: the filename matters most). */
+const RESTORE_PREVIEW_PATH_MAX = 64;
+
+/**
+ * Bounded cwd-relative file list shown under the /tree restore question, so an
+ * irreversible work-tree rewrite is confirmed against WHICH files, not just a
+ * count. Multi-line select titles are upstream-sanctioned (ui.confirm joins
+ * title + message with \n through the same selector).
+ */
+function formatRestorePreview(changedPaths: string[], cwd: string): string {
+	const lines = changedPaths.slice(0, RESTORE_PREVIEW_LIMIT).map((p) => {
+		const rel = path.relative(cwd, p);
+		const display = rel && !rel.startsWith("..") && !path.isAbsolute(rel) ? rel : p;
+		const bounded =
+			display.length > RESTORE_PREVIEW_PATH_MAX ? `…${display.slice(-(RESTORE_PREVIEW_PATH_MAX - 1))}` : display;
+		return `  ${bounded}`;
+	});
+	if (changedPaths.length > RESTORE_PREVIEW_LIMIT) {
+		lines.push(`  … +${changedPaths.length - RESTORE_PREVIEW_LIMIT} more`);
+	}
+	return lines.join("\n");
 }
 
 // ---- extension entry ------------------------------------------------------
@@ -172,12 +199,16 @@ export default function rewind(pi: ExtensionAPI): void {
 
 		const target = snapshotForEntry(getSnapshots(sid), ctx.sessionManager, event.preparation.targetId);
 		if (!target) return;
-		const changeCount = await snapshotChangeCount(sid, target);
-		if (changeCount === 0) return; // silent nav, like native /tree
-		if (ctx.mode !== "tui" && !ctx.hasUI) return;
+		const changed = await snapshotChangedPaths(sid, target);
+		if (changed.length === 0) return; // silent nav, like native /tree
+		// Lifecycle handler: silent-return without UI. (hasUI is the guard for
+		// ctx.ui.*; checking ctx.mode here would wrongly proceed when a TUI
+		// session has no usable UI.)
+		if (!ctx.hasUI) return;
 
+		const n = changed.length;
 		const choice = await ctx.ui.select(
-			`Restore ${changeCount} file${changeCount === 1 ? "" : "s"} to this point?`,
+			`Restore ${n} file${n === 1 ? "" : "s"} to this point?\n${formatRestorePreview(changed, ctx.cwd)}`,
 			["Yes, restore files", "No, conversation only"],
 		);
 		if (choice && choice.startsWith("Yes")) pendingTreeRestore.set(sid, target);

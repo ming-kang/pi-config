@@ -13,7 +13,7 @@
 // records reads into it; rewind drops stale entries here after rewriting files.
 import { del as dropReadState } from "../shared/file-state.ts";
 import { resolveToolPath } from "../shared/tool-path.ts";
-import { applySnapshot, countChanges } from "./engine.ts";
+import { applySnapshot, collectChanges } from "./engine.ts";
 import type { FileHistorySnapshot } from "./snapshot.ts";
 
 /** Minimal session view we need to walk the entry tree. */
@@ -51,9 +51,12 @@ export function snapshotForEntry(
 	return best;
 }
 
-/** How many files restoring to this snapshot would change on disk (0 = none). */
-export function snapshotChangeCount(sessionId: string, snapshot: FileHistorySnapshot): Promise<number> {
-	return countChanges(sessionId, snapshot);
+/**
+ * Absolute file paths restoring to this snapshot would change on disk (empty =
+ * none). Callers use the length for the count and the paths for the preview.
+ */
+export function snapshotChangedPaths(sessionId: string, snapshot: FileHistorySnapshot): Promise<string[]> {
+	return collectChanges(sessionId, snapshot);
 }
 
 /**

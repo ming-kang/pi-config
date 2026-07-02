@@ -21,10 +21,10 @@ compaction; the index is rebuilt from them on `session_start`.
   edited by hand outside Pi are **not** tracked — same boundary as Claude Code's
   file-history. Rewind undoes *Pi's edits*, not arbitrary filesystem state.
 - **Time-travel is via `/tree`.** Navigating to a node whose turn changed files
-  prompts to restore them (showing the count, e.g. *"Restore 3 files to this
-  point?"*); choosing yes restores the work tree to that turn's start state.
-  Nodes with no file changes navigate silently. Only files that actually differ
-  are rewritten.
+  prompts to restore them, listing the affected files (cwd-relative, up to 8
+  then *"+N more"*) under *"Restore 3 files to this point?"*; choosing yes
+  restores the work tree to that turn's start state. Nodes with no file changes
+  navigate silently. Only files that actually differ are rewritten.
 - **`/rewind` is a settings + storage menu**, not a restore picker:
   - toggle rewind on/off,
   - set the auto-clean retention window,

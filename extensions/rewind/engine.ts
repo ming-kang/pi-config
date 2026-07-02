@@ -385,11 +385,15 @@ async function pruneDroppedBlobs(
 
 // ---- rewind ---------------------------------------------------------------
 
-/** How many files restoring to `target` would change on disk (0 = nothing to do). */
-export async function countChanges(sid: string, target: FileHistorySnapshot): Promise<number> {
+/**
+ * Absolute paths that restoring to `target` would change on disk (empty =
+ * nothing to do). Same walk applySnapshot performs, without writing — the
+ * caller can both count and preview the files from one pass.
+ */
+export async function collectChanges(sid: string, target: FileHistorySnapshot): Promise<string[]> {
 	const state = getState(sid);
 	const cwd = cwdFor(sid);
-	let n = 0;
+	const changed: string[] = [];
 	for (const tracking of state.trackedFiles) {
 		try {
 			const filePath = expand(tracking, cwd);
@@ -397,15 +401,15 @@ export async function countChanges(sid: string, target: FileHistorySnapshot): Pr
 			const name = tb ? tb.backupName : firstBackupName(state, tracking);
 			if (name === undefined) continue;
 			if (name === null) {
-				if (await statOrNull(filePath)) n++;
+				if (await statOrNull(filePath)) changed.push(filePath);
 				continue;
 			}
-			if (await originChanged(sid, filePath, name)) n++;
+			if (await originChanged(sid, filePath, name)) changed.push(filePath);
 		} catch {
 			// ignore
 		}
 	}
-	return n;
+	return changed;
 }
 
 /** Restore the work tree to `target`. Returns the list of changed file paths. */
