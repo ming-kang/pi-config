@@ -4,7 +4,13 @@
  * The state is intentionally conversation-backed: every tool result carries a
  * full snapshot in `details`, and lifecycle handlers replay the current branch.
  * This keeps /reload, compaction, and session-tree navigation aligned with the
- * conversation without adding a separate disk database.
+ * conversation without adding a separate disk database. (Compaction-safe by
+ * design: sessionManager.getBranch() returns the FULL branch history including
+ * pre-compaction toolResult entries — only buildSessionContext summarizes.)
+ *
+ * State is keyed per session id (see state.ts): resume and /tree switches can
+ * change the session within one process, and execute + lifecycle handlers
+ * re-point the active bucket before touching state.
  */
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -21,6 +27,7 @@ import {
 	getTodoState,
 	replaceTodoState,
 	replayTodosFromBranch,
+	setActiveTodoSession,
 } from "./state.ts";
 import {
 	TODO_PROMPT_GUIDELINES,
@@ -33,7 +40,12 @@ import {
 import { TodoParamsSchema, type TodoDetails, type TodoParams, type TodoStatus } from "./schema.ts";
 import { formatCommandList, STATUS_MARK, STATUS_COLOR } from "./view.ts";
 
-function safeReplay(ctx: Parameters<typeof replayTodosFromBranch>[0]): void {
+interface TodoSessionCtx {
+	sessionManager: { getBranch(): Iterable<unknown>; getSessionId(): string };
+}
+
+function safeReplay(ctx: TodoSessionCtx): void {
+	setActiveTodoSession(ctx.sessionManager.getSessionId());
 	try {
 		replaceTodoState(replayTodosFromBranch(ctx));
 	} catch (error) {
@@ -53,7 +65,10 @@ export default function todo(pi: ExtensionAPI): void {
 		parameters: TodoParamsSchema,
 		renderShell: "self",
 
-		async execute(_toolCallId, params): Promise<AgentToolResult<TodoDetails>> {
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<TodoDetails>> {
+			// Re-point the active bucket: resume//tree can switch sessions between
+			// lifecycle events and this call.
+			setActiveTodoSession(ctx.sessionManager.getSessionId());
 			const result = applyTodoMutation(getTodoState(), params);
 			commitTodoState(result.state);
 			const text = formatTodoContent(result.operation, result.state);

@@ -11,7 +11,8 @@ Adds a `todo` tool plus `/todos` for multi-step work, with a live overlay above 
 
 ## Design notes
 
-- **Conversation-backed state.** Every tool result stores a full snapshot in `details`; lifecycle handlers replay the current branch on `/reload`, compaction, and session-tree navigation. There is no separate disk database.
+- **Conversation-backed state.** Every tool result stores a full snapshot in `details`; lifecycle handlers replay the current branch on `/reload`, compaction, and session-tree navigation. There is no separate disk database. Compaction-safe by design: `sessionManager.getBranch()` returns the full branch history — only `buildSessionContext` summarizes for the LLM.
+- **State is keyed per session id.** Resume and `/tree` can switch sessions within one process; `execute` and the lifecycle handlers re-point the active bucket before touching state (renderers get no ctx, hence the module-level pointer — see `state.ts`).
 - **Status transitions are gated.** `completed` can be reopened to `in_progress` or `pending`, but `deleted` is terminal. Reopening lets a premature completion recover without losing the task id and its `blockedBy` edges — matching the harness `TaskUpdate` semantics.
 - **Overlay render is not cached.** `TodoOverlay.render` recomputes `renderOverlayLines` every call, so it is inherently width-correct on resize. It tracks which completed items were shown this turn (a render side effect) so `hideCompletedFromPreviousTurn` (on `agent_start`) can drop them next turn.
 - The overlay body is capped (10 rows), prioritizing non-completed items and showing a `+N more` line when truncated.

@@ -15,18 +15,30 @@ export interface MutationResult {
 	operation: Operation;
 }
 
-let state: TodoState = cloneState(EMPTY_TODO_STATE);
+// ---- per-session state ------------------------------------------------------
+// Keyed by session id like rewind's engine state: one Pi process can host more
+// than one session over its lifetime (resume, /tree branch switches), and a
+// module-level singleton would leak one session's list into another. Tool
+// renderers get no ctx, so the active session is a module-level pointer kept
+// current by execute and the lifecycle handlers (which do have ctx).
+const states = new Map<string, TodoState>();
+let activeSid = "";
+
+/** Point the module at a session's state bucket. Call wherever ctx is in hand. */
+export function setActiveTodoSession(sid: string): void {
+	activeSid = sid;
+}
 
 export function getTodoState(): TodoState {
-	return state;
+	return states.get(activeSid) ?? cloneState(EMPTY_TODO_STATE);
 }
 
 export function replaceTodoState(next: TodoState): void {
-	state = cloneState(next);
+	states.set(activeSid, cloneState(next));
 }
 
 export function commitTodoState(next: TodoState): void {
-	state = cloneState(next);
+	replaceTodoState(next);
 }
 
 export function cloneState(source: TodoState): TodoState {
