@@ -24,6 +24,7 @@
  * All errors are returned as tool_call `{ block, reason }`; Pi surfaces `reason`
  * to the model as an error tool result. No ANSI / colors here (no UI surface).
  */
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -87,11 +88,13 @@ export default function readBeforeEdit(pi: ExtensionAPI): void {
 		}
 
 		if (currentMtime > state.mtime) {
-			// Windows false-positive fallback: identical content ⇒ allow.
+			// Windows false-positive fallback: identical content ⇒ allow. Compares
+			// sha-256 of the RAW bytes — a utf-8 decode would fold invalid sequences
+			// to U+FFFD and could equate two different binary files.
 			let sameContent = false;
-			if (state.content !== undefined) {
+			if (state.contentHash !== undefined) {
 				try {
-					sameContent = readFileSync(abs, "utf8") === state.content;
+					sameContent = hashFile(abs) === state.contentHash;
 				} catch {
 					sameContent = false;
 				}
@@ -101,7 +104,7 @@ export default function readBeforeEdit(pi: ExtensionAPI): void {
 			}
 			// Content matched: refresh the recorded mtime so we don't re-read it
 			// (and re-compare) on every subsequent edit this session.
-			fileState.set(rawPath, { content: state.content, mtime: currentMtime }, ctx.cwd);
+			fileState.set(rawPath, { contentHash: state.contentHash, mtime: currentMtime }, ctx.cwd);
 		}
 		return;
 	});
@@ -113,8 +116,8 @@ export default function readBeforeEdit(pi: ExtensionAPI): void {
 }
 
 /**
- * Capture the current on-disk { content, mtime } for a path into the shared
- * read-state cache. Content is cached only when the file is within the size
+ * Capture the current on-disk { contentHash, mtime } for a path into the shared
+ * read-state cache. The hash is recorded only when the file is within the size
  * budget; otherwise only the mtime is tracked. Failures (vanished file, stat
  * error) are swallowed — a missing entry just means the next edit re-reads.
  */
@@ -122,18 +125,23 @@ function recordReadState(rawPath: string, cwd: string): void {
 	try {
 		const abs = resolvePath(rawPath, cwd);
 		const stat = statSync(abs);
-		let content: string | undefined;
+		let contentHash: string | undefined;
 		if (stat.size <= fileState.MAX_CONTENT_BYTES) {
 			try {
-				content = readFileSync(abs, "utf8");
+				contentHash = hashFile(abs);
 			} catch {
-				content = undefined;
+				contentHash = undefined;
 			}
 		}
-		fileState.set(rawPath, { content, mtime: stat.mtimeMs }, cwd);
+		fileState.set(rawPath, { contentHash, mtime: stat.mtimeMs }, cwd);
 	} catch {
 		// File vanished between the tool run and this event, or stat failed.
 	}
+}
+
+/** sha-256 (hex) of a file's raw bytes. Throws on IO errors; callers handle. */
+function hashFile(absPath: string): string {
+	return createHash("sha256").update(readFileSync(absPath)).digest("hex");
 }
 
 /**

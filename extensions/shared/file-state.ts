@@ -1,8 +1,8 @@
 /**
  * file-state.ts — read-state cache shared by two extensions, deliberately housed
  * in extensions/shared/ rather than inside either one:
- *   - read-before-edit WRITES it: records {content, mtime} on every `read`, and
- *     reads it to enforce "read before edit/write" and "re-read if modified".
+ *   - read-before-edit WRITES it: records {contentHash, mtime} on every `read`,
+ *     and reads it to enforce "read before edit/write" and "re-read if modified".
  *   - rewind INVALIDATES it: calls `del` after a checkpoint restore rewrites files
  *     on disk, so the next edit isn't wrongly blocked as "modified since read".
  *
@@ -11,8 +11,11 @@
  * rewind↔read-before-edit coupling on a neutral shared utility instead of one
  * extension reaching into another's internal modules.
  *
- * Tracks, per absolute file path, the content the model last saw via the `read`
- * tool plus the file's mtime at read time.
+ * Tracks, per absolute file path, a sha-256 of the RAW BYTES the model last saw
+ * via the `read` tool plus the file's mtime at read time. A hash (not decoded
+ * text) is stored deliberately: utf-8 decoding folds invalid sequences to
+ * U+FFFD, which can make two different binary files compare equal — and hashes
+ * keep the cache a few bytes per entry instead of up to 25MB of file contents.
  *
  * Key normalization: callers pass raw paths (possibly relative, possibly with
  * Windows backslashes). We resolve + normalize so that a `read` of "src/a.ts"
@@ -25,27 +28,21 @@
 import path from "node:path";
 
 export interface ReadState {
-	/** Raw text content captured at read time, when small enough to cache. */
-	content?: string;
+	/** sha-256 (hex) of the raw file bytes at read time, when within the size budget. */
+	contentHash?: string;
 	/** File mtime in ms at read time. */
 	mtime: number;
 }
 
-type StoredReadState = ReadState & { contentBytes: number };
-
 /** Upper bound on tracked files. Oldest entry evicted past this. */
 const MAX_ENTRIES = 100;
-/** Upper bound on cached file contents, matching CC's 25MB read-state budget. */
+/**
+ * Upper bound on file sizes we read back just to hash/compare, matching CC's
+ * 25MB read-state budget. Also imported by rewind as its byte-compare guard.
+ */
 export const MAX_CONTENT_BYTES = 25 * 1024 * 1024;
 
-const readFileState = new Map<string, StoredReadState>();
-let totalContentBytes = 0;
-
-function deleteKey(key: string): void {
-	const existing = readFileState.get(key);
-	if (existing) totalContentBytes -= existing.contentBytes;
-	readFileState.delete(key);
-}
+const readFileState = new Map<string, ReadState>();
 
 /**
  * Normalize a path to a stable cache key.
@@ -69,32 +66,25 @@ export function get(rawPath: string, base?: string): ReadState | undefined {
 export function set(rawPath: string, state: ReadState, base?: string): void {
 	const key = normalizeKey(rawPath, base);
 	// Delete first so a refresh moves the entry to the end (newest) of the Map.
-	deleteKey(key);
+	readFileState.delete(key);
+	readFileState.set(key, state);
 
-	const contentBytes = state.content === undefined ? 0 : Buffer.byteLength(state.content, "utf8");
-	const normalizedState: StoredReadState = contentBytes > MAX_CONTENT_BYTES
-		? { mtime: state.mtime, contentBytes: 0 }
-		: { ...state, contentBytes };
-	readFileState.set(key, normalizedState);
-	totalContentBytes += normalizedState.contentBytes;
-
-	while (readFileState.size > MAX_ENTRIES || totalContentBytes > MAX_CONTENT_BYTES) {
+	while (readFileState.size > MAX_ENTRIES) {
 		// Drop the oldest (first-inserted) entry.
 		const oldest = readFileState.keys().next().value;
 		if (oldest === undefined) break;
-		deleteKey(oldest);
+		readFileState.delete(oldest);
 	}
 }
 
 /** Remove a path from the cache. Used by rewind after restoring files. */
 export function del(rawPath: string, base?: string): void {
-	deleteKey(normalizeKey(rawPath, base));
+	readFileState.delete(normalizeKey(rawPath, base));
 }
 
 /** Clear the entire cache. */
 export function clear(): void {
 	readFileState.clear();
-	totalContentBytes = 0;
 }
 
 /** Current number of tracked files (testing/diagnostics). */

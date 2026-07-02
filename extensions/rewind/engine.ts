@@ -30,6 +30,7 @@ import { chmod, copyFile, link, mkdir, readFile, stat, unlink } from "node:fs/pr
 import { dirname, isAbsolute, join, relative } from "node:path";
 
 import { backupsDir } from "./storage.ts";
+import { MAX_CONTENT_BYTES } from "../shared/file-state.ts";
 import type { FileBackup, FileHistorySnapshot } from "./snapshot.ts";
 
 /** Cap on retained snapshots per session (matches CC's MAX_SNAPSHOTS). */
@@ -153,9 +154,15 @@ async function originChanged(sid: string, filePath: string, name: string, hint?:
 	if (orig.mode !== back.mode || orig.size !== back.size) return true;
 	// Original untouched since the backup was written -> unchanged (skip content read).
 	if (orig.mtimeMs < back.mtimeMs) return false;
+	// Memory guard: don't load huge files just to byte-compare; assume changed and
+	// let createBackup stream a new version instead (copyFile never buffers whole files).
+	if (orig.size > MAX_CONTENT_BYTES) return true;
 	try {
-		const [a, b] = await Promise.all([readFile(filePath, "utf-8"), readFile(backupPath, "utf-8")]);
-		return a !== b;
+		// Raw-byte compare. A utf-8 decode maps invalid sequences to U+FFFD, which
+		// can make two DIFFERENT binary files compare equal — and then rewind would
+		// silently skip both the re-backup and the restore.
+		const [a, b] = await Promise.all([readFile(filePath), readFile(backupPath)]);
+		return !a.equals(b);
 	} catch {
 		return true;
 	}
@@ -338,9 +345,42 @@ export function endTurn(
 	state.dirty = false;
 	const frame: FileHistorySnapshot = { ...pending, userEntryId, turnId, prompt, timestamp };
 	state.snapshots.push(frame);
-	if (state.snapshots.length > maxSnapshots) state.snapshots = state.snapshots.slice(-maxSnapshots);
+	if (state.snapshots.length > maxSnapshots) {
+		const dropped = state.snapshots.slice(0, state.snapshots.length - maxSnapshots);
+		state.snapshots = state.snapshots.slice(-maxSnapshots);
+		void pruneDroppedBlobs(sid, dropped, state.snapshots);
+	}
 	state.seq++;
 	return frame;
+}
+
+/**
+ * Best-effort deletion of backup blobs referenced ONLY by frames dropped from
+ * the capped ring. Backups are reused across frames (an unchanged file keeps
+ * pointing at the same version), so a blob is unlinked only when no retained
+ * frame still references it. Without this, the cap trims the in-memory index
+ * while the blob files accumulate for the whole session — gc.ts only reclaims
+ * whole session directories.
+ */
+async function pruneDroppedBlobs(
+	sid: string,
+	dropped: FileHistorySnapshot[],
+	retained: FileHistorySnapshot[],
+): Promise<void> {
+	const live = new Set<string>();
+	for (const snap of retained) {
+		for (const b of Object.values(snap.trackedFileBackups)) {
+			if (b.backupName) live.add(b.backupName);
+		}
+	}
+	const doomed = new Set<string>();
+	for (const snap of dropped) {
+		for (const b of Object.values(snap.trackedFileBackups)) {
+			if (b.backupName && !live.has(b.backupName)) doomed.add(b.backupName);
+		}
+	}
+	if (doomed.size === 0) return;
+	await Promise.allSettled(Array.from(doomed, (name) => unlink(backupPathFor(sid, name))));
 }
 
 // ---- rewind ---------------------------------------------------------------
@@ -411,8 +451,12 @@ export function restoreStateFromSnapshots(
 	cwds.set(sid, cwd);
 	// Apply the same cap on reload so a long session's JSONL can't reinflate the
 	// in-memory ring past the limit. trackedFiles is rebuilt from the retained
-	// frames only (older frames are unreachable for rewind anyway).
+	// frames only (older frames are unreachable for rewind anyway); blobs only
+	// those frames referenced are pruned best-effort, mirroring endTurn.
 	const retained = snapshots.length > maxSnapshots ? snapshots.slice(-maxSnapshots) : snapshots;
+	if (retained.length < snapshots.length) {
+		void pruneDroppedBlobs(sid, snapshots.slice(0, snapshots.length - retained.length), retained);
+	}
 	const trackedFiles = new Set<string>();
 	for (const snap of retained) {
 		for (const key of Object.keys(snap.trackedFileBackups)) trackedFiles.add(key);

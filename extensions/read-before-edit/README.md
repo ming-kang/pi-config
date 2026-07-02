@@ -11,9 +11,9 @@ Mirrors Claude Code's read-before-edit guard: the agent must `read` a file befor
 
 ## Design notes
 
-- **Two hooks, one cache.** `tool_result` records `{ content, mtime }`; `tool_call` (edit/write) gates the operation. The cache is the shared `extensions/shared/file-state.ts` (also invalidated by `rewind`).
+- **Two hooks, one cache.** `tool_result` records `{ contentHash, mtime }` (sha-256 of the raw bytes — decoded-text comparison would fold invalid utf-8 to U+FFFD and could equate different binaries); `tool_call` (edit/write) gates the operation. The cache is the shared `extensions/shared/file-state.ts` (also invalidated by `rewind`).
 - **Read-state is refreshed after the agent's own read, edit, and write** — not only `read`. Otherwise the agent's own edit bumps the file's mtime and content while the cache holds the pre-edit snapshot, so the next edit to the same file is wrongly blocked as "modified since read" (and a write-then-edit fails as "not read yet"). The `tool_call` gate runs *before* each edit, so a genuine external change is still caught first. This mirrors CC's FileWriteTool/FileEditTool.
-- **Content cache bounds.** Raw content is cached only for files within the size budget; the cache is bounded to 100 entries / 25 MB total (FIFO eviction). Oversized files track mtime only and require a re-read when mtime changes.
+- **Content cache bounds.** Only a sha-256 hash is cached (a few bytes per entry), and only for files within the 25 MB hashing budget; the cache is bounded to 100 entries (FIFO eviction). Oversized files track mtime only and require a re-read when mtime changes.
 - A soft `<read_before_edit>` constraint is appended to the system prompt each turn (the base prompt is rebuilt per turn, so it is not duplicated).
 
 ## Files
