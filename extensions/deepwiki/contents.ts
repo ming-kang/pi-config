@@ -20,7 +20,7 @@
 /** Page-header line of a DeepWiki contents response ("# Page: <title>"). */
 export const PAGE_HEADER_RE = /^#\s+Page:\s+(.+)$/;
 
-export const CONTENTS_CHAR_BUDGET = 60_000;
+export const CONTENTS_CHAR_BUDGET = 120_000;
 
 /** Cap for omitted page titles inside the notice — the notice itself is bounded. */
 const OMITTED_TITLES_MAX = 20;
