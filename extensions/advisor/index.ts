@@ -19,7 +19,7 @@ import {
 } from "./constants.ts";
 import { executeAdvisor, type AdvisorDetails } from "./execute.ts";
 import { registerAdvisorCommand } from "./command.ts";
-import { modelKey } from "./config.ts";
+import { modelKey, loadAdvisorConfig } from "./config.ts";
 import { getAdvisorEffort, getAdvisorModel, reconcileAdvisorTool, restoreAdvisorState } from "./restore.ts";
 import { AdvisorParamsSchema } from "./schema.ts";
 
@@ -62,12 +62,17 @@ const ADVISOR_RENDERER = buildStandardRenderer<AdvisorDetails>({
 });
 
 export default function advisor(pi: ExtensionAPI): void {
+	// Optional per-user prompt-copy overrides from advisor.json's `guidance`
+	// block (hand-edited; the /advisor menu doesn't manage it). Read once at
+	// registration — changing it requires /reload, like any registerTool field.
+	const guidance = loadAdvisorConfig().guidance;
+
 	pi.registerTool({
 		name: ADVISOR_TOOL_NAME,
 		label: ADVISOR_LABEL,
 		description: ADVISOR_DESCRIPTION,
-		promptSnippet: DEFAULT_PROMPT_SNIPPET,
-		promptGuidelines: DEFAULT_PROMPT_GUIDELINES,
+		promptSnippet: guidance?.promptSnippet ?? DEFAULT_PROMPT_SNIPPET,
+		promptGuidelines: guidance?.promptGuidelines ?? DEFAULT_PROMPT_GUIDELINES,
 		parameters: AdvisorParamsSchema,
 		renderShell: "self",
 

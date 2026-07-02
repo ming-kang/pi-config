@@ -13,6 +13,8 @@ Run `/advisor` to open a searchable menu:
 
 The setting is stored at `~/.pi/agent/pi-config/advisor.json`, restored on session start, and reconciled on model-select and agent-start. When no reviewer model is selected the tool stays inactive.
 
+`advisor.json` also accepts an optional hand-edited `guidance` block — `{ "guidance": { "promptSnippet": "...", "promptGuidelines": ["..."] } }` — overriding the built-in model-facing prompt copy. It is read once at extension load; `/reload` applies changes.
+
 When called, the `advisor` tool forwards the resolved current session context to the reviewer model with `tools: []` (the reviewer cannot execute tools, read files, or ask follow-up questions). It is a single completion — the packet it receives is everything it sees.
 
 ## Design notes
@@ -31,5 +33,5 @@ When called, the `advisor` tool forwards the resolved current session context to
 - `constants.ts` — `ADVISOR_DESCRIPTION`, `advisorSystemPrompt(mode)`, mode focus table, labels, guidelines
 - `context.ts` — builds the review packet from session messages (flatten, select, label)
 - `execute.ts` — runs the one-shot `completeSimple` call, maps the result
-- `config.ts` / `state.ts` — persisted config and in-memory model/effort state
-- `command.ts` / `reconcile.ts` / `restore.ts` — `/advisor` menu, tool (de)registration, restore
+- `config.ts` — persisted config (model/effort + optional `guidance` prompt-copy overrides)
+- `command.ts` / `restore.ts` — `/advisor` menu; in-memory model/effort state, tool (de)registration (`reconcileAdvisorTool`), session restore
