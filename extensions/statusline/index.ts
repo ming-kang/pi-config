@@ -7,9 +7,9 @@
  *   line 2 (only when set): extension statuses from ctx.ui.setStatus(), e.g. advisor
  *
  * Color mapping (via theme.fg — adapts to any loaded theme, not just ice-cream):
- *   model  -> toolTitle   (cream in ice-cream)
+ *   model  -> toolTitle   (cream in ice-cream-dark)
  *   ctx    -> accent / warning / error  (by usage tier)
- *   cwd    -> success     (sage in ice-cream)
+ *   cwd    -> success     (seafoam in ice-cream-dark)
  *   branch -> accent
  *   effort -> theme.getThinkingBorderColor  (thinking-level gradient)
  *

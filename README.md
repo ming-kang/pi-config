@@ -22,7 +22,8 @@ Each extension's behavior and design notes live in its own README, linked above.
 
 | Theme | What it does |
 |:-:|---|
-| [`ice-cream`](themes/README.md) | Dark pastel Pi theme used with the compact tool renderers and statusline |
+| [`ice-cream-dark`](themes/README.md) | Dark pastel Pi theme used with the compact tool renderers and statusline |
+| [`ice-cream-light`](themes/README.md) | Light counterpart — same semantic mapping, light palette |
 
 Theme details and conventions live in [`themes/README.md`](themes/README.md).
 
