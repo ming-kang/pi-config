@@ -23,6 +23,7 @@ import { type GrepFn, type RestrictedCommand, ToolExecutor } from "./executor.ts
 import { buildSystemPrompt, FINAL_FORCE_ANSWER, getToolDefinitions } from "./prompt.ts";
 import { buildRepoMap } from "./repo-map.ts";
 import { PathSandbox } from "./sandbox.ts";
+import { truncateText } from "../shared/text.ts";
 
 const VIRTUAL_ROOT = "/codebase";
 
@@ -347,6 +348,9 @@ export async function search(opts: SearchOptions): Promise<SearchResult> {
 
 // ─── Result envelope formatting (pure; standalone-testable) ──────────────────
 
+/** Bound for the backend's free-text fallback when it skips the answer protocol. */
+const RAW_RESPONSE_MAX_CHARS = 2000;
+
 export interface FormatOptions {
 	maxTurns: number;
 	maxResults: number;
@@ -386,8 +390,13 @@ export function formatSearchResult(result: SearchResult, fmt: FormatOptions): st
 	const rgPatterns = [...new Set(result.rgPatterns ?? [])].filter((p) => p.length >= 3);
 
 	if (!files.length && !rgPatterns.length) {
-		const raw = result.rawResponse ?? "";
-		return raw ? `No relevant files found.\n\nRaw response:\n${raw}` : "No relevant files found.";
+		const rawFull = result.rawResponse ?? "";
+		if (!rawFull) return "No relevant files found.";
+		const raw =
+			rawFull.length > RAW_RESPONSE_MAX_CHARS
+				? `${truncateText(rawFull, RAW_RESPONSE_MAX_CHARS)}\n[raw response truncated: ${rawFull.length} chars total]`
+				: rawFull;
+		return `No relevant files found.\n\nRaw response:\n${raw}`;
 	}
 
 	const parts: string[] = [];

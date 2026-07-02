@@ -124,4 +124,11 @@ assert.ok(
 	"raw response surfaced when no files",
 );
 
+// A runaway raw response is bounded and carries a truncation notice.
+{
+	const text = formatSearchResult({ files: [], rawResponse: "r".repeat(5000) }, FMT);
+	assert.ok(text.length < 2600, "long raw response bounded");
+	assert.ok(text.includes("[raw response truncated: 5000 chars total]"), "truncation notice present");
+}
+
 console.log("OK search self-test passed");

@@ -26,14 +26,17 @@ export default function fastContext(pi: ExtensionAPI): void {
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const apiKey = getApiKey();
 			if (!apiKey) {
+				// Guard rail: reconcileFastContextTool keeps the tool out of the active
+				// set while no key exists, so this path is near-unreachable — but when
+				// hit, the error must be actionable. Never solicit the key itself.
 				return {
 					content: [
 						{
 							type: "text",
-							text: `Error: ${TOOL_LABEL} is not available in this session.`,
+							text: `Error: ${TOOL_LABEL} is unavailable: no API key is configured. Ask the user to run /fast-context to configure a key (or set the FAST_CONTEXT_KEY environment variable); never ask the user to paste the key into the conversation.`,
 						},
 					],
-					details: { errorMessage: "tool unavailable" },
+					details: { errorMessage: "no API key configured" },
 				};
 			}
 
