@@ -8,6 +8,7 @@ import type {
 } from "@earendil-works/pi-ai/compat";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
 
+import { trimPacketSegments, type PacketSegment } from "./budget.ts";
 import { ADVISOR_TOOL_NAME } from "./constants.ts";
 import type { AdvisorParams } from "./schema.ts";
 
@@ -24,8 +25,9 @@ function stripInflightAdvisorCall(messages: Message[]): Message[] {
 
 /**
  * Flatten message content to plain text. Images become a compact placeholder.
- * Deliberately no truncation: the advisor is a one-shot call, so it gets the full
- * selected context (scope is bounded by previousRuns, not by per-message caps).
+ * No truncation at this layer: segments are flattened whole, and the packet
+ * fuse (buildAdvisorPacket + budget.ts) trims at segment granularity only when
+ * the assembled packet exceeds the reviewer's budget.
  */
 function flattenContent(content: string | (TextContent | ImageContent)[]): string {
 	if (typeof content === "string") return content;
@@ -121,31 +123,84 @@ export function buildAdvisorReviewRequest(params: AdvisorParams): string {
 	].join("\n");
 }
 
-export function buildAdvisorContextText(
-	sessionMessages: Parameters<typeof convertToLlm>[0],
-	previousRuns: number,
-): string {
-	const llmMessages = stripInflightAdvisorCall(convertToLlm(selectSessionMessages(sessionMessages, previousRuns)));
-	if (llmMessages.length === 0) {
-		return "## Related Context\n\nNo session context available.";
-	}
-
-	return ["## Related Context", "", ...llmMessages.map((message, index) => formatMessage(message, index))].join("\n");
+export interface AdvisorPacket {
+	message: UserMessage;
+	/** Final packet length in chars (after any trimming). */
+	packetChars: number;
+	packetTrimmed: boolean;
+	trimmedChars: number;
+	/** True when the packet exceeds the budget even with tool results trimmed. */
+	overBudget: boolean;
 }
 
-export function buildAdvisorMessage(
+function packetMessage(text: string): UserMessage {
+	return {
+		role: "user",
+		content: [{ type: "text", text }],
+		timestamp: Date.now(),
+	};
+}
+
+/**
+ * Build the advisor packet: brief + selected session context, fitted to
+ * `charBudget` (see budget.ts). Below budget the text is byte-identical to the
+ * historical untrimmed packet — the fixed part is measured by subtraction from
+ * the fully assembled text, so no re-formatting is involved. When trimming
+ * kicks in, only tool-result segments are cut and a notice at the top of the
+ * context tells the reviewer what was removed.
+ */
+export function buildAdvisorPacket(
 	params: AdvisorParams,
 	sessionMessages: Parameters<typeof convertToLlm>[0],
 	previousRuns: number,
-): UserMessage {
+	charBudget: number,
+): AdvisorPacket {
+	const brief = buildAdvisorReviewRequest(params);
+	const llmMessages = stripInflightAdvisorCall(convertToLlm(selectSessionMessages(sessionMessages, previousRuns)));
+
+	if (llmMessages.length === 0) {
+		const text = [brief, "## Related Context\n\nNo session context available."].join("\n\n");
+		return {
+			message: packetMessage(text),
+			packetChars: text.length,
+			packetTrimmed: false,
+			trimmedChars: 0,
+			overBudget: text.length > charBudget,
+		};
+	}
+
+	// Segment boundaries follow formatMessage's branches: user/executor text is
+	// never trimmable, everything else (tool results, prior advisor guidance)
+	// is fair game for the fuse.
+	const segments: PacketSegment[] = llmMessages.map((message, index) => ({
+		text: formatMessage(message, index),
+		trimmable: message.role !== "user" && message.role !== "assistant",
+	}));
+
+	const fullText = [brief, ["## Related Context", "", ...segments.map((s) => s.text)].join("\n")].join("\n\n");
+	const fixedChars = fullText.length - segments.reduce((sum, s) => sum + s.text.length, 0);
+	const fit = trimPacketSegments(segments, fixedChars, charBudget);
+
+	if (fit.overBudget || fit.trimmedSegments === 0) {
+		return {
+			message: packetMessage(fullText),
+			packetChars: fullText.length,
+			packetTrimmed: false,
+			trimmedChars: 0,
+			overBudget: fit.overBudget,
+		};
+	}
+
+	const notice = [
+		`> Note: to fit the reviewer's context budget, ${fit.trimmedSegments} tool-result segment(s) below were truncated (${fit.trimmedChars} chars removed), marked inline with "[... truncated ...]".`,
+		"> Treat missing evidence as unverified rather than absent.",
+	].join("\n");
+	const text = [brief, ["## Related Context", "", notice, "", ...fit.texts].join("\n")].join("\n\n");
 	return {
-		role: "user",
-		content: [
-			{
-				type: "text",
-				text: [buildAdvisorReviewRequest(params), buildAdvisorContextText(sessionMessages, previousRuns)].join("\n\n"),
-			},
-		],
-		timestamp: Date.now(),
+		message: packetMessage(text),
+		packetChars: text.length,
+		packetTrimmed: true,
+		trimmedChars: fit.trimmedChars,
+		overBudget: false,
 	};
 }

@@ -12,7 +12,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 import { advisorSystemPrompt } from "./constants.ts";
-import { buildAdvisorMessage } from "./context.ts";
+import { advisorCharBudget } from "./budget.ts";
+import { buildAdvisorPacket } from "./context.ts";
 import { modelKey } from "./config.ts";
 import { getAdvisorEffort, getAdvisorModel } from "./restore.ts";
 import { clampPreviousRuns, type AdvisorParams } from "./schema.ts";
@@ -23,6 +24,9 @@ export interface AdvisorDetails {
 	usage?: Usage;
 	stopReason?: StopReason;
 	errorMessage?: string;
+	/** Assembled packet size in chars, and whether the fuse trimmed it. */
+	packetChars?: number;
+	packetTrimmed?: boolean;
 }
 
 function buildResult(opts: {
@@ -32,6 +36,8 @@ function buildResult(opts: {
 	usage?: Usage;
 	stopReason?: StopReason;
 	errorMessage?: string;
+	packetChars?: number;
+	packetTrimmed?: boolean;
 }): AgentToolResult<AdvisorDetails> {
 	return {
 		content: [{ type: "text", text: opts.text }],
@@ -41,6 +47,8 @@ function buildResult(opts: {
 			...(opts.usage ? { usage: opts.usage } : {}),
 			...(opts.stopReason ? { stopReason: opts.stopReason } : {}),
 			...(opts.errorMessage ? { errorMessage: opts.errorMessage } : {}),
+			...(opts.packetChars !== undefined ? { packetChars: opts.packetChars } : {}),
+			...(opts.packetTrimmed !== undefined ? { packetTrimmed: opts.packetTrimmed } : {}),
 		},
 	};
 }
@@ -91,7 +99,21 @@ export async function executeAdvisor(
 
 	const sessionContext = ctx.sessionManager.buildSessionContext();
 	const previousRuns = clampPreviousRuns(params.previousRuns);
-	const messages = [buildAdvisorMessage(params, sessionContext.messages, previousRuns)];
+	const charBudget = advisorCharBudget(advisor.contextWindow, advisor.maxTokens);
+	const packet = buildAdvisorPacket(params, sessionContext.messages, previousRuns, charBudget);
+
+	// Fuse: refuse before spending a request that the provider would reject.
+	if (packet.overBudget) {
+		return buildResult({
+			text: `Advisor packet (~${packet.packetChars} chars) exceeds the reviewer's context budget (~${charBudget} chars) even after truncating tool results. Retry with previousRuns: 0 and a shorter brief, or select a larger-context reviewer via /advisor.`,
+			advisorModel: advisorLabel,
+			effort,
+			packetChars: packet.packetChars,
+			errorMessage: "advisor packet over budget",
+		});
+	}
+
+	const messages = [packet.message];
 
 	onUpdate?.(
 		buildResult({
@@ -123,6 +145,8 @@ export async function executeAdvisor(
 				usage: response.usage,
 				stopReason: response.stopReason,
 				errorMessage: response.errorMessage ?? "aborted",
+				packetChars: packet.packetChars,
+				packetTrimmed: packet.packetTrimmed,
 			});
 		}
 		if (response.stopReason === "error") {
@@ -133,6 +157,8 @@ export async function executeAdvisor(
 				usage: response.usage,
 				stopReason: response.stopReason,
 				errorMessage: response.errorMessage ?? "unknown error",
+				packetChars: packet.packetChars,
+				packetTrimmed: packet.packetTrimmed,
 			});
 		}
 		if (!responseText) {
@@ -143,6 +169,8 @@ export async function executeAdvisor(
 				usage: response.usage,
 				stopReason: response.stopReason,
 				errorMessage: "empty advisor response",
+				packetChars: packet.packetChars,
+				packetTrimmed: packet.packetTrimmed,
 			});
 		}
 		return buildResult({
@@ -151,6 +179,8 @@ export async function executeAdvisor(
 			effort,
 			usage: response.usage,
 			stopReason: response.stopReason,
+			packetChars: packet.packetChars,
+			packetTrimmed: packet.packetTrimmed,
 		});
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
@@ -159,6 +189,8 @@ export async function executeAdvisor(
 			advisorModel: advisorLabel,
 			effort,
 			errorMessage: message,
+			packetChars: packet.packetChars,
+			packetTrimmed: packet.packetTrimmed,
 		});
 	}
 }
