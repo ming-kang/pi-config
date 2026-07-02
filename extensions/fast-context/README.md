@@ -152,6 +152,8 @@ node extensions/fast-context/protocol.selftest.ts
 node extensions/fast-context/directory-scorer.selftest.ts
 node extensions/fast-context/repo-map.selftest.ts
 node extensions/fast-context/key-format.selftest.ts
+node extensions/fast-context/client.selftest.ts
+node extensions/fast-context/search.selftest.ts
 ```
 
-Changes in `client.ts` or `protocol.ts` also require a live search and `<ANSWER>` round-trip with a real key; selftests do not validate the wire.
+Changes in `client.ts` or `protocol.ts` also require a live search and `<ANSWER>` round-trip with a real key; the client/search selftests cover the pure parsing/trim/format layer but not the wire.

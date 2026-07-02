@@ -81,8 +81,10 @@ export interface SearchResult {
  * inserts a short summary, and preserves the most recent tool-call ↔ tool-result
  * pair intact (the Devin/swe-grep protocol links them by id, so they must travel
  * together). Returns true only if it actually shrank anything.
+ *
+ * Exported for search.selftest.ts (pure).
  */
-function trimMessages(messages: ChatMessage[], query: string): boolean {
+export function trimMessages(messages: ChatMessage[], query: string): boolean {
 	if (messages.length < 2) return false;
 	const system = messages[0]!;
 	const user = messages[1]!;
@@ -128,8 +130,12 @@ function trimMessages(messages: ChatMessage[], query: string): boolean {
 	return true;
 }
 
-/** Parse the <ANSWER> XML into files, mapping /codebase paths to real paths (sandboxed). */
-function parseAnswer(xmlText: string, sandbox: PathSandbox): SearchFile[] {
+/**
+ * Parse the <ANSWER> XML into files, mapping /codebase paths to real paths
+ * (sandboxed). Exported for search.selftest.ts — the sandbox refusal here is
+ * security-relevant (every model-supplied path goes through toReal).
+ */
+export function parseAnswer(xmlText: string, sandbox: PathSandbox): SearchFile[] {
 	const files: SearchFile[] = [];
 	const fileRegex = /<file\s+path=(["'])([^"']+)\1>([\s\S]*?)<\/file>/g;
 	let fm: RegExpExecArray | null;
