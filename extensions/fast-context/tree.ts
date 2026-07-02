@@ -10,34 +10,16 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
+/**
+ * Noise directories hidden from the repo map by default — the canonical list
+ * lives in excludes.ts (shared with directory-scorer.ts so the tree and the
+ * hotspot ranking always hide the same names). Re-exported here so repo-map.ts
+ * and selftests keep importing it from the tree module.
+ */
+export { DEFAULT_EXCLUDES } from "./excludes.ts";
+
 /** Payload budget for a rendered repo map (~server limit minus overhead). */
 export const MAX_TREE_BYTES = 250 * 1024;
-
-/**
- * Noise directories hidden from the repo map by default. The model can still
- * search inside them with an explicit rg path — this only declutters the
- * orientation tree (and keeps it under the payload cap).
- */
-export const DEFAULT_EXCLUDES = [
-	"node_modules",
-	".git",
-	"dist",
-	"build",
-	"coverage",
-	".venv",
-	"venv",
-	"target",
-	"out",
-	".cache",
-	"__pycache__",
-	"vendor",
-	"deps",
-	"third_party",
-	"logs",
-	".next",
-	".turbo",
-	".idea",
-];
 
 /**
  * Extract simple directory-name patterns from the project's `.gitignore` (and

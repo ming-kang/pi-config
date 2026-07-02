@@ -4,6 +4,12 @@
  * are tuned for that model, so they are reproduced exactly (including the
  * `{{`/`}}` in the example and the `{max_*}` placeholders that buildSystemPrompt
  * fills in).
+ *
+ * The exclude list in FAST-SEARCH DEFAULTS deliberately does NOT derive from
+ * excludes.ts (the canonical local list shared by tree.ts/directory-scorer.ts):
+ * rewriting model-facing prompt copy would break the verbatim-upstream contract
+ * and requires live backend validation. Local behavior and prompt advice may
+ * therefore differ slightly — that is a conscious trade.
  */
 
 const SYSTEM_PROMPT_TEMPLATE = `You are an expert software engineer, responsible for providing context \

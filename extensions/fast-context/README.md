@@ -133,6 +133,7 @@ extensions/fast-context/
   directory-scorer.ts   Local hotspot scoring with an injected grep probe
   executor.ts           Restricted command execution, every path sandboxed
   tree.ts               Native directory-tree renderer
+  excludes.ts           Canonical noise-dir list shared by tree + scorer
   sandbox.ts            Path containment security core
   client.ts             Auth, JWT, metadata, streaming, parsing
   protocol.ts           Protobuf encoding/decoding, Connect-RPC framing
