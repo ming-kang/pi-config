@@ -1,7 +1,7 @@
 /**
  * json-store.ts — shared tolerant JSON config load/save.
  *
- * Every pi-config extension that persists a JSON config file (advisor, rewind)
+ * Every pi-config extension that persists a JSON config file (statusline, rewind)
  * used to inline the same boilerplate: missing-file → fallback, corrupt JSON →
  * fallback, save = mkdir(dirname) + write pretty JSON + try/catch → boolean.
  * Routing both through here collapses that duplication and keeps the on-disk

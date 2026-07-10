@@ -8,11 +8,12 @@
  *
  * Layout:
  *   <agentDir>/pi-config/
- *     advisor.json                       advisor config (see advisor/config.ts)
  *     statusline.json                    statusline settings (see statusline/config.ts)
  *     rewind/
  *       config.json                      rewind settings { enabled, retentionDays, maxSnapshots }
  *       backups/<sessionId>/<hash>@v<n>  rewind file-history backup blobs
+ *     fast-context/
+ *       config.json                      Fast Context API key (see fast-context/storage.ts)
  */
 import { join } from "node:path";
 
@@ -21,11 +22,6 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 /** Root for all pi-config persistent state: `<agentDir>/pi-config`. */
 export function piConfigDir(): string {
 	return join(getAgentDir(), "pi-config");
-}
-
-/** advisor's config file. */
-export function advisorConfigPath(): string {
-	return join(piConfigDir(), "advisor.json");
 }
 
 /** statusline's settings file. */

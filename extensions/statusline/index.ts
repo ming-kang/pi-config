@@ -4,7 +4,7 @@
  * Replaces Pi's built-in footer with a compact, color-coded status line:
  *   left:  Model · Effort · ctx 23% · ~cwd · branch
  *   right: ↑in ↓out Rcache $cost   (each part omitted when zero)
- *   line 2 (only when set): extension statuses from ctx.ui.setStatus(), e.g. advisor
+ *   line 2 (only when set): extension statuses from ctx.ui.setStatus()
  *
  * Color mapping (via theme.fg — adapts to any loaded theme, not just ice-cream):
  *   model  -> toolTitle   (cream in ice-cream-dark)
@@ -173,9 +173,9 @@ export default function (pi: ExtensionAPI) {
 							: left + " ".repeat(width - leftW - rightW) + right;
 					const lines = [mainLine];
 
-					// Extension statuses (e.g. advisor) on a second line, mirroring Pi's
-					// built-in footer. The custom footer replaces the built-in, so without
-					// this any ctx.ui.setStatus() text would silently vanish. Sorted by key.
+					// Extension statuses on a second line, mirroring Pi's built-in footer.
+					// The custom footer replaces the built-in, so without this any
+					// ctx.ui.setStatus() text would silently vanish. Sorted by key.
 					if (config.showStatusLine2) {
 						const statuses = footerData.getExtensionStatuses();
 						if (statuses.size > 0) {

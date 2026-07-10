@@ -2,8 +2,8 @@
  * constants.ts — question tool identity + prompt copy.
  *
  * Name/label/description/promptSnippet/promptGuidelines live here so
- * `index.ts` only assembles the tool, matching the advisor/constants.ts
- * pattern. Prompt copy is the model-facing contract; keep it stable.
+ * `index.ts` only assembles the tool. Prompt copy is the model-facing
+ * contract; keep it stable.
  */
 
 export const QUESTION_TOOL_NAME = "question";

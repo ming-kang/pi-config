@@ -3,7 +3,7 @@
  *
  * Consolidates two patterns that were duplicated across extensions:
  *   - `firstLine(text, fallback)` — the `text.split("\n")[0] || fallback` idiom
- *     used by 5 collapsed-error renderers (advisor, todo, tools-view read/edit/write).
+ *     used by collapsed-error renderers (todo, tools-view read/edit/write).
  *   - `truncateText(text, max, opts?)` — a thin wrapper over pi-tui's
  *     `truncateToWidth`/string slicing, replacing 3 local `truncate` defs
  *     (deepwiki x2, rewind x1). Default ellipsis is `...` (SPEC F6: pi-config's

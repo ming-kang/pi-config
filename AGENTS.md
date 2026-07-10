@@ -39,7 +39,7 @@ This file governs work on the code here: cross-cutting conventions live in this 
 - **Standard renderers:** prefer `buildStandardRenderer<TDetails>()` from `tools-view/shared.ts` for tools with the usual call / partial / error / collapsed / expanded flow. Use a custom renderer only when the result envelope needs domain-specific formatting.
 - **Model-facing prompt copy:** for multi-file tools, keep name/label/description/promptSnippet/promptGuidelines in `constants.ts` and let `index.ts` assemble the tool. Each `promptGuidelines` bullet is appended flatly, so explicitly name the tool; schema field descriptions should guide argument construction.
 - **Bounded model-facing output:** tool results returned to the model must be bounded — when a source can be arbitrarily large, truncate at a documented budget and append a notice stating what was omitted and how to get it (remaining items, a narrower action, or a follow-up query).
-- **hasUI guard rule:** when interactive UI is unavailable, behavior depends on the call origin — **command handlers** (`/advisor`, `/todos`, `/rewind`, …) `ctx.ui.notify("… requires an interactive UI.", "warning")` then return; **lifecycle/event handlers** (`session_start`, `session_before_tree`, `session_shutdown`, …) may silent-return; **tool `execute`** returns an error result (e.g. `errorResult("no_ui", …)`). Use `requireInteractiveUI` from `../shared/extension-ui.ts` for command handlers when it fits. Never assume `ctx.hasUI` is true in any context; never assume `ctx.mode === "tui"` outside terminal-only rendering (footer/widgets).
+- **hasUI guard rule:** when interactive UI is unavailable, behavior depends on the call origin — **command handlers** (`/todos`, `/rewind`, `/statusline`, `/fast-context`, …) `ctx.ui.notify("… requires an interactive UI.", "warning")` then return; **lifecycle/event handlers** (`session_start`, `session_before_tree`, `session_shutdown`, …) may silent-return; **tool `execute`** returns an error result (e.g. `errorResult("no_ui", …)`). Use `requireInteractiveUI` from `../shared/extension-ui.ts` for command handlers when it fits. Never assume `ctx.hasUI` is true in any context; never assume `ctx.mode === "tui"` outside terminal-only rendering (footer/widgets).
 - **Guiding rule:** make the smallest possible change to Pi's behavior, reusing native mechanisms, to arrive at an experience that feels like Claude Code. Document unavoidable upstream limits in the extension's header comment.
 
 ## Safety Rails
@@ -60,7 +60,7 @@ This file governs work on the code here: cross-cutting conventions live in this 
 
 ## Per-extension design notes
 
-[`advisor`](extensions/advisor/README.md) · [`deepwiki`](extensions/deepwiki/README.md) · [`fast-context`](extensions/fast-context/README.md) · [`question`](extensions/question/README.md) · [`todo`](extensions/todo/README.md) · [`rewind`](extensions/rewind/README.md) · [`read-before-edit`](extensions/read-before-edit/README.md) · [`tools-view`](extensions/tools-view/README.md) · [`statusline`](extensions/statusline/README.md)
+[`deepwiki`](extensions/deepwiki/README.md) · [`fast-context`](extensions/fast-context/README.md) · [`question`](extensions/question/README.md) · [`todo`](extensions/todo/README.md) · [`rewind`](extensions/rewind/README.md) · [`read-before-edit`](extensions/read-before-edit/README.md) · [`tools-view`](extensions/tools-view/README.md) · [`statusline`](extensions/statusline/README.md)
 
 ## Compact Instructions
 

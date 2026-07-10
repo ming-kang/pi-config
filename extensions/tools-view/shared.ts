@@ -110,8 +110,8 @@ export function errLine(message: string, theme: Theme): string {
  * (`expanded === true`): `errLine`'s `● error` bullet form. Callers wrap the
  * returned string in `new Text(..., 0, 0)`.
  *
- * SPEC F7: codifies the collapsed-vs-expanded convention so advisor/question/todo
- * render errors the same way deepwiki already did.
+ * SPEC F7: codifies the collapsed-vs-expanded convention so question/todo/deepwiki
+ * render errors the same way.
  */
 export function errorResultLine(message: string, expanded: boolean, theme: Theme): string {
 	return expanded ? errLine(message, theme) : resultLine(message, theme, "error");
@@ -149,10 +149,8 @@ export function indentedOutput(lines: string[], theme: Theme): string {
 
 /**
  * The expanded tool-result block: a top spacer + the result text rendered as
- * Markdown with pi's markdown theme (via `getMarkdownTheme()`). This is the
- * byte-identical block that was inlined in `advisor/index.ts` and
- * `deepwiki/index.ts`; factored here so both (and future tools) share one
- * implementation.
+ * Markdown with pi's markdown theme (via `getMarkdownTheme()`). Factored here
+ * so deepwiki and other tools share one implementation.
  */
 export function markdownResultBlock(text: string): Component {
 	const container = new Container();
