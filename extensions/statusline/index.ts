@@ -87,20 +87,18 @@ function joinSegments(segments: string[], separator: string): string {
 	return segments.filter((segment) => segment.length > 0).join(separator);
 }
 
-/** Read the latest thinking level recorded on the active session branch. */
-function getCurrentThinkingLevel(branchEntries: SessionEntry[]): ThinkingLevel {
-	let thinkingLevel: ThinkingLevel = "off";
-	for (const entry of branchEntries) {
-		if (entry.type === "thinking_level_change") {
-			thinkingLevel = entry.thinkingLevel as ThinkingLevel;
-		}
-	}
-	return thinkingLevel;
+interface BranchStats {
+	thinkingLevel: ThinkingLevel;
+	usage: UsageSummary;
 }
 
-/** Aggregate usage totals and the latest request's cache-hit percentage. */
-function summarizeUsage(branchEntries: SessionEntry[]): UsageSummary {
-	const summary: UsageSummary = {
+/**
+ * One pass over the branch: latest thinking level + cumulative usage.
+ * Cached across footer renders while the leaf entry identity is unchanged.
+ */
+function computeBranchStats(branchEntries: SessionEntry[]): BranchStats {
+	let thinkingLevel: ThinkingLevel = "off";
+	const usage: UsageSummary = {
 		inputTokens: 0,
 		outputTokens: 0,
 		cacheReadTokens: 0,
@@ -109,6 +107,10 @@ function summarizeUsage(branchEntries: SessionEntry[]): UsageSummary {
 	};
 
 	for (const entry of branchEntries) {
+		if (entry.type === "thinking_level_change") {
+			thinkingLevel = entry.thinkingLevel as ThinkingLevel;
+			continue;
+		}
 		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
 		const assistantMessage = entry.message as AssistantMessage;
 		const inputTokens = assistantMessage.usage?.input ?? 0;
@@ -116,21 +118,40 @@ function summarizeUsage(branchEntries: SessionEntry[]): UsageSummary {
 		const cacheReadTokens = assistantMessage.usage?.cacheRead ?? 0;
 		const cacheWriteTokens = assistantMessage.usage?.cacheWrite ?? 0;
 
-		summary.inputTokens += inputTokens;
-		summary.outputTokens += outputTokens;
-		summary.cacheReadTokens += cacheReadTokens;
-		summary.cacheWriteTokens += cacheWriteTokens;
-		summary.totalCost += assistantMessage.usage?.cost?.total ?? 0;
+		usage.inputTokens += inputTokens;
+		usage.outputTokens += outputTokens;
+		usage.cacheReadTokens += cacheReadTokens;
+		usage.cacheWriteTokens += cacheWriteTokens;
+		usage.totalCost += assistantMessage.usage?.cost?.total ?? 0;
 
 		const latestPromptTokens = inputTokens + cacheReadTokens + cacheWriteTokens;
 		const latestRequestUsedCache = cacheReadTokens > 0 || cacheWriteTokens > 0;
-		summary.latestCacheHitPercent =
+		usage.latestCacheHitPercent =
 			latestRequestUsedCache && latestPromptTokens > 0
 				? (cacheReadTokens / latestPromptTokens) * 100
 				: undefined;
 	}
 
-	return summary;
+	return { thinkingLevel, usage };
+}
+
+/** Cache keyed by branch length + last-entry reference (survives new array wrappers). */
+interface BranchStatsCache {
+	length: number;
+	lastEntry: SessionEntry | undefined;
+	stats: BranchStats;
+}
+
+function getBranchStats(branchEntries: SessionEntry[], cache: { current: BranchStatsCache | null }): BranchStats {
+	const lastEntry = branchEntries.length > 0 ? branchEntries[branchEntries.length - 1] : undefined;
+	const cached = cache.current;
+	if (cached && cached.length === branchEntries.length && cached.lastEntry === lastEntry) {
+		return cached.stats;
+	}
+
+	const stats = computeBranchStats(branchEntries);
+	cache.current = { length: branchEntries.length, lastEntry, stats };
+	return stats;
 }
 
 function formatContextUsage(ctx: ExtensionContext, theme: Theme): string {
@@ -320,24 +341,27 @@ export default function statusline(pi: ExtensionAPI): void {
 	pi.on("session_start", (_event, ctx) => {
 		if (!isTui(ctx)) return;
 
+		// Per-footer instance: one branch walk per invalidation, not two every paint.
+		const branchStatsCache: { current: BranchStatsCache | null } = { current: null };
+
 		ctx.ui.setFooter((tui, theme, footerData) => {
 			const unsubscribeFromBranchChanges = footerData.onBranchChange(() => tui.requestRender());
 			return {
 				dispose: unsubscribeFromBranchChanges,
-				invalidate() {},
+				invalidate() {
+					branchStatsCache.current = null;
+				},
 				render(width: number): string[] {
 					const branchEntries = ctx.sessionManager.getBranch();
+					const { thinkingLevel, usage: usageSummary } = getBranchStats(branchEntries, branchStatsCache);
 					const model = ctx.model;
 					const modelName = theme.fg("toolTitle", theme.bold(model?.name ?? model?.id ?? "no-model"));
 					const providerPart = model?.provider ? theme.fg("muted", `(${model.provider})`) : "";
 					const modelWithProvider = providerPart ? `${modelName} ${providerPart}` : modelName;
 
 					let effortPart = "";
-					if (model?.reasoning) {
-						const thinkingLevel = getCurrentThinkingLevel(branchEntries);
-						if (thinkingLevel !== "off") {
-							effortPart = theme.getThinkingBorderColor(thinkingLevel)(thinkingLevel);
-						}
+					if (model?.reasoning && thinkingLevel !== "off") {
+						effortPart = theme.getThinkingBorderColor(thinkingLevel)(thinkingLevel);
 					}
 
 					const separator = theme.fg("dim", " · ");
@@ -360,7 +384,6 @@ export default function statusline(pi: ExtensionAPI): void {
 					});
 
 					const contextText = formatContextUsage(ctx, theme);
-					const usageSummary = summarizeUsage(branchEntries);
 					const usesSubscription = model ? ctx.modelRegistry.isUsingOAuth(model) : false;
 					const usageCandidates = [
 						formatUsageSummary(usageSummary, usesSubscription, theme, {
