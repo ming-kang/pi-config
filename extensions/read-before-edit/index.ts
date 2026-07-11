@@ -27,14 +27,8 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-// The read-state cache lives in extensions/shared/ (not inside this extension)
-// because rewind also imports it to invalidate entries after a checkpoint
-// restore — it is a shared utility, not this extension's private module.
-import * as fileState from "../shared/file-state.ts";
-import { appendSoftConstraint } from "../shared/extension-ui.ts";
-// Path extraction/resolution is shared with rewind so the two lifecycle
-// extensions agree on "which file did this edit/write touch".
-import { editWriteTargetPath, resolveToolPath } from "../shared/tool-path.ts";
+import * as fileState from "./file-state.ts";
+import { editWriteTargetPath, resolveToolPath } from "./tool-path.ts";
 
 // Error messages are kept byte-for-byte identical to Claude Code so behavior
 // (and any downstream prompting the model has learned) stays consistent.
@@ -113,12 +107,26 @@ export default function readBeforeEdit(pi: ExtensionAPI): void {
 
 	// ---- soft constraint ----------------------------------------------------
 	pi.on("before_agent_start", (event) => {
-		return appendSoftConstraint(event, "read_before_edit", SOFT_CONSTRAINT_LINES);
+		return {
+			systemPrompt: [
+				event.systemPrompt,
+				"",
+				"<read_before_edit>",
+				...SOFT_CONSTRAINT_LINES,
+				"</read_before_edit>",
+			].join("\n"),
+		};
+	});
+
+	// Tree navigation may restore files through another independent extension.
+	// Conservatively require fresh reads regardless of whether files changed.
+	pi.on("session_tree", () => {
+		fileState.clear();
 	});
 }
 
 /**
- * Capture the current on-disk { contentHash, mtime } for a path into the shared
+ * Capture the current on-disk { contentHash, mtime } for a path into the local
  * read-state cache. The hash is recorded only when the file is within the size
  * budget; otherwise only the mtime is tracked. Failures (vanished file, stat
  * error) are swallowed — a missing entry just means the next edit re-reads.

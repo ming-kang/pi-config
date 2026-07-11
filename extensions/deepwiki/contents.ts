@@ -59,7 +59,7 @@ function pageOffsets(text: string): PageChunk[] {
  * Hard-cut `text` to at most `budget` chars, preferring the last newline within
  * the budget so the cut lands between lines. A newline too close to the start
  * (< 40% of the budget) is ignored — a hard cut keeps more content than a tiny
- * stub, mirroring shared/text.ts's word-boundary heuristic.
+ * stub, using the same word-boundary heuristic as other bounded text output.
  */
 function cutAtLineBoundary(text: string, budget: number): string {
 	if (text.length <= budget) return text;

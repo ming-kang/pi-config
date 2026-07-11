@@ -57,10 +57,9 @@ compaction; the index is rebuilt from them on `session_start`.
 - **Restore safety.** `applySnapshot` only rewrites files that differ and never
   throws out — an unreadable backup degrades to "leave the file alone", so a
   broken backup can never abort the user's session.
-- **read-before-edit coupling.** After a restore rewrites files, stale
-  read-before-edit cache entries for changed paths are dropped (`restore.ts` via
-  the shared `file-state.ts`), so the next edit isn't wrongly blocked as
-  "modified since read".
+- **Independent read safety.** Rewind owns only backup and restore behavior. The
+  separate read-before-edit plugin conservatively clears its own cache after
+  every `/tree` navigation, so the plugins do not share mutable state.
 - **Change detection.** A file is re-backed-up only when its stat (mode/size) or
   content differs from its latest backup; an `mtime` older than the backup skips
   the content read entirely.
@@ -76,7 +75,8 @@ compaction; the index is rebuilt from them on `session_start`.
 - `config.ts` — load/save `rewind/config.json`
 - `gc.ts` — age + orphan storage reclamation; storage inventory for the menu
 - `menu.ts` — the `/rewind` settings + storage menu
-- `restore.ts` — `/tree`-target → snapshot matching, restore, read-state invalidation
+- `restore.ts` — `/tree`-target → snapshot matching and restore
+- `paths.ts`, `text.ts`, `tool-path.ts` — private helpers owned by this plugin
 
 Architecture informed by oh-my-pi (GPL-3.0) and Claude Code's file-history;
 independent implementation.

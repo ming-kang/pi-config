@@ -1,18 +1,7 @@
 /**
  * restore.ts — map a /tree navigation target to the snapshot that should be
- * restored, apply it via the engine, and keep the read-before-edit cache
- * consistent afterwards.
- *
- * The readFileState sync couples rewind with read-before-edit through their
- * shared read-cache module (extensions/shared/file-state.ts): after we rewrite
- * files on disk, any path the model had "read" is now stale, so we drop those
- * cache entries. Without this, the next edit would be wrongly blocked as
- * "modified since read".
+ * restored and apply it via the engine.
  */
-// Shared read-cache contract (extensions/shared/file-state.ts): read-before-edit
-// records reads into it; rewind drops stale entries here after rewriting files.
-import { del as dropReadState } from "../shared/file-state.ts";
-import { resolveToolPath } from "../shared/tool-path.ts";
 import { applySnapshot, collectChanges } from "./engine.ts";
 import type { FileHistorySnapshot } from "./snapshot.ts";
 
@@ -60,18 +49,11 @@ export function snapshotChangedPaths(sessionId: string, snapshot: FileHistorySna
 }
 
 /**
- * Restore the work tree to `snapshot` and drop read-before-edit cache entries for
- * every file that changed, so the next edit isn't wrongly blocked as stale.
- * Returns the list of changed file paths (absolute).
+ * Restore the work tree to `snapshot` and return changed absolute paths.
  */
 export async function restoreToSnapshot(
 	sessionId: string,
 	snapshot: FileHistorySnapshot,
 ): Promise<string[]> {
-	const changed = await applySnapshot(sessionId, snapshot);
-	for (const filePath of changed) {
-		// applySnapshot returns absolute paths; resolve defensively anyway.
-		dropReadState(resolveToolPath(filePath, process.cwd()));
-	}
-	return changed;
+	return applySnapshot(sessionId, snapshot);
 }

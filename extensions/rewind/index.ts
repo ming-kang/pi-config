@@ -20,8 +20,8 @@
  *
  * Restore safety: applySnapshot only rewrites files that differ and never throws
  * out — a broken backup degrades to "leave the file alone", so it can never abort
- * the user's session. After a restore we drop stale read-before-edit cache entries
- * (restore.ts) so the next edit isn't wrongly blocked.
+ * the user's session. read-before-edit independently invalidates its cache after
+ * every /tree navigation.
  *
  * Architecture informed by oh-my-pi (GPL-3.0) and Claude Code's file-history;
  * independent implementation. No ANSI: all UI is native (ctx.ui.* + theme).
@@ -31,11 +31,6 @@ import path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { rewindBackupsRoot, sessionsDir } from "../shared/paths.ts";
-import { truncateText } from "../shared/text.ts";
-// Path extraction/resolution is shared with read-before-edit so both lifecycle
-// extensions agree on "which file did this edit/write touch".
-import { editWriteTargetPath, resolveToolPath } from "../shared/tool-path.ts";
 import { type RewindConfig, loadRewindConfig } from "./config.ts";
 import {
 	beginTurn,
@@ -49,13 +44,16 @@ import {
 } from "./engine.ts";
 import { runGc, sessionIdFromFile } from "./gc.ts";
 import { runRewindMenu } from "./menu.ts";
+import { rewindBackupsRoot, sessionsDirectory } from "./paths.ts";
 import { restoreToSnapshot, snapshotChangedPaths, snapshotForEntry } from "./restore.ts";
 import { type FileHistorySnapshot, SNAPSHOT_ENTRY_TYPE, isSnapshot } from "./snapshot.ts";
 import { configureStorage } from "./storage.ts";
+import { truncateText } from "./text.ts";
+import { editWriteTargetPath, resolveToolPath } from "./tool-path.ts";
 
 // Bind the engine/gc storage roots to the real on-disk locations (they avoid
 // importing paths.ts directly so they stay node-testable). Safe to call at load.
-configureStorage({ backupsRoot: rewindBackupsRoot(), sessionsRoot: sessionsDir() });
+configureStorage({ backupsRoot: rewindBackupsRoot(), sessionsRoot: sessionsDirectory() });
 
 // Global (one config.json). Refreshed at session_start and each turn boundary so
 // /rewind menu changes take effect without a reload.

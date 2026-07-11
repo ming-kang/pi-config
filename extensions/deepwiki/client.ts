@@ -1,4 +1,4 @@
-import { fetchWithRetry } from "../shared/http.ts";
+import { fetchWithRetry } from "./http.ts";
 import { PAGE_HEADER_RE } from "./contents.ts";
 import { normalizeDeepWikiParams, type DeepWikiParams } from "./schema.ts";
 
@@ -210,7 +210,7 @@ export async function callDeepWiki(params: DeepWikiParams, signal: AbortSignal |
 		},
 	});
 
-	// Timeout + bounded transient retry live in shared/http.ts; non-retryable
+	// Timeout + bounded transient retry live in this extension's http.ts; non-retryable
 	// statuses come back here for the domain-specific HTTP error below.
 	const { response, text } = await fetchWithRetry(
 		DEEPWIKI_MCP_URL,

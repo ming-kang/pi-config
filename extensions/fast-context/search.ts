@@ -23,7 +23,7 @@ import { type GrepFn, type RestrictedCommand, ToolExecutor } from "./executor.ts
 import { buildSystemPrompt, FINAL_FORCE_ANSWER, getToolDefinitions } from "./prompt.ts";
 import { buildRepoMap } from "./repo-map.ts";
 import { PathSandbox } from "./sandbox.ts";
-import { truncateText } from "../shared/text.ts";
+import { truncateText } from "./text.ts";
 
 const VIRTUAL_ROOT = "/codebase";
 

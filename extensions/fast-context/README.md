@@ -64,7 +64,7 @@ Poor use cases:
 
 Write queries as short natural-language problem statements, preferably in English, with domain terms when useful. Results include paths, line ranges, and grep keywords only. Treat returned files as candidate context, not proof.
 
-In the TUI, you will see real-time progress: authentication, building the repo map, and each planning/execution round. Results display collapsed by default, showing file count and grep keywords, and expand to show the full result envelope.
+In the TUI, Pi's native tool UI shows real-time progress updates for authentication, repo-map construction, and each planning/execution round. The final result envelope uses Pi's standard tool-result presentation.
 
 ### Parameters
 
@@ -125,10 +125,9 @@ extensions/fast-context/
   storage.ts            Persist key to ~/.pi/agent/pi-config/fast-context/config.json
   commands.ts           /fast-context command for setting/clearing key
   execute.ts            Pi-side orchestration: project_path scope, result envelope
-  render.ts             Tool render: call, partial, collapsed, expanded states
-  render-format.ts      Fast Context-specific collapsed summary and envelope coloring
   grep-backend.ts       Pi grep wrapper, reusing Pi's ripgrep
   search.ts             Search loop and lightweight result formatting
+  text.ts               Private bounded-text helper
   repo-map.ts           Classic/hotspot repo-map assembly
   directory-scorer.ts   Local hotspot scoring with an injected grep probe
   executor.ts           Restricted command execution, every path sandboxed
@@ -139,7 +138,7 @@ extensions/fast-context/
   protocol.ts           Protobuf encoding/decoding, Connect-RPC framing
 ```
 
-Zero runtime dependencies: all peer dependencies resolve to Pi's bundled versions. File I/O uses `node:fs`; compression uses `node:zlib`; rendering primitives come from `../tools-view/shared.ts`.
+Zero runtime dependencies: all peer dependencies resolve to Pi's bundled versions. File I/O uses `node:fs`; compression uses `node:zlib`; tool presentation uses Pi's native UI.
 
 ## Verification
 

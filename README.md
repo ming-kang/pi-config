@@ -8,7 +8,6 @@ This Pi package contains commonly used extensions and themes, maintained for per
 |:-:|---|
 | [`question`](extensions/question/README.md) | `question` tool — multiple-choice prompts to the user, including multi-select and custom "Other" answers |
 | [`statusline`](extensions/statusline/README.md) | Compact color-coded footer (model · effort · ctx% · cwd · branch · tokens · cost) with a `/statusline` settings menu |
-| [`tools-view`](extensions/tools-view/README.md) | Compact rendering for built-in tools (read/bash/edit/write) and **central style hub** — all extensions import rendering primitives from `tools-view/shared.ts` |
 | [`deepwiki`](extensions/deepwiki/README.md) | `deepwiki` tool — query DeepWiki repository docs for GitHub repos without adding generic MCP support to Pi |
 | [`fast-context`](extensions/fast-context/README.md) | `fast_context_search` tool + `/fast-context` command — Pi-native semantic code retrieval via Devin's hosted Fast Context backend |
 | [`rewind`](extensions/rewind/README.md) | Per-edit file backups; restore via `/tree`, settings & storage via `/rewind` |
@@ -21,7 +20,7 @@ Each extension's behavior and design notes live in its own README, linked above.
 
 | Theme | What it does |
 |:-:|---|
-| [`ice-cream-dark`](themes/README.md) | Dark pastel Pi theme used with the compact tool renderers and statusline |
+| [`ice-cream-dark`](themes/README.md) | Dark pastel Pi theme used with the native UI and statusline |
 | [`ice-cream-light`](themes/README.md) | Light counterpart — same semantic mapping, light palette |
 
 Theme details and conventions live in [`themes/README.md`](themes/README.md).
@@ -47,7 +46,7 @@ Installing without a ref (no `@v1.0.0`) tracks the default branch, so `pi update
 
 ## Development
 
-Working on this package? Read [`AGENTS.md`](AGENTS.md) first — it documents the design conventions (centralized rendering, extension structure, per-extension decisions) that keep the extensions consistent.
+Working on this package? Read [`AGENTS.md`](AGENTS.md) first — it documents the self-contained extension boundaries and per-extension decisions that keep the package maintainable.
 
 To try local changes without installing, disable installed extensions and load this checkout for the session only:
 

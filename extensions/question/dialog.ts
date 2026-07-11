@@ -8,8 +8,8 @@ import {
 	type TUI,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
-import { ruleBorder, wrapWithPrefix } from "../shared/dialog-primitives.ts";
-import { WidthCachedRender } from "../shared/render-cache.ts";
+import { ruleBorder, wrapWithPrefix } from "./dialog-primitives.ts";
+import { WidthCachedRender } from "./render-cache.ts";
 import {
 	displayOptions,
 	hasAnswer,

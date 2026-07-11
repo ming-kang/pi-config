@@ -28,11 +28,14 @@
  * session_start (the render callback runs every frame; no disk reads there).
  */
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { isTui } from "../shared/extension-ui.ts";
 import { loadStatuslineConfig } from "./config.ts";
 import { runStatuslineMenu } from "./menu.ts";
+
+function isTui(ctx: ExtensionContext): boolean {
+	return ctx.mode === "tui";
+}
 
 /** Shorten a path to ~ relative to home. */
 function shortCwd(cwd: string): string {

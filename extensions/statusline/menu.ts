@@ -8,7 +8,6 @@
  */
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
-import { requireInteractiveUI } from "../shared/extension-ui.ts";
 import { loadStatuslineConfig, saveStatuslineConfig, type StatuslineConfig } from "./config.ts";
 
 const WARN_PRESETS = [50, 60, 70, 80, 85];
@@ -18,7 +17,10 @@ export async function runStatuslineMenu(
 	ctx: ExtensionCommandContext,
 	onChange: (next: StatuslineConfig) => void,
 ): Promise<void> {
-	if (!requireInteractiveUI(ctx, "/statusline")) return;
+	if (!ctx.hasUI) {
+		ctx.ui.notify("/statusline requires an interactive UI.", "warning");
+		return;
+	}
 
 	for (;;) {
 		const cfg = loadStatuslineConfig();

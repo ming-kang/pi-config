@@ -7,7 +7,7 @@ are discovered through the package manifest's `pi.themes` entry.
 
 | Theme | File | Notes |
 |---|---|---|
-| `ice-cream-dark` | `ice-cream-dark.json` | Dark pastel theme tuned for compact tool renderers and the statusline. |
+| `ice-cream-dark` | `ice-cream-dark.json` | Dark pastel theme tuned for Pi's native UI and the statusline. |
 | `ice-cream-light` | `ice-cream-light.json` | Light counterpart: identical `colors` mapping, light `vars` palette. |
 
 ## Conventions
@@ -23,12 +23,11 @@ are discovered through the package manifest's `pi.themes` entry.
 - **`export` values must mirror their `vars` sources by hand** (JSON has no
   references): `pageBg` = `bgBase`, `cardBg` = `bgSurface`, `infoBg` =
   `bgToolPending`. Update both when changing a base background.
-- Extension renderers should consume colors through `theme.fg(...)`,
-  `theme.bg(...)`, and related theme helpers. Do not hard-code ANSI colors or
-  hex values in renderer code. (`theme.fg` keys are Pi's fixed `ThemeColor`
-  union — themes cannot invent new semantic keys.)
-- When changing theme keys used by renderers, verify compact tool output and the
-  statusline with a local session:
+- Custom functional UI such as dialogs, overlays, and the statusline should
+  consume colors through `theme.fg(...)`, `theme.bg(...)`, and related theme
+  helpers. Do not hard-code ANSI colors or hex values in extension code.
+- When changing semantic theme keys, verify Pi's native tool output and the
+  package's custom functional UI with a local session:
 
 ```bash
 pi -ne -e ./pi-config

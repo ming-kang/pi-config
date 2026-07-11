@@ -12,13 +12,15 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 import { loadRewindConfig, saveRewindConfig } from "./config.ts";
 import { listSessions, removeSession, runGc } from "./gc.ts";
-import { requireInteractiveUI } from "../shared/extension-ui.ts";
-import { formatSize } from "../shared/text.ts";
+import { formatSize } from "./text.ts";
 
 const RETENTION_PRESETS = [7, 14, 30, 60, 90];
 
 export async function runRewindMenu(ctx: ExtensionCommandContext): Promise<void> {
-	if (!requireInteractiveUI(ctx, "/rewind")) return;
+	if (!ctx.hasUI) {
+		ctx.ui.notify("/rewind requires an interactive UI.", "warning");
+		return;
+	}
 	const sid = ctx.sessionManager.getSessionId() ?? undefined;
 
 	for (;;) {

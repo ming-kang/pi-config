@@ -9,7 +9,6 @@ import { registerCommands } from "./commands.ts";
 import { PROMPT_GUIDELINES, PROMPT_SNIPPET, TOOL_DESCRIPTION, TOOL_LABEL, TOOL_NAME } from "./constants.ts";
 import { runFastContextSearch } from "./execute.ts";
 import { reconcileFastContextTool } from "./reconcile.ts";
-import { renderCall, renderResult } from "./render.ts";
 import { FastContextParamsSchema } from "./schema.ts";
 import { getApiKey } from "./state.ts";
 
@@ -21,7 +20,6 @@ export default function fastContext(pi: ExtensionAPI): void {
 		promptSnippet: PROMPT_SNIPPET,
 		promptGuidelines: PROMPT_GUIDELINES,
 		parameters: FastContextParamsSchema,
-		renderShell: "self",
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const apiKey = getApiKey();
@@ -45,9 +43,6 @@ export default function fastContext(pi: ExtensionAPI): void {
 			const { text, details } = await runFastContextSearch(params, apiKey, ctx.cwd, signal, onProgress);
 			return { content: [{ type: "text", text }], details };
 		},
-
-		renderCall,
-		renderResult,
 	});
 
 	registerCommands(pi);

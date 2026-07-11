@@ -30,11 +30,12 @@ import { chmod, copyFile, link, mkdir, readFile, stat, unlink } from "node:fs/pr
 import { dirname, isAbsolute, join, relative } from "node:path";
 
 import { backupsDir } from "./storage.ts";
-import { MAX_CONTENT_BYTES } from "../shared/file-state.ts";
 import type { FileBackup, FileHistorySnapshot } from "./snapshot.ts";
 
 /** Cap on retained snapshots per session (matches CC's MAX_SNAPSHOTS). */
 const MAX_SNAPSHOTS = 100;
+/** Avoid reading very large files solely to compare backup content. */
+const MAX_CONTENT_BYTES = 25 * 1024 * 1024;
 
 export interface FileHistoryState {
 	/** Finalized + persisted frames, oldest first. */

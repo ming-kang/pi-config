@@ -13,12 +13,8 @@
  * re-point the active bucket before touching state.
  */
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
 
 import { TodoOverlay } from "./overlay.ts";
-import { activeDotLine, callLine, errorResultLine, firstText, indentedOutput, resultLine } from "../tools-view/shared.ts";
-import { requireInteractiveUI } from "../shared/extension-ui.ts";
-import { firstLine } from "../shared/text.ts";
 import {
 	applyTodoMutation,
 	buildTodoDetails,
@@ -37,8 +33,8 @@ import {
 	TODO_TOOL_LABEL,
 	TODO_TOOL_NAME,
 } from "./constants.ts";
-import { TodoParamsSchema, type TodoDetails, type TodoParams, type TodoStatus } from "./schema.ts";
-import { formatCommandList, STATUS_MARK, STATUS_COLOR } from "./view.ts";
+import { TodoParamsSchema, type TodoDetails } from "./schema.ts";
+import { formatCommandList } from "./view.ts";
 
 interface TodoSessionCtx {
 	sessionManager: { getBranch(): Iterable<unknown>; getSessionId(): string };
@@ -63,7 +59,6 @@ export default function todo(pi: ExtensionAPI): void {
 		promptSnippet: TODO_PROMPT_SNIPPET,
 		promptGuidelines: TODO_PROMPT_GUIDELINES,
 		parameters: TodoParamsSchema,
-		renderShell: "self",
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<TodoDetails>> {
 			// Re-point the active bucket: resume//tree can switch sessions between
@@ -77,62 +72,15 @@ export default function todo(pi: ExtensionAPI): void {
 				details: buildTodoDetails(params, result.state, result.operation),
 			};
 		},
-
-		renderCall(args, theme) {
-			const state = getTodoState();
-			let suffix = theme.fg("muted", args.action);
-			if (args.action === "create" && args.subject) {
-				suffix += ` ${theme.fg("dim", args.subject)}`;
-			} else if ((args.action === "update" || args.action === "get" || args.action === "delete") && args.id !== undefined) {
-				const subject = state.items.find((item) => item.id === args.id)?.subject;
-				suffix += ` ${theme.fg("accent", subject ?? `#${args.id}`)}`;
-			} else if (args.action === "list" && args.status) {
-				suffix += ` ${theme.fg("dim", args.status)}`;
-			}
-			return new Text(callLine("Todo", suffix, theme), 0, 0);
-		},
-
-		renderResult(result, options, theme) {
-			const details = result.details as TodoDetails | undefined;
-
-			if (options.isPartial) {
-				return new Text(activeDotLine("Todo", " Working...", theme), 0, 0);
-			}
-
-			if (details?.error) {
-				return new Text(errorResultLine(details.error, options.expanded, theme), 0, 0);
-			}
-
-			const textContent = firstText(result);
-
-			let status: TodoStatus | undefined;
-			if (details) {
-				const params = details.params as Partial<TodoParams>;
-				if (details.action === "create") status = "pending";
-				if (details.action === "update" && params.id !== undefined) {
-					status = (params.status as TodoStatus | undefined) ?? details.items.find((item) => item.id === params.id)?.status;
-				}
-				if (details.action === "delete") status = "deleted";
-			}
-
-			if (status) {
-				const label = `${STATUS_MARK[status]} ${status}`;
-				return new Text(resultLine(label, theme, STATUS_COLOR[status]), 0, 0);
-			}
-
-			if (!options.expanded) {
-				const summary = firstLine(textContent, "ok");
-				return new Text(resultLine(summary, theme, "success"), 0, 0);
-			}
-
-			return new Text(indentedOutput(textContent.split("\n"), theme), 0, 0);
-		},
 	});
 
 	pi.registerCommand(TODOS_COMMAND_NAME, {
 		description: "Show todos for the current conversation branch",
 		handler: async (_args, ctx) => {
-			if (!requireInteractiveUI(ctx, "/todos")) return;
+			if (!ctx.hasUI) {
+				ctx.ui.notify("/todos requires an interactive UI.", "warning");
+				return;
+			}
 			ctx.ui.notify(formatCommandList(getTodoState()), "info");
 		},
 	});

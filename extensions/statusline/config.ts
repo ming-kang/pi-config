@@ -7,8 +7,10 @@
  * historical behavior exactly. Invalid values fall back per-field, never
  * rejecting the whole file.
  */
-import { loadJson, saveJson } from "../shared/json-store.ts";
-import { statuslineConfigPath } from "../shared/paths.ts";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 /** CTX% turns warning past this (historical hard-coded 70). */
 export const DEFAULT_CTX_WARN_PCT = 70;
@@ -48,12 +50,29 @@ function normalizeConfig(raw: unknown): StatuslineConfig {
 	};
 }
 
+function statuslineConfigPath(): string {
+	return join(getAgentDir(), "pi-config", "statusline.json");
+}
+
 /** Load statusline.json (missing/corrupt file → all defaults). */
 export function loadStatuslineConfig(): StatuslineConfig {
-	return loadJson(statuslineConfigPath(), normalizeConfig, normalizeConfig({}));
+	const configPath = statuslineConfigPath();
+	if (!existsSync(configPath)) return normalizeConfig({});
+	try {
+		return normalizeConfig(JSON.parse(readFileSync(configPath, "utf8")));
+	} catch {
+		return normalizeConfig({});
+	}
 }
 
 /** Persist statusline.json (normalized). Returns false when the write failed. */
 export function saveStatuslineConfig(config: StatuslineConfig): boolean {
-	return saveJson(statuslineConfigPath(), normalizeConfig(config));
+	const configPath = statuslineConfigPath();
+	try {
+		mkdirSync(dirname(configPath), { recursive: true });
+		writeFileSync(configPath, JSON.stringify(normalizeConfig(config), null, 2) + "\n", "utf8");
+		return true;
+	} catch {
+		return false;
+	}
 }
