@@ -3,12 +3,24 @@ import { EMPTY_TODO_STATE, type TodoDetails, type TodoItem, type TodoParams, typ
 
 type Operation =
 	| { kind: "create"; id: number }
-	| { kind: "update"; id: number; from: TodoStatus; to: TodoStatus }
+	| {
+			kind: "update";
+			id: number;
+			from: TodoStatus;
+			to: TodoStatus;
+			/** Other tasks auto-demoted from in_progress → pending to keep exactly one active. */
+			demotedIds?: number[];
+			/** Soft note when the list is fully closed without a verification-style task. */
+			verificationNudge?: boolean;
+	  }
 	| { kind: "delete"; id: number; subject: string }
 	| { kind: "list"; status?: TodoStatus; includeDeleted: boolean }
 	| { kind: "get"; item: TodoItem }
 	| { kind: "clear"; count: number }
 	| { kind: "error"; message: string };
+
+/** Subjects/descriptions that count as a verification step (CC-style soft nudge). */
+const VERIFICATION_PATTERN = /verif|test|check|review/i;
 
 export interface MutationResult {
 	state: TodoState;
@@ -195,9 +207,31 @@ export function applyTodoMutation(input: TodoState, params: TodoParams): Mutatio
 
 			const items = [...state.items];
 			items[index] = updated;
+
+			// Exactly one in_progress: demote any other active tasks to pending.
+			const demotedIds: number[] = [];
+			if (nextStatus === "in_progress") {
+				for (let i = 0; i < items.length; i++) {
+					const item = items[i];
+					if (item.id === updated.id) continue;
+					if (item.status !== "in_progress") continue;
+					items[i] = { ...item, status: "pending" };
+					demotedIds.push(item.id);
+				}
+			}
+
+			const nextState: TodoState = { items, nextId: state.nextId };
+			const newlyCompleted = current.status !== "completed" && nextStatus === "completed";
 			return {
-				state: { items, nextId: state.nextId },
-				operation: { kind: "update", id: updated.id, from: current.status, to: updated.status },
+				state: nextState,
+				operation: {
+					kind: "update",
+					id: updated.id,
+					from: current.status,
+					to: updated.status,
+					...(demotedIds.length ? { demotedIds } : {}),
+					...(newlyCompleted && needsVerificationNudge(nextState) ? { verificationNudge: true } : {}),
+				},
 			};
 		}
 
@@ -273,6 +307,9 @@ export function buildTodoDetails(params: TodoParams, next: TodoState, operation:
 	};
 }
 
+const VERIFICATION_NUDGE_NOTE =
+	"NOTE: You closed out 3+ tasks with no verification/test/review step. Before the final summary, run checks or add a verification task and complete it — do not self-declare done with known failures.";
+
 export function formatTodoContent(operation: Operation, state: TodoState): string {
 	switch (operation.kind) {
 		case "create": {
@@ -281,7 +318,12 @@ export function formatTodoContent(operation: Operation, state: TodoState): strin
 		}
 		case "update": {
 			const transition = operation.from === operation.to ? "" : ` (${operation.from} -> ${operation.to})`;
-			return `Updated #${operation.id}${transition}`;
+			let text = `Updated #${operation.id}${transition}`;
+			if (operation.demotedIds?.length) {
+				text += `; ${operation.demotedIds.map((id) => `#${id}`).join(",")} demoted to pending`;
+			}
+			if (operation.verificationNudge) text += `\n\n${VERIFICATION_NUDGE_NOTE}`;
+			return text;
 		}
 		case "delete":
 			return `Deleted #${operation.id}: ${operation.subject}`;
@@ -298,6 +340,21 @@ export function formatTodoContent(operation: Operation, state: TodoState): strin
 		case "error":
 			return `Error: ${operation.message}`;
 	}
+}
+
+/**
+ * Soft nudge when the whole list is done (no active work), there are 3+ completed
+ * tasks, and none look like a verification/test/review step — mirrors CC TodoWrite.
+ */
+function needsVerificationNudge(state: TodoState): boolean {
+	const active = state.items.filter((item) => item.status !== "deleted");
+	if (active.length < 3) return false;
+	if (active.some((item) => item.status === "pending" || item.status === "in_progress")) return false;
+	const completed = active.filter((item) => item.status === "completed");
+	if (completed.length < 3) return false;
+	return !completed.some(
+		(item) => VERIFICATION_PATTERN.test(item.subject) || (item.description !== undefined && VERIFICATION_PATTERN.test(item.description)),
+	);
 }
 
 function formatListItem(item: TodoItem): string {

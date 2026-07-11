@@ -18,6 +18,6 @@ export const TODO_PROMPT_SNIPPET =
 
 export const TODO_PROMPT_GUIDELINES = [
 	"Use `todo` for work with three or more meaningful steps, user-provided task lists, or long sessions where progress can drift; mark the active task in_progress before working on it and completed immediately after verification.",
-	"Never mark a `todo` item completed while tests or checks fail, verification has not run, or the implementation is partial; move it back to in_progress or pending instead of creating a duplicate.",
+	"Keep exactly one `todo` item in_progress at a time (the tool demotes any other active item to pending); never mark completed while tests fail, verification has not run, or work is partial — reopen instead of duplicating.",
 	"Keep the `todo` list short and outcome-oriented; delete obsolete items promptly so the list reflects remaining work.",
 ];
