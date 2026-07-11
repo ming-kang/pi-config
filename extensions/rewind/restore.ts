@@ -2,7 +2,13 @@
  * restore.ts — map a /tree navigation target to the snapshot that should be
  * restored and apply it via the engine.
  */
-import { type ApplySnapshotOptions, applySnapshot, collectChanges } from "./engine.ts";
+import {
+	type ApplySnapshotOptions,
+	type CoarseDiffStats,
+	applySnapshot,
+	collectChangeDiffStats,
+	collectChanges,
+} from "./engine.ts";
 import type { FileHistorySnapshot } from "./snapshot.ts";
 
 /** Minimal session view we need to walk the entry tree. */
@@ -46,6 +52,18 @@ export function snapshotForEntry(
  */
 export function snapshotChangedPaths(sessionId: string, snapshot: FileHistorySnapshot): Promise<string[]> {
 	return collectChanges(sessionId, snapshot);
+}
+
+/**
+ * Coarse +N/−M line stats for the confirm dialog (paths must already be known
+ * changed — typically from snapshotChangedPaths).
+ */
+export function snapshotChangeDiffStats(
+	sessionId: string,
+	snapshot: FileHistorySnapshot,
+	changedPaths: readonly string[],
+): Promise<CoarseDiffStats> {
+	return collectChangeDiffStats(sessionId, snapshot, changedPaths);
 }
 
 /**

@@ -26,9 +26,11 @@ rebuilt from them on `session_start`.
   file-history. Rewind undoes *Pi's edits*, not arbitrary filesystem state.
 - **Time-travel is via `/tree`.** Navigating to a node whose turn changed files
   prompts to restore them, listing the affected files (cwd-relative, up to 8
-  then *"+N more"*) under *"Restore 3 files to this point?"*; choosing yes
-  restores the work tree to that turn's start state. Nodes with no file changes
-  navigate silently. Only files that actually differ are rewritten.
+  then *"+N more"*) under *"Restore 3 files to this point?  (+120 / −40)"*
+  when coarse line stats are available; choosing yes restores the work tree to
+  that turn's start state. Nodes with no file changes navigate silently. Only
+  files that actually differ are rewritten. Line totals are a bag-of-lines
+  estimate (capped at 1 MB per file), not a full Myers diff.
 - **`/rewind` is a settings + storage menu**, not a restore picker:
   - toggle rewind on/off,
   - set the auto-clean retention window,
@@ -69,8 +71,9 @@ rebuilt from them on `session_start`.
   the content read entirely.
 - **Restore path is single-scan.** The `/tree` confirm pass caches the changed
   absolute paths; apply restores only those paths and skips a second
-  content compare. Backup, compare, and restore IO are concurrency-capped (16)
-  so large tracked sets do not open unbounded file handles.
+  content compare. Coarse `+N / −M` stats are computed only for those paths
+  after change detection. Backup, compare, and restore IO are concurrency-capped
+  (16) so large tracked sets do not open unbounded file handles.
 
 ## Files
 

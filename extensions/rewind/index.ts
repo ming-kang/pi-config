@@ -48,7 +48,12 @@ import {
 import { runGc, sessionIdFromFile } from "./gc.ts";
 import { runRewindMenu } from "./menu.ts";
 import { rewindBackupsRoot, sessionsDirectory } from "./paths.ts";
-import { restoreToSnapshot, snapshotChangedPaths, snapshotForEntry } from "./restore.ts";
+import {
+	restoreToSnapshot,
+	snapshotChangeDiffStats,
+	snapshotChangedPaths,
+	snapshotForEntry,
+} from "./restore.ts";
 import { type FileHistorySnapshot, SNAPSHOT_ENTRY_TYPE, isSnapshot } from "./snapshot.ts";
 import { configureStorage } from "./storage.ts";
 import { truncateText } from "./text.ts";
@@ -215,8 +220,17 @@ export default function rewind(pi: ExtensionAPI): void {
 		if (!ctx.hasUI) return;
 
 		const n = changed.length;
+		let lineStats = "";
+		try {
+			const stats = await snapshotChangeDiffStats(sid, target, changed);
+			if (stats.insertions > 0 || stats.deletions > 0) {
+				lineStats = `  (+${stats.insertions} / −${stats.deletions})`;
+			}
+		} catch {
+			// Coarse stats are best-effort; still offer path preview.
+		}
 		const choice = await ctx.ui.select(
-			`Restore ${n} file${n === 1 ? "" : "s"} to this point?\n${formatRestorePreview(changed, ctx.cwd)}`,
+			`Restore ${n} file${n === 1 ? "" : "s"} to this point?${lineStats}\n${formatRestorePreview(changed, ctx.cwd)}`,
 			["Yes, restore files", "No, conversation only"],
 		);
 		if (choice && choice.startsWith("Yes")) {

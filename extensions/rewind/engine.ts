@@ -39,6 +39,8 @@ const MAX_SNAPSHOTS = 100;
 const MAX_CONTENT_BYTES = 25 * 1024 * 1024;
 /** Cap concurrent backup/compare/restore IO so long tracked sets don't thrash handles. */
 const IO_CONCURRENCY = 16;
+/** Cap bytes loaded for coarse restore line stats (confirm dialog only). */
+const MAX_DIFF_BYTES = 1_048_576;
 
 export interface FileHistoryState {
 	/** Finalized + persisted frames, oldest first. */
@@ -468,6 +470,140 @@ export async function collectChanges(sid: string, target: FileHistorySnapshot): 
 		}
 	});
 	return results.filter((p): p is string => p !== null);
+}
+
+export interface CoarseDiffStats {
+	/** Absolute paths that would change (same as collectChanges). */
+	paths: string[];
+	/**
+	 * Coarse line insertions when restoring (lines present in backup, not in
+	 * current). Bag-of-lines, not a true Myers diff — confirm UI only.
+	 */
+	insertions: number;
+	/** Coarse line deletions when restoring (lines present in current, not in backup). */
+	deletions: number;
+}
+
+/**
+ * Coarse +N/−M line stats for a restore confirm dialog. Only loads text for
+ * paths already known to differ (from collectChanges). Oversized files still
+ * appear in `paths` but contribute 0 to line totals. No extra dependency.
+ */
+export async function collectChangeDiffStats(
+	sid: string,
+	target: FileHistorySnapshot,
+	changedPaths: readonly string[],
+): Promise<CoarseDiffStats> {
+	if (changedPaths.length === 0) {
+		return { paths: [], insertions: 0, deletions: 0 };
+	}
+	const state = getState(sid);
+	const cwd = cwdFor(sid);
+	// Reverse map abs path → tracking key for the known changed set.
+	const trackingByAbs = new Map<string, string>();
+	for (const tracking of state.trackedFiles) {
+		trackingByAbs.set(expand(tracking, cwd), tracking);
+	}
+
+	const results = await mapPool([...changedPaths], IO_CONCURRENCY, async (filePath) => {
+		try {
+			const tracking = trackingByAbs.get(filePath);
+			if (!tracking) return { insertions: 0, deletions: 0 };
+			const name = backupNameForTarget(state, target, tracking);
+			if (name === undefined) return { insertions: 0, deletions: 0 };
+			return await coarseLineDelta(sid, filePath, name);
+		} catch {
+			return { insertions: 0, deletions: 0 };
+		}
+	});
+
+	let insertions = 0;
+	let deletions = 0;
+	for (const r of results) {
+		insertions += r.insertions;
+		deletions += r.deletions;
+	}
+	return { paths: [...changedPaths], insertions, deletions };
+}
+
+/**
+ * Bag-of-lines delta for current worktree → backup target (restore direction).
+ * insertions = lines that appear after restore; deletions = lines removed.
+ */
+async function coarseLineDelta(
+	sid: string,
+	filePath: string,
+	backupName: string | null,
+): Promise<{ insertions: number; deletions: number }> {
+	const currentText = await readTextCapped(filePath, MAX_DIFF_BYTES);
+	if (backupName === null) {
+		// Snapshot: file did not exist → restore deletes it.
+		if (currentText === null) return { insertions: 0, deletions: 0 };
+		return { insertions: 0, deletions: countLines(currentText) };
+	}
+	const backupText = await readTextCapped(backupPathFor(sid, backupName), MAX_DIFF_BYTES);
+	if (currentText === null && backupText === null) return { insertions: 0, deletions: 0 };
+	if (currentText === null) return { insertions: countLines(backupText ?? ""), deletions: 0 };
+	if (backupText === null) return { insertions: 0, deletions: countLines(currentText) };
+	return bagOfLinesDelta(currentText, backupText);
+}
+
+/** null = missing or oversize/unreadable (skip line contrib). */
+async function readTextCapped(filePath: string, maxBytes: number): Promise<string | null> {
+	try {
+		const st = await statOrNull(filePath);
+		if (!st) return null;
+		if (st.size > maxBytes) return null;
+		const buf = await readFile(filePath);
+		// Skip obvious binary (NUL in the first 8K).
+		const sample = buf.subarray(0, Math.min(buf.length, 8192));
+		if (sample.includes(0)) return null;
+		return buf.toString("utf8");
+	} catch {
+		return null;
+	}
+}
+
+function countLines(text: string): number {
+	if (text.length === 0) return 0;
+	let n = 1;
+	for (let i = 0; i < text.length; i++) {
+		if (text.charCodeAt(i) === 10 /* \n */) n++;
+	}
+	// Trailing newline does not add an extra empty "line" for display counts.
+	if (text.endsWith("\n")) n--;
+	return Math.max(n, 0);
+}
+
+/**
+ * Multiset frequency delta: from → to.
+ * deletions = lines over-represented in `from`; insertions = over-represented in `to`.
+ */
+function bagOfLinesDelta(from: string, to: string): { insertions: number; deletions: number } {
+	const fromCounts = lineFrequency(from);
+	const toCounts = lineFrequency(to);
+	let insertions = 0;
+	let deletions = 0;
+	const keys = new Set([...fromCounts.keys(), ...toCounts.keys()]);
+	for (const key of keys) {
+		const a = fromCounts.get(key) ?? 0;
+		const b = toCounts.get(key) ?? 0;
+		if (b > a) insertions += b - a;
+		else if (a > b) deletions += a - b;
+	}
+	return { insertions, deletions };
+}
+
+function lineFrequency(text: string): Map<string, number> {
+	const map = new Map<string, number>();
+	// Preserve empty file as zero lines; otherwise split including last empty.
+	if (text.length === 0) return map;
+	const lines = text.split("\n");
+	if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+	for (const line of lines) {
+		map.set(line, (map.get(line) ?? 0) + 1);
+	}
+	return map;
 }
 
 /**
