@@ -1,195 +1,221 @@
 /**
- * statusline — custom status line (footer) for Pi.
+ * statusline — fixed two-line footer for Pi.
  *
- * Replaces Pi's built-in footer with a compact, color-coded status line:
- *   left:  Model · Effort · ctx 23% · ~cwd · branch
- *   right: ↑in ↓out Rcache $cost   (each part omitted when zero)
- *   line 2 (only when set): extension statuses from ctx.ui.setStatus()
+ * Line 1 favors human-readable session identity:
+ *   Model (provider) · effort · CTX used/window · ~cwd · branch
  *
- * Color mapping (via theme.fg — adapts to any loaded theme, not just ice-cream):
- *   model  -> toolTitle   (cream in ice-cream-dark)
- *   ctx    -> accent / warning / error  (by usage tier)
- *   cwd    -> success     (seafoam in ice-cream-dark)
- *   branch -> accent
- *   effort -> theme.getThinkingBorderColor  (thinking-level gradient)
+ * Line 2 mirrors the useful native usage details:
+ *   ↑input ↓output Rcache-read Wcache-write CHhit-rate $cost (sub)
  *
- * Auto-enables on session_start. Pi's setFooter returns a renderable that
- * re-reads live data each render, so the line stays current without manual
- * refresh. Effort (thinking level) is recovered from session branch entries.
- *
- * Note: the usage/cost cluster is recomputed here BY DESIGN — setFooter fully
- * replaces Pi's built-in footer, and footerData exposes no precomputed stats
- * (upstream docs: "token stats are available via ctx.sessionManager"). The
- * built-in FooterComponent does the same iteration internally.
- *
- * Config: ~/.pi/agent/pi-config/statusline.json (see config.ts) — CTX color
- * thresholds and toggles for the usage cluster / status line 2. Edited via the
- * /statusline menu (applies live) or by hand (+ /reload); loaded once per
- * session_start (the render callback runs every frame; no disk reads there).
+ * Extension statuses share the right side of line 2 when present. Pi does not
+ * expose auto-compaction state to custom footer factories, so the native
+ * `(auto)` marker cannot be reproduced without depending on private APIs.
  */
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+	SessionEntry,
+	Theme,
+} from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { loadStatuslineConfig } from "./config.ts";
-import { runStatuslineMenu } from "./menu.ts";
+
+const CONTEXT_WARNING_PERCENT = 70;
+const CONTEXT_ERROR_PERCENT = 90;
+
+type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
+interface UsageSummary {
+	inputTokens: number;
+	outputTokens: number;
+	cacheReadTokens: number;
+	cacheWriteTokens: number;
+	latestCacheHitPercent?: number;
+	totalCost: number;
+}
 
 function isTui(ctx: ExtensionContext): boolean {
 	return ctx.mode === "tui";
 }
 
-/** Shorten a path to ~ relative to home. */
-function shortCwd(cwd: string): string {
-	const rawHome = process.env.USERPROFILE || process.env.HOME || "";
-	// Strip trailing separators so the offset used by cwd.slice(home.length) lines
-	// up with the normalized prefix even when the env var ends with a slash.
-	const home = rawHome.replace(/[\\/]+$/, "");
-	if (home) {
-		const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-		const h = norm(home);
-		const c = norm(cwd);
-		if (c === h) return "~";
-		if (c.startsWith(h + "/")) return "~" + cwd.slice(home.length).replace(/\\/g, "/");
+/** Shorten a path to `~` relative to the user's home directory. */
+function formatWorkingDirectory(cwd: string): string {
+	const rawHomeDirectory = process.env.USERPROFILE || process.env.HOME || "";
+	const homeDirectory = rawHomeDirectory.replace(/[\\/]+$/, "");
+	if (!homeDirectory) return cwd;
+
+	const normalizePath = (filePath: string) => filePath.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+	const normalizedHomeDirectory = normalizePath(homeDirectory);
+	const normalizedCwd = normalizePath(cwd);
+	if (normalizedCwd === normalizedHomeDirectory) return "~";
+	if (normalizedCwd.startsWith(`${normalizedHomeDirectory}/`)) {
+		return `~${cwd.slice(homeDirectory.length).replace(/\\/g, "/")}`;
 	}
 	return cwd;
 }
 
-/** Format token count: 999 -> 999, 1200 -> 1.2k, 1500000 -> 1.5M. */
-function fmtTokens(n: number): string {
-	if (n < 1000) return `${n}`;
-	if (n < 10_000) return `${(n / 1000).toFixed(1)}k`;
-	if (n < 1_000_000) return `${Math.round(n / 1000)}k`;
-	if (n < 10_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-	return `${Math.round(n / 1_000_000)}M`;
+/** Format token counts like Pi's native footer: 999, 1.2k, 34k, 1.0M. */
+function formatTokenCount(tokenCount: number): string {
+	if (tokenCount < 1000) return `${tokenCount}`;
+	if (tokenCount < 10_000) return `${(tokenCount / 1000).toFixed(1)}k`;
+	if (tokenCount < 1_000_000) return `${Math.round(tokenCount / 1000)}k`;
+	if (tokenCount < 10_000_000) return `${(tokenCount / 1_000_000).toFixed(1)}M`;
+	return `${Math.round(tokenCount / 1_000_000)}M`;
 }
 
-/** Flatten a status to one line: drop control chars, collapse spaces. */
+/** Flatten extension status text to a single printable line. */
 function sanitizeStatus(text: string): string {
 	return text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim();
 }
 
-type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-
-/** Read current thinking level from session branch entries. */
-function currentThinkingLevel(branch: SessionEntry[]): ThinkingLevel {
-	let level: ThinkingLevel = "off";
-	for (const e of branch) {
-		if (e.type === "thinking_level_change") level = e.thinkingLevel as ThinkingLevel;
+/** Read the latest thinking level recorded on the active session branch. */
+function getCurrentThinkingLevel(branchEntries: SessionEntry[]): ThinkingLevel {
+	let thinkingLevel: ThinkingLevel = "off";
+	for (const entry of branchEntries) {
+		if (entry.type === "thinking_level_change") {
+			thinkingLevel = entry.thinkingLevel as ThinkingLevel;
+		}
 	}
-	return level;
+	return thinkingLevel;
 }
 
-export default function (pi: ExtensionAPI) {
-	// Extension-scope binding: the footer's render closure reads it every frame,
-	// the /statusline menu reassigns it — changes apply without /reload.
-	let config = loadStatuslineConfig();
+/** Aggregate usage totals and the latest request's cache-hit percentage. */
+function summarizeUsage(branchEntries: SessionEntry[]): UsageSummary {
+	const summary: UsageSummary = {
+		inputTokens: 0,
+		outputTokens: 0,
+		cacheReadTokens: 0,
+		cacheWriteTokens: 0,
+		totalCost: 0,
+	};
 
-	pi.registerCommand("statusline", {
-		description: "Statusline settings (CTX thresholds, usage stats, status line)",
-		handler: async (_args, ctx) => {
-			await runStatuslineMenu(ctx, (next) => {
-				config = next;
-			});
-		},
-	});
+	for (const entry of branchEntries) {
+		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+		const assistantMessage = entry.message as AssistantMessage;
+		const inputTokens = assistantMessage.usage?.input ?? 0;
+		const outputTokens = assistantMessage.usage?.output ?? 0;
+		const cacheReadTokens = assistantMessage.usage?.cacheRead ?? 0;
+		const cacheWriteTokens = assistantMessage.usage?.cacheWrite ?? 0;
 
+		summary.inputTokens += inputTokens;
+		summary.outputTokens += outputTokens;
+		summary.cacheReadTokens += cacheReadTokens;
+		summary.cacheWriteTokens += cacheWriteTokens;
+		summary.totalCost += assistantMessage.usage?.cost?.total ?? 0;
+
+		const latestPromptTokens = inputTokens + cacheReadTokens + cacheWriteTokens;
+		const latestRequestUsedCache = cacheReadTokens > 0 || cacheWriteTokens > 0;
+		summary.latestCacheHitPercent =
+			latestRequestUsedCache && latestPromptTokens > 0
+				? (cacheReadTokens / latestPromptTokens) * 100
+				: undefined;
+	}
+
+	return summary;
+}
+
+function formatContextUsage(ctx: ExtensionContext, theme: Theme): string {
+	const contextUsage = ctx.getContextUsage();
+	const contextWindow = contextUsage?.contextWindow ?? ctx.model?.contextWindow;
+	const contextWindowSuffix = contextWindow ? `/${formatTokenCount(contextWindow)}` : "";
+	if (contextUsage?.percent == null) {
+		return theme.fg("accent", `CTX ?%${contextWindowSuffix}`);
+	}
+
+	const label = `CTX ${contextUsage.percent.toFixed(1)}%${contextWindowSuffix}`;
+	if (contextUsage.percent > CONTEXT_ERROR_PERCENT) return theme.fg("error", label);
+	if (contextUsage.percent > CONTEXT_WARNING_PERCENT) return theme.fg("warning", label);
+	return theme.fg("accent", label);
+}
+
+function formatUsageSummary(summary: UsageSummary, usesSubscription: boolean, theme: Theme): string {
+	const usageParts: string[] = [];
+	if (summary.inputTokens > 0) usageParts.push(`↑${formatTokenCount(summary.inputTokens)}`);
+	if (summary.outputTokens > 0) usageParts.push(`↓${formatTokenCount(summary.outputTokens)}`);
+	if (summary.cacheReadTokens > 0) usageParts.push(`R${formatTokenCount(summary.cacheReadTokens)}`);
+	if (summary.cacheWriteTokens > 0) usageParts.push(`W${formatTokenCount(summary.cacheWriteTokens)}`);
+	if (summary.latestCacheHitPercent !== undefined) {
+		usageParts.push(`CH${summary.latestCacheHitPercent.toFixed(1)}%`);
+	}
+	if (summary.totalCost > 0) {
+		usageParts.push(`$${summary.totalCost.toFixed(3)}${usesSubscription ? " (sub)" : ""}`);
+	}
+	if (usageParts.length === 0) return "";
+	return theme.fg("dim", usageParts.join(" "));
+}
+
+function formatExtensionStatuses(statuses: ReadonlyMap<string, string>, theme: Theme): string {
+	const statusText = Array.from(statuses.entries())
+		.sort(([firstKey], [secondKey]) => firstKey.localeCompare(secondKey))
+		.map(([, text]) => sanitizeStatus(text))
+		.filter(Boolean)
+		.join("  ");
+	return statusText ? theme.fg("muted", statusText) : "";
+}
+
+/** Keep usage visible and right-align extension statuses when space permits. */
+function layoutSecondaryLine(usageText: string, statusText: string, width: number, theme: Theme): string | undefined {
+	if (!usageText && !statusText) return undefined;
+	if (!usageText) return truncateToWidth(statusText, width, theme.fg("dim", "..."));
+	if (!statusText) return truncateToWidth(usageText, width, theme.fg("dim", "..."));
+
+	const usageWidth = visibleWidth(usageText);
+	const statusWidth = visibleWidth(statusText);
+	if (usageWidth + statusWidth < width) {
+		return usageText + " ".repeat(width - usageWidth - statusWidth) + statusText;
+	}
+
+	if (usageWidth >= width) return truncateToWidth(usageText, width, theme.fg("dim", "..."));
+	const remainingStatusWidth = width - usageWidth - 1;
+	if (remainingStatusWidth < 4) return usageText;
+	return `${usageText} ${truncateToWidth(statusText, remainingStatusWidth, theme.fg("dim", "..."))}`;
+}
+
+export default function statusline(pi: ExtensionAPI): void {
 	pi.on("session_start", (_event, ctx) => {
 		if (!isTui(ctx)) return;
-		// Refresh once per session (+ /reload): the render callback below runs
-		// every frame and must not touch the disk.
-		config = loadStatuslineConfig();
 
 		ctx.ui.setFooter((tui, theme, footerData) => {
-			const unsub = footerData.onBranchChange(() => tui.requestRender());
+			const unsubscribeFromBranchChanges = footerData.onBranchChange(() => tui.requestRender());
 			return {
-				dispose: unsub,
+				dispose: unsubscribeFromBranchChanges,
 				invalidate() {},
 				render(width: number): string[] {
 					const branchEntries = ctx.sessionManager.getBranch();
-
-					// Right side: token stats + cost from the current branch.
-					let right = "";
-					if (config.showUsageStats) {
-						let input = 0;
-						let output = 0;
-						let cacheRead = 0;
-						let cost = 0;
-						for (const e of branchEntries) {
-							if (e.type === "message" && e.message.role === "assistant") {
-								const m = e.message as AssistantMessage;
-								input += m.usage?.input ?? 0;
-								output += m.usage?.output ?? 0;
-								cost += m.usage?.cost?.total ?? 0;
-								cacheRead += m.usage?.cacheRead ?? 0;
-							}
-						}
-						const statParts: string[] = [];
-						if (input > 0) statParts.push(`↑${fmtTokens(input)}`);
-						if (output > 0) statParts.push(`↓${fmtTokens(output)}`);
-						if (cacheRead > 0) statParts.push(`R${fmtTokens(cacheRead)}`);
-						if (cost > 0) statParts.push(`$${cost.toFixed(3)}`);
-						if (statParts.length > 0) right = theme.fg("dim", statParts.join(" "));
-					}
-
-					// Left side: Model · Effort · CTX% · CWD · Branch
 					const model = ctx.model;
-					const parts: string[] = [];
-					parts.push(theme.fg("toolTitle", model?.name ?? "no-model"));
+					const modelName = model?.name ?? model?.id ?? "no-model";
+					let modelIdentity = theme.fg("toolTitle", theme.bold(modelName));
+					if (model?.provider) {
+						modelIdentity += ` ${theme.fg("muted", `(${model.provider})`)}`;
+					}
 
-					// Effort: only when model supports reasoning and level isn't off.
+					const primaryParts = [modelIdentity];
 					if (model?.reasoning) {
-						const level = currentThinkingLevel(branchEntries);
-						if (level !== "off") parts.push(theme.getThinkingBorderColor(level)(level));
-					}
-
-					// Context percentage: accent below the warn threshold, then
-					// warning/error tiers (thresholds from statusline.json).
-					const usage = ctx.getContextUsage();
-					const ctxPct = usage?.percent;
-					if (ctxPct == null) {
-						parts.push(theme.fg("accent", "CTX ?%"));
-					} else if (ctxPct > config.ctxErrorPct) {
-						parts.push(theme.fg("error", `CTX ${ctxPct.toFixed(1)}%`));
-					} else if (ctxPct > config.ctxWarnPct) {
-						parts.push(theme.fg("warning", `CTX ${ctxPct.toFixed(1)}%`));
-					} else {
-						parts.push(theme.fg("accent", `CTX ${ctxPct.toFixed(1)}%`));
-					}
-
-					// Cwd.
-					parts.push(theme.fg("success", shortCwd(ctx.cwd)));
-
-					// Branch (if any).
-					const branch = footerData.getGitBranch();
-					if (branch) parts.push(theme.fg("accent", branch));
-
-					const sep = theme.fg("dim", " · ");
-					const left = parts.join(sep);
-
-					// Layout: right-align the token/cost stats, left-align the rest.
-					// When the terminal is too narrow, keep the right side intact and
-					// truncate the left — token stats are more useful than a long cwd.
-					const leftW = visibleWidth(left);
-					const rightW = visibleWidth(right);
-					const mainLine =
-						leftW + rightW >= width
-							? truncateToWidth(truncateToWidth(left, Math.max(0, width - rightW)) + right, width)
-							: left + " ".repeat(width - leftW - rightW) + right;
-					const lines = [mainLine];
-
-					// Extension statuses on a second line, mirroring Pi's built-in footer.
-					// The custom footer replaces the built-in, so without this any
-					// ctx.ui.setStatus() text would silently vanish. Sorted by key.
-					if (config.showStatusLine2) {
-						const statuses = footerData.getExtensionStatuses();
-						if (statuses.size > 0) {
-							const statusLine = Array.from(statuses.entries())
-								.sort(([a], [b]) => a.localeCompare(b))
-								.map(([, text]) => sanitizeStatus(text))
-								.join("  ");
-							lines.push(truncateToWidth(statusLine, width, theme.fg("dim", "...")));
+						const thinkingLevel = getCurrentThinkingLevel(branchEntries);
+						if (thinkingLevel !== "off") {
+							primaryParts.push(theme.getThinkingBorderColor(thinkingLevel)(thinkingLevel));
 						}
 					}
-					return lines;
+					primaryParts.push(formatContextUsage(ctx, theme));
+					primaryParts.push(theme.fg("success", formatWorkingDirectory(ctx.cwd)));
+
+					const gitBranch = footerData.getGitBranch();
+					if (gitBranch) primaryParts.push(theme.fg("accent", gitBranch));
+
+					const separator = theme.fg("dim", " · ");
+					const primaryLine = truncateToWidth(
+						primaryParts.join(separator),
+						width,
+						theme.fg("dim", "..."),
+					);
+
+					const usageSummary = summarizeUsage(branchEntries);
+					const usesSubscription = model ? ctx.modelRegistry.isUsingOAuth(model) : false;
+					const usageLine = formatUsageSummary(usageSummary, usesSubscription, theme);
+					const extensionStatuses = formatExtensionStatuses(footerData.getExtensionStatuses(), theme);
+					const secondaryLine = layoutSecondaryLine(usageLine, extensionStatuses, width, theme);
+
+					return secondaryLine ? [primaryLine, secondaryLine] : [primaryLine];
 				},
 			};
 		});
