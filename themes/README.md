@@ -7,8 +7,34 @@ are discovered through the package manifest's `pi.themes` entry.
 
 | Theme | File | Notes |
 |---|---|---|
-| `ice-cream-dark` | `ice-cream-dark.json` | Dark pastel theme tuned for Pi's native UI and the statusline. |
-| `ice-cream-light` | `ice-cream-light.json` | Light counterpart: identical `colors` mapping, light `vars` palette. |
+| `ice-cream-dark` | `ice-cream-dark.json` | Sea-salt ice cream on a cool night plate: bright pastel scoops, deep user chip. |
+| `ice-cream-light` | `ice-cream-light.json` | Daylight counterpart: cool salt paper, same `colors` mapping, bright scoops. |
+
+## Surface hierarchy (海盐冰淇淋)
+
+Metaphor: a cool dark (or salt-white) plate, with **bright ice-cream scoops** for
+tools/system chrome, and a **deeper scoop well** for the user message so human
+input stays distinct.
+
+| Var | Role | Intent |
+|---|---|---|
+| `bgBase` | page / terminal chrome | cool salt night or salt paper |
+| `bgSurface` | selection, cards | mid lift, still cooler than tool scoops |
+| `bgUserMsg` | user message | **deeper** than tools — recessed distinction |
+| `bgCustomMsg` | extension / system messages | bright cool sky scoop |
+| `bgToolPending` | tool running | bright sea-salt blue scoop |
+| `bgToolSuccess` | tool ok | bright mint scoop |
+| `bgToolError` | tool failed | bright soft rose scoop |
+
+Readability rules:
+
+- Keep body `text` high-contrast against every surface (near-white on dark,
+  near-ink on light).
+- Raise `muted` / `dim` when tool panels get brighter so `toolOutput` stays
+  legible on the luminous scoops.
+- State tints stay pastel; cream `toolTitle` and accent hues carry identity.
+- Avoid muddy low-luminance green/red tool panels and pure-neutral gray user
+  chips that fight the cool sea-salt base.
 
 ## Conventions
 

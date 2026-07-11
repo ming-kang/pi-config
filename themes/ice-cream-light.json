@@ -2,27 +2,28 @@
 	"$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
 	"name": "ice-cream-light",
 	"vars": {
-		"seasalt": "#1a86b4",
-		"sky": "#2f9fc8",
-		"ocean": "#2f6f9e",
-		"cream": "#95721f",
-		"gold": "#a8821c",
-		"orange": "#c06c1d",
-		"coral": "#c0553a",
-		"seafoam": "#2e9463",
-		"red": "#cc4b44",
-		"slate": "#7d8f96",
-		"text": "#333e48",
-		"muted": "#5f6f75",
-		"dim": "#84939a",
-		"faint": "#c6d0d3",
-		"bgBase": "#faf7f0",
-		"bgSurface": "#efebe1",
-		"bgToolPending": "#e2edf5",
-		"bgToolSuccess": "#e1f0e7",
-		"bgToolError": "#f6e4e1",
-		"bgCustomMsg": "#e9ecf4",
-		"bgUserMsg": "#e9e6df"
+		"seasalt": "#1789b8",
+		"sky": "#1f9bc7",
+		"ocean": "#2a6f9c",
+		"cream": "#8a6a14",
+		"gold": "#9a7a12",
+		"orange": "#b86514",
+		"coral": "#c04e36",
+		"seafoam": "#1f8f5c",
+		"red": "#c93f3a",
+		"slate": "#6d8088",
+		"text": "#243039",
+		"muted": "#4d5f66",
+		"dim": "#6e8087",
+		"faint": "#b7c5cb",
+
+		"bgBase": "#f3f7f8",
+		"bgSurface": "#e5eef1",
+		"bgUserMsg": "#d5dee3",
+		"bgCustomMsg": "#e4f0f8",
+		"bgToolPending": "#e0f0fa",
+		"bgToolSuccess": "#dff5ea",
+		"bgToolError": "#fbeceb"
 	},
 	"colors": {
 		"accent": "seasalt",
@@ -84,8 +85,8 @@
 		"bashMode": "seafoam"
 	},
 	"export": {
-		"pageBg": "#faf7f0",
-		"cardBg": "#efebe1",
-		"infoBg": "#e2edf5"
+		"pageBg": "#f3f7f8",
+		"cardBg": "#e5eef1",
+		"infoBg": "#e0f0fa"
 	}
 }
