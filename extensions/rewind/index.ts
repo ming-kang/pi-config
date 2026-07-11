@@ -10,9 +10,12 @@
  *
  * Per turn: before_agent_start opens a snapshot frame (re-recording tracked files
  * at their turn-start state); tool_call(edit|write) backs up each newly edited
- * file before it lands; agent_end persists the frame to the session JSONL (custom
- * "pi-rewind-snapshot" entry) when it changed. On session_start the index is
- * rebuilt from those entries; resume/fork hard-links the prior session's blobs.
+ * file before it lands; agent_settled persists the frame to the session JSONL
+ * (custom "pi-rewind-snapshot" entry) when it changed. agent_settled is used
+ * instead of agent_end so auto-retry, overflow compaction-retry, and queued
+ * follow-ups stay in one logical turn (agent_end can fire mid-continuation).
+ * On session_start the index is rebuilt from those entries; resume/fork
+ * hard-links the prior session's blobs.
  *
  * Time-travel is fused into /tree: navigating to a node whose turn changed files
  * offers to sync the work tree to that point (session_before_tree/session_tree).
@@ -179,8 +182,9 @@ export default function rewind(pi: ExtensionAPI): void {
 		}
 	});
 
-	// agent_end: finalize + persist the turn's snapshot if it changed files.
-	pi.on("agent_end", async (_event, ctx) => {
+	// agent_settled: finalize + persist after Pi will not auto-continue (retry /
+	// compact-retry / follow-up). agent_end alone is too early for that.
+	pi.on("agent_settled", async (_event, ctx) => {
 		if (!config.enabled) return;
 		const sid = ctx.sessionManager.getSessionId();
 		if (!sid) return;

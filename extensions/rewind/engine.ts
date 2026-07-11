@@ -16,8 +16,9 @@
  *   - trackEdit()  (tool_call edit|write, before the write): back up a *newly*
  *     edited file at its pre-edit state into the working frame (null marker when
  *     the target does not exist yet, so rewind deletes the created file).
- *   - endTurn()    (agent_end): if anything changed, stamp + return the frame to
- *     persist; else discard it.
+ *   - endTurn()    (agent_settled): if anything changed, stamp + return the frame
+ *     to persist; else discard it. agent_settled (not agent_end) so auto-retry /
+ *     overflow compact-retry / queued follow-ups share one logical turn.
  *
  * Rewind = applySnapshot(): restore every tracked file to the version recorded in
  * the target frame (copy back / delete for null), touching only files that differ.

@@ -12,9 +12,13 @@ directories) and storage stays tiny.
 Per turn: `before_agent_start` opens a snapshot frame (re-recording every tracked
 file at its turn-start state, reusing the latest backup when unchanged);
 `tool_call(edit|write)` backs up each newly edited file *before* it lands;
-`agent_end` persists the frame to the session JSONL as a `pi-rewind-snapshot`
-custom entry **only when files changed**. Entries survive `/reload` and
-compaction; the index is rebuilt from them on `session_start`.
+`agent_settled` persists the frame to the session JSONL as a `pi-rewind-snapshot`
+custom entry **only when files changed**. Using `agent_settled` (not `agent_end`)
+keeps auto-retry, overflow compaction-retry, and queued follow-ups in one logical
+turn — `agent_end` can fire while Pi still continues. Requires **Pi ≥ 0.80.4**
+(when `agent_settled` was added); older hosts never fire that event, so frames
+would not finalize. Entries survive `/reload` and compaction; the index is
+rebuilt from them on `session_start`.
 
 - **Scope (deliberate trade-off):** rewind covers edits made through Pi's built-in
   `edit` and `write` tools. Files written by `bash` (redirects, codegen, `mv`) or
@@ -70,7 +74,7 @@ compaction; the index is rebuilt from them on `session_start`.
 
 ## Files
 
-- `index.ts` — lifecycle hooks (`tool_call`, `before_agent_start`, `agent_end`,
+- `index.ts` — lifecycle hooks (`tool_call`, `before_agent_start`, `agent_settled`,
   `session_start`, `session_before_tree`/`session_tree`, `session_shutdown`) and
   the `/rewind` command
 - `engine.ts` — the file-history backup engine (track / snapshot / apply /

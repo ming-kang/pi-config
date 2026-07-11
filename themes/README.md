@@ -39,6 +39,8 @@ Readability rules:
 ## Conventions
 
 - Follow Pi's theme schema (`theme-schema.json` in the upstream Pi package).
+  `thinkingMax` is optional upstream (falls back to `thinkingXhigh`); ice-cream
+  sets it explicitly so `max` effort is distinct from `xhigh`.
 - Prefer semantic color keys (`accent`, `success`, `warning`, `error`,
   `toolTitle`, `toolOutput`, `selectedBg`, etc.) over extension-specific color
   assumptions.

@@ -81,6 +81,7 @@
 		"thinkingMedium": "gold",
 		"thinkingHigh": "orange",
 		"thinkingXhigh": "coral",
+		"thinkingMax": "red",
 
 		"bashMode": "seafoam"
 	},
