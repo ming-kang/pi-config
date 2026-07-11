@@ -2,7 +2,7 @@
  * read-before-edit — enforce "read before edit/write" and "re-read if modified".
  *
  * Mirrors Claude Code's readFileState guard, adapted to Pi's extension events:
- *   - tool_result(read|edit|write, ok) → record { content, mtime } for the file
+ *   - tool_result(read|edit|write, ok) → record { contentHash, mtime } for the file
  *   - tool_call(edit|write)            → block unless read and unchanged on disk
  *   - before_agent_start               → append a soft "read before write" prompt
  *
@@ -25,7 +25,7 @@
  * to the model as an error tool result. No ANSI / colors here (no UI surface).
  */
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as fileState from "./file-state.ts";
 import { editWriteTargetPath, resolveToolPath } from "./tool-path.ts";
@@ -41,6 +41,10 @@ const SOFT_CONSTRAINT_LINES = [
 	"If a file changed on disk since you last read it, read it again before editing. This prevents edits based on stale content.",
 ];
 
+function isENOENT(error: unknown): boolean {
+	return !!error && typeof error === "object" && (error as { code?: string }).code === "ENOENT";
+}
+
 export default function readBeforeEdit(pi: ExtensionAPI): void {
 	// ---- record reads, and the agent's own writes/edits ---------------------
 	// Recording on edit/write (not only read) mirrors CC's FileWriteTool /
@@ -55,7 +59,17 @@ export default function readBeforeEdit(pi: ExtensionAPI): void {
 		if (event.toolName !== "read" && event.toolName !== "edit" && event.toolName !== "write") return;
 		const rawPath = editWriteTargetPath(event.input);
 		if (!rawPath) return;
-		recordReadState(rawPath, ctx.cwd);
+
+		// write: hash the utf-8 args content (matches Pi writeFile(..., "utf-8"))
+		// so we avoid a second full-file disk read after a successful write.
+		// read/edit: always hash on-disk bytes (result text can be partial /
+		// line-numbered; edit input is a patch, not final content).
+		if (event.toolName === "write") {
+			const content = (event.input as { content?: unknown } | undefined)?.content;
+			recordWriteState(rawPath, ctx.cwd, typeof content === "string" ? content : undefined);
+		} else {
+			recordDiskState(rawPath, ctx.cwd);
+		}
 	});
 
 	// ---- gate edits / writes ------------------------------------------------
@@ -66,21 +80,19 @@ export default function readBeforeEdit(pi: ExtensionAPI): void {
 
 		const abs = resolveToolPath(rawPath, ctx.cwd);
 
-		// New-file exemption: a target that doesn't exist can't have been read.
-		// Let the write create it (or let edit produce its own not-found error).
-		if (!existsSync(abs)) return;
+		// Single stat: ENOENT → new-file exemption; other errors soft-allow.
+		let currentMtime: number;
+		try {
+			currentMtime = statSync(abs).mtimeMs;
+		} catch (error) {
+			if (isENOENT(error)) return;
+			// Can't stat an existing-looking file — don't hard-block on a flaky FS.
+			return;
+		}
 
 		const state = fileState.get(rawPath, ctx.cwd);
 		if (!state) {
 			return { block: true, reason: MSG_NOT_READ };
-		}
-
-		let currentMtime: number;
-		try {
-			currentMtime = statSync(abs).mtimeMs;
-		} catch {
-			// Can't stat an existing-looking file — don't hard-block on a flaky FS.
-			return;
 		}
 
 		if (currentMtime > state.mtime) {
@@ -126,12 +138,39 @@ export default function readBeforeEdit(pi: ExtensionAPI): void {
 }
 
 /**
- * Capture the current on-disk { contentHash, mtime } for a path into the local
- * read-state cache. The hash is recorded only when the file is within the size
- * budget; otherwise only the mtime is tracked. Failures (vanished file, stat
- * error) are swallowed — a missing entry just means the next edit re-reads.
+ * After a successful write: prefer hashing the utf-8 content from tool args
+ * (same encoding Pi's write tool uses on disk). Fall back to a full disk hash
+ * when content is missing or over the budget. Still stats for mtime.
  */
-function recordReadState(rawPath: string, cwd: string): void {
+function recordWriteState(rawPath: string, cwd: string, content: string | undefined): void {
+	try {
+		const abs = resolveToolPath(rawPath, cwd);
+		const stat = statSync(abs);
+		let contentHash: string | undefined;
+		if (content !== undefined) {
+			const byteLength = Buffer.byteLength(content, "utf8");
+			if (byteLength <= fileState.MAX_CONTENT_BYTES) {
+				contentHash = hashUtf8(content);
+			}
+			// Oversized write args: mtime-only (same as oversized disk files).
+		} else if (stat.size <= fileState.MAX_CONTENT_BYTES) {
+			try {
+				contentHash = hashFile(abs);
+			} catch {
+				contentHash = undefined;
+			}
+		}
+		fileState.set(rawPath, { contentHash, mtime: stat.mtimeMs }, cwd);
+	} catch {
+		// File vanished between the tool run and this event, or stat failed.
+	}
+}
+
+/**
+ * Capture on-disk { contentHash, mtime }. Used after read/edit (and as write
+ * fallback). Hash only within the size budget; otherwise mtime-only.
+ */
+function recordDiskState(rawPath: string, cwd: string): void {
 	try {
 		const abs = resolveToolPath(rawPath, cwd);
 		const stat = statSync(abs);
@@ -147,6 +186,11 @@ function recordReadState(rawPath: string, cwd: string): void {
 	} catch {
 		// File vanished between the tool run and this event, or stat failed.
 	}
+}
+
+/** sha-256 (hex) of a utf-8 string — matches Pi write tool disk encoding. */
+function hashUtf8(text: string): string {
+	return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
 /** sha-256 (hex) of a file's raw bytes. Throws on IO errors; callers handle. */
