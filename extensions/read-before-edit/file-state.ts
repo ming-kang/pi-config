@@ -1,8 +1,14 @@
 import path from "node:path";
 
 export interface ReadState {
+	/** Present for full reads within the hashing budget. Omitted for partial views. */
 	contentHash?: string;
 	mtime: number;
+	/**
+	 * True when the model only saw a partial/truncated view (offset/limit or
+	 * auto-truncation). Edit/write treat this like "not read yet".
+	 */
+	isPartialView?: boolean;
 }
 
 const MAX_ENTRIES = 100;
@@ -21,6 +27,7 @@ export function get(rawPath: string, baseDirectory?: string): ReadState | undefi
 
 export function set(rawPath: string, state: ReadState, baseDirectory?: string): void {
 	const cacheKey = normalizeKey(rawPath, baseDirectory);
+	// delete-before-set keeps insertion order as LRU-ish FIFO eviction order.
 	readFileState.delete(cacheKey);
 	readFileState.set(cacheKey, state);
 
