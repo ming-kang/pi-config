@@ -1,31 +1,40 @@
 # statusline — fixed two-line footer
 
-Replaces Pi's built-in footer with a fixed, color-coded two-line status display.
-It registers no tool or command and has no configuration file. The footer
-auto-enables on `session_start` in TUI mode and clears itself on
-`session_shutdown`.
+Replaces Pi's built-in footer with a fixed, color-coded two-line status display
+using a balanced left/right layout. It registers no tool or command and has no
+configuration file. The footer auto-enables on `session_start` in TUI mode and
+clears itself on `session_shutdown`.
 
 ## What it shows
 
 ```text
-DeepSeek V4 Flash (deepseek) · max · CTX 3.5%/1.0M · ~/Projects/test · main
-↑33k ↓2.8k R265k W12k CH96.8% $0.006
+DeepSeek V4 Pro (opencode-go) · xhigh          ~/Projects · main
+CTX 2.1%/1.0M                    ↑13k ↓13k R440k CH99.4% $0.074
 ```
 
-### Line 1 — session identity
+### Line 1 — session identity (left) · location (right)
+
+**Left**
 
 - **Model:** human-readable model name, falling back to the model id.
 - **Provider:** the model source in parentheses, such as `(deepseek)` or
-  `(openrouter)`.
+  `(opencode-go)`.
 - **Effort:** the latest thinking level when the model supports reasoning and
   the level is not `off`.
-- **Context:** used percentage plus context-window size. The percentage uses
-  fixed semantic tiers: accent normally, warning above 70%, error above 90%.
-- **Working directory:** full cwd shortened against the home directory with
-  `~`.
+
+**Right**
+
+- **Working directory:** full cwd shortened against the home directory with `~`.
 - **Git branch:** appended when available.
 
-### Line 2 — usage and extension status
+### Line 2 — context (left) · usage (right)
+
+**Left**
+
+- **Context:** used percentage plus context-window size. The percentage uses
+  fixed semantic tiers: accent normally, warning above 70%, error above 90%.
+
+**Right**
 
 - `↑` cumulative input tokens.
 - `↓` cumulative output tokens.
@@ -36,11 +45,33 @@ DeepSeek V4 Flash (deepseek) · max · CTX 3.5%/1.0M · ~/Projects/test · main
   request used cache.
 - `$` cumulative cost; `(sub)` is appended when the current model uses an OAuth
   subscription.
-- Extension status text from `ctx.ui.setStatus()` is sorted by key and aligned
-  to the right when space permits.
+
+**Middle (optional)**
+
+- Extension status text from `ctx.ui.setStatus()` is sorted by key and centered
+  in the gap between context and usage when space permits; otherwise it is
+  dropped so CTX and usage stay readable.
 
 Zero-value usage fields are omitted. Before the first assistant response, the
-second line is omitted unless an extension status exists.
+right side of line 2 is empty (or holds extension status only).
+
+## Narrow-width drop order
+
+When the terminal is too narrow for the full layout:
+
+**Line 1** (first drop → last):
+
+1. Drop the git branch.
+2. Keep the full path alone on the right.
+3. Shorten the path to `~/basename` (or bare basename).
+4. Drop the provider parentheses.
+5. Truncate the remaining left/right text.
+
+**Line 2** (first drop → last):
+
+1. Drop extension status from the middle gap.
+2. Drop `W`, then `R`, from the usage cluster.
+3. Truncate CTX / remaining usage as a last resort.
 
 ## Layout and colors
 
@@ -49,8 +80,8 @@ second line is omitted unless an extension status exists.
 - Context uses `accent`, `warning`, or `error` according to the fixed thresholds.
 - Working directory uses `success`; Git branch uses `accent`.
 - Usage statistics use `dim`; extension status text uses `muted`.
-- The first line truncates at the terminal width. On the second line, usage
-  statistics take priority and extension status text uses the remaining width.
+- Each line left-aligns its primary cluster and right-aligns the secondary
+  cluster, filling the gap with spaces so wide terminals stay balanced.
 
 Pi does not expose auto-compaction state to extension footer factories, so the
 native `(auto)` marker is intentionally not reproduced. Depending on private Pi
@@ -65,4 +96,4 @@ existing config file is left untouched and may be removed manually.
 ## Files
 
 - `index.ts` — footer lifecycle, formatting, usage aggregation, and responsive
-  two-line layout
+  two-line left/right layout

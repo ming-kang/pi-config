@@ -1,15 +1,13 @@
 /**
  * statusline — fixed two-line footer for Pi.
  *
- * Line 1 favors human-readable session identity:
- *   Model (provider) · effort · CTX used/window · ~cwd · branch
+ * Balanced left/right layout:
+ *   Line 1: Model (provider) · effort          ~cwd · branch
+ *   Line 2: CTX used/window                    ↑in ↓out R W CH $cost
  *
- * Line 2 mirrors the useful native usage details:
- *   ↑input ↓output Rcache-read Wcache-write CHhit-rate $cost (sub)
- *
- * Extension statuses share the right side of line 2 when present. Pi does not
- * expose auto-compaction state to custom footer factories, so the native
- * `(auto)` marker cannot be reproduced without depending on private APIs.
+ * Extension statuses sit in the middle of line 2 when space permits.
+ * Pi does not expose auto-compaction state to custom footer factories, so the
+ * native `(auto)` marker cannot be reproduced without depending on private APIs.
  */
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type {
@@ -22,6 +20,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 const CONTEXT_WARNING_PERCENT = 70;
 const CONTEXT_ERROR_PERCENT = 90;
+const MIN_GAP = 1;
 
 type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -32,6 +31,11 @@ interface UsageSummary {
 	cacheWriteTokens: number;
 	latestCacheHitPercent?: number;
 	totalCost: number;
+}
+
+interface UsageFormatOptions {
+	includeCacheRead: boolean;
+	includeCacheWrite: boolean;
 }
 
 function isTui(ctx: ExtensionContext): boolean {
@@ -54,6 +58,17 @@ function formatWorkingDirectory(cwd: string): string {
 	return cwd;
 }
 
+/** Collapse a display path to `~/basename` or bare basename when tight. */
+function pathBasename(displayPath: string): string {
+	const normalized = displayPath.replace(/\\/g, "/").replace(/\/+$/, "");
+	if (!normalized || normalized === "~") return normalized || displayPath;
+	const slash = normalized.lastIndexOf("/");
+	if (slash < 0) return normalized;
+	const base = normalized.slice(slash + 1);
+	if (normalized.startsWith("~/")) return `~/${base}`;
+	return base;
+}
+
 /** Format token counts like Pi's native footer: 999, 1.2k, 34k, 1.0M. */
 function formatTokenCount(tokenCount: number): string {
 	if (tokenCount < 1000) return `${tokenCount}`;
@@ -66,6 +81,10 @@ function formatTokenCount(tokenCount: number): string {
 /** Flatten extension status text to a single printable line. */
 function sanitizeStatus(text: string): string {
 	return text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim();
+}
+
+function joinSegments(segments: string[], separator: string): string {
+	return segments.filter((segment) => segment.length > 0).join(separator);
 }
 
 /** Read the latest thinking level recorded on the active session branch. */
@@ -128,12 +147,21 @@ function formatContextUsage(ctx: ExtensionContext, theme: Theme): string {
 	return theme.fg("accent", label);
 }
 
-function formatUsageSummary(summary: UsageSummary, usesSubscription: boolean, theme: Theme): string {
+function formatUsageSummary(
+	summary: UsageSummary,
+	usesSubscription: boolean,
+	theme: Theme,
+	options: UsageFormatOptions = { includeCacheRead: true, includeCacheWrite: true },
+): string {
 	const usageParts: string[] = [];
 	if (summary.inputTokens > 0) usageParts.push(`↑${formatTokenCount(summary.inputTokens)}`);
 	if (summary.outputTokens > 0) usageParts.push(`↓${formatTokenCount(summary.outputTokens)}`);
-	if (summary.cacheReadTokens > 0) usageParts.push(`R${formatTokenCount(summary.cacheReadTokens)}`);
-	if (summary.cacheWriteTokens > 0) usageParts.push(`W${formatTokenCount(summary.cacheWriteTokens)}`);
+	if (options.includeCacheRead && summary.cacheReadTokens > 0) {
+		usageParts.push(`R${formatTokenCount(summary.cacheReadTokens)}`);
+	}
+	if (options.includeCacheWrite && summary.cacheWriteTokens > 0) {
+		usageParts.push(`W${formatTokenCount(summary.cacheWriteTokens)}`);
+	}
 	if (summary.latestCacheHitPercent !== undefined) {
 		usageParts.push(`CH${summary.latestCacheHitPercent.toFixed(1)}%`);
 	}
@@ -153,22 +181,139 @@ function formatExtensionStatuses(statuses: ReadonlyMap<string, string>, theme: T
 	return statusText ? theme.fg("muted", statusText) : "";
 }
 
-/** Keep usage visible and right-align extension statuses when space permits. */
-function layoutSecondaryLine(usageText: string, statusText: string, width: number, theme: Theme): string | undefined {
-	if (!usageText && !statusText) return undefined;
-	if (!usageText) return truncateToWidth(statusText, width, theme.fg("dim", "..."));
-	if (!statusText) return truncateToWidth(usageText, width, theme.fg("dim", "..."));
-
-	const usageWidth = visibleWidth(usageText);
-	const statusWidth = visibleWidth(statusText);
-	if (usageWidth + statusWidth < width) {
-		return usageText + " ".repeat(width - usageWidth - statusWidth) + statusText;
+/** Left-align `left`, right-align `right`, filling the gap with spaces. */
+function layoutLeftRight(left: string, right: string, width: number, theme: Theme): string {
+	const ellipsis = theme.fg("dim", "...");
+	if (width <= 0) return "";
+	if (!right) return truncateToWidth(left, width, ellipsis);
+	if (!left) {
+		const rightWidth = visibleWidth(right);
+		if (rightWidth >= width) return truncateToWidth(right, width, ellipsis);
+		return `${" ".repeat(width - rightWidth)}${right}`;
 	}
 
-	if (usageWidth >= width) return truncateToWidth(usageText, width, theme.fg("dim", "..."));
-	const remainingStatusWidth = width - usageWidth - 1;
-	if (remainingStatusWidth < 4) return usageText;
-	return `${usageText} ${truncateToWidth(statusText, remainingStatusWidth, theme.fg("dim", "..."))}`;
+	let leftText = left;
+	let rightText = right;
+	let leftWidth = visibleWidth(leftText);
+	let rightWidth = visibleWidth(rightText);
+
+	if (leftWidth + rightWidth + MIN_GAP > width) {
+		// Prefer keeping the right side readable; give it up to ~45% when both compete.
+		const maxRightWidth = Math.min(rightWidth, Math.max(8, Math.floor(width * 0.45)));
+		if (rightWidth > maxRightWidth) {
+			rightText = truncateToWidth(rightText, maxRightWidth, ellipsis);
+			rightWidth = visibleWidth(rightText);
+		}
+		const maxLeftWidth = width - rightWidth - MIN_GAP;
+		if (maxLeftWidth < 1) return truncateToWidth(rightText, width, ellipsis);
+		leftText = truncateToWidth(leftText, maxLeftWidth, ellipsis);
+		leftWidth = visibleWidth(leftText);
+	}
+
+	const gap = Math.max(MIN_GAP, width - leftWidth - rightWidth);
+	return `${leftText}${" ".repeat(gap)}${rightText}`;
+}
+
+/**
+ * Line 2 zones: CTX left, optional extension status in the middle gap, usage right.
+ * Drops middle first when space is tight; caller should pass progressively smaller rights.
+ */
+function layoutSecondaryLine(
+	contextText: string,
+	statusText: string,
+	usageText: string,
+	width: number,
+	theme: Theme,
+): string {
+	const ellipsis = theme.fg("dim", "...");
+	if (!usageText && !statusText) return truncateToWidth(contextText, width, ellipsis);
+
+	const rightText = usageText || statusText;
+	const middleText = usageText && statusText ? statusText : "";
+
+	if (!middleText) return layoutLeftRight(contextText, rightText, width, theme);
+
+	const contextWidth = visibleWidth(contextText);
+	const usageWidth = visibleWidth(usageText);
+	const statusWidth = visibleWidth(statusText);
+	const needed = contextWidth + usageWidth + statusWidth + MIN_GAP * 2;
+
+	if (needed <= width) {
+		const free = width - contextWidth - usageWidth - statusWidth;
+		const leftPad = Math.floor(free / 2);
+		const rightPad = free - leftPad;
+		return `${contextText}${" ".repeat(leftPad)}${statusText}${" ".repeat(rightPad)}${usageText}`;
+	}
+
+	// Not enough room for a full middle status — keep CTX · usage, drop status.
+	return layoutLeftRight(contextText, usageText, width, theme);
+}
+
+function fitsLeftRight(left: string, right: string, width: number): boolean {
+	if (!right) return visibleWidth(left) <= width;
+	if (!left) return visibleWidth(right) <= width;
+	return visibleWidth(left) + visibleWidth(right) + MIN_GAP <= width;
+}
+
+/** Progressive drop: branch → short path → drop provider → truncate. */
+function fitPrimaryLine(options: {
+	modelWithProvider: string;
+	modelName: string;
+	effortPart: string;
+	cwdFull: string;
+	cwdShort: string;
+	branchPart: string;
+	separator: string;
+	width: number;
+	theme: Theme;
+}): string {
+	const { modelWithProvider, modelName, effortPart, cwdFull, cwdShort, branchPart, separator, width, theme } =
+		options;
+
+	const leftRich = joinSegments([modelWithProvider, effortPart], separator);
+	const leftPlain = joinSegments([modelName, effortPart], separator);
+
+	const candidates: Array<{ left: string; right: string }> = [
+		{ left: leftRich, right: joinSegments([cwdFull, branchPart], separator) },
+		{ left: leftRich, right: cwdFull },
+		{ left: leftRich, right: joinSegments([cwdShort, branchPart], separator) },
+		{ left: leftRich, right: cwdShort },
+		{ left: leftPlain, right: joinSegments([cwdShort, branchPart], separator) },
+		{ left: leftPlain, right: cwdShort },
+		{ left: leftPlain, right: "" },
+	];
+
+	for (const candidate of candidates) {
+		if (fitsLeftRight(candidate.left, candidate.right, width)) {
+			return layoutLeftRight(candidate.left, candidate.right, width, theme);
+		}
+	}
+
+	return layoutLeftRight(leftPlain, cwdShort, width, theme);
+}
+
+/** Progressive drop on the usage side: full → drop W → drop R; status fills middle when space allows. */
+function fitSecondaryLine(options: {
+	contextText: string;
+	statusText: string;
+	usageCandidates: string[];
+	width: number;
+	theme: Theme;
+}): string {
+	const { contextText, statusText, usageCandidates, width, theme } = options;
+
+	if (usageCandidates.length === 0) {
+		return layoutLeftRight(contextText, statusText, width, theme);
+	}
+
+	for (const usageText of usageCandidates) {
+		if (fitsLeftRight(contextText, usageText, width)) {
+			return layoutSecondaryLine(contextText, statusText, usageText, width, theme);
+		}
+	}
+
+	const fallbackUsage = usageCandidates[0] ?? "";
+	return layoutLeftRight(contextText, fallbackUsage, width, theme);
 }
 
 export default function statusline(pi: ExtensionAPI): void {
@@ -183,39 +328,67 @@ export default function statusline(pi: ExtensionAPI): void {
 				render(width: number): string[] {
 					const branchEntries = ctx.sessionManager.getBranch();
 					const model = ctx.model;
-					const modelName = model?.name ?? model?.id ?? "no-model";
-					let modelIdentity = theme.fg("toolTitle", theme.bold(modelName));
-					if (model?.provider) {
-						modelIdentity += ` ${theme.fg("muted", `(${model.provider})`)}`;
-					}
+					const modelName = theme.fg("toolTitle", theme.bold(model?.name ?? model?.id ?? "no-model"));
+					const providerPart = model?.provider ? theme.fg("muted", `(${model.provider})`) : "";
+					const modelWithProvider = providerPart ? `${modelName} ${providerPart}` : modelName;
 
-					const primaryParts = [modelIdentity];
+					let effortPart = "";
 					if (model?.reasoning) {
 						const thinkingLevel = getCurrentThinkingLevel(branchEntries);
 						if (thinkingLevel !== "off") {
-							primaryParts.push(theme.getThinkingBorderColor(thinkingLevel)(thinkingLevel));
+							effortPart = theme.getThinkingBorderColor(thinkingLevel)(thinkingLevel);
 						}
 					}
-					primaryParts.push(formatContextUsage(ctx, theme));
-					primaryParts.push(theme.fg("success", formatWorkingDirectory(ctx.cwd)));
-
-					const gitBranch = footerData.getGitBranch();
-					if (gitBranch) primaryParts.push(theme.fg("accent", gitBranch));
 
 					const separator = theme.fg("dim", " · ");
-					const primaryLine = truncateToWidth(
-						primaryParts.join(separator),
-						width,
-						theme.fg("dim", "..."),
-					);
+					const cwdDisplay = formatWorkingDirectory(ctx.cwd);
+					const cwdFull = theme.fg("success", cwdDisplay);
+					const cwdShort = theme.fg("success", pathBasename(cwdDisplay));
+					const gitBranch = footerData.getGitBranch();
+					const branchPart = gitBranch ? theme.fg("accent", gitBranch) : "";
 
+					const primaryLine = fitPrimaryLine({
+						modelWithProvider,
+						modelName,
+						effortPart,
+						cwdFull,
+						cwdShort,
+						branchPart,
+						separator,
+						width,
+						theme,
+					});
+
+					const contextText = formatContextUsage(ctx, theme);
 					const usageSummary = summarizeUsage(branchEntries);
 					const usesSubscription = model ? ctx.modelRegistry.isUsingOAuth(model) : false;
-					const usageLine = formatUsageSummary(usageSummary, usesSubscription, theme);
-					const extensionStatuses = formatExtensionStatuses(footerData.getExtensionStatuses(), theme);
-					const secondaryLine = layoutSecondaryLine(usageLine, extensionStatuses, width, theme);
+					const usageCandidates = [
+						formatUsageSummary(usageSummary, usesSubscription, theme, {
+							includeCacheRead: true,
+							includeCacheWrite: true,
+						}),
+						formatUsageSummary(usageSummary, usesSubscription, theme, {
+							includeCacheRead: true,
+							includeCacheWrite: false,
+						}),
+						formatUsageSummary(usageSummary, usesSubscription, theme, {
+							includeCacheRead: false,
+							includeCacheWrite: false,
+						}),
+					];
+					// Deduplicate identical progressive candidates (e.g. when W/R are zero).
+					const uniqueUsageCandidates = [...new Set(usageCandidates.filter(Boolean))];
+					const statusText = formatExtensionStatuses(footerData.getExtensionStatuses(), theme);
 
-					return secondaryLine ? [primaryLine, secondaryLine] : [primaryLine];
+					const secondaryLine = fitSecondaryLine({
+						contextText,
+						statusText,
+						usageCandidates: uniqueUsageCandidates,
+						width,
+						theme,
+					});
+
+					return [primaryLine, secondaryLine];
 				},
 			};
 		});

@@ -7,7 +7,7 @@ This Pi package contains commonly used extensions and themes, maintained for per
 | Extension | What it does |
 |:-:|---|
 | [`question`](extensions/question/README.md) | `question` tool — multiple-choice prompts to the user, including multi-select and custom "Other" answers |
-| [`statusline`](extensions/statusline/README.md) | Fixed two-line footer with model provider, effort, context, cwd, branch, token/cache usage, and cost |
+| [`statusline`](extensions/statusline/README.md) | Fixed two-line left/right footer: model·effort | cwd·branch; CTX | tokens·cache·cost |
 | [`deepwiki`](extensions/deepwiki/README.md) | `deepwiki` tool — query DeepWiki repository docs for GitHub repos without adding generic MCP support to Pi |
 | [`rewind`](extensions/rewind/README.md) | Per-edit file backups; restore via `/tree`, settings & storage via `/rewind` |
 | [`read-before-edit`](extensions/read-before-edit/README.md) | Blocks edit/write of a file that wasn't read first (or changed since read) |
