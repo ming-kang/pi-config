@@ -6,7 +6,7 @@ Replaces Pi's built-in footer with a compact, color-coded status line. It regist
 
 ```
 Model · Effort · CTX 23% · ~cwd · branch              ↑in ↓out Rcache $cost
-fast-context: …                                       ← line 2, only when set
+extension-status: …                                   ← line 2, only when set
 ```
 
 - **Left:** model name · effort (thinking level, only when the model supports reasoning and the level isn't `off`) · context usage % · cwd (shortened to `~`) · git branch (if any).

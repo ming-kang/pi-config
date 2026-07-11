@@ -9,7 +9,6 @@ This Pi package contains commonly used extensions and themes, maintained for per
 | [`question`](extensions/question/README.md) | `question` tool — multiple-choice prompts to the user, including multi-select and custom "Other" answers |
 | [`statusline`](extensions/statusline/README.md) | Compact color-coded footer (model · effort · ctx% · cwd · branch · tokens · cost) with a `/statusline` settings menu |
 | [`deepwiki`](extensions/deepwiki/README.md) | `deepwiki` tool — query DeepWiki repository docs for GitHub repos without adding generic MCP support to Pi |
-| [`fast-context`](extensions/fast-context/README.md) | `fast_context_search` tool + `/fast-context` command — Pi-native semantic code retrieval via Devin's hosted Fast Context backend |
 | [`rewind`](extensions/rewind/README.md) | Per-edit file backups; restore via `/tree`, settings & storage via `/rewind` |
 | [`read-before-edit`](extensions/read-before-edit/README.md) | Blocks edit/write of a file that wasn't read first (or changed since read) |
 | [`todo`](extensions/todo/README.md) | Conversation-backed task list tool with `/todos` and a live above-editor overlay |
