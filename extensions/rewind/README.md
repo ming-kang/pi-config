@@ -63,6 +63,10 @@ compaction; the index is rebuilt from them on `session_start`.
 - **Change detection.** A file is re-backed-up only when its stat (mode/size) or
   content differs from its latest backup; an `mtime` older than the backup skips
   the content read entirely.
+- **Restore path is single-scan.** The `/tree` confirm pass caches the changed
+  absolute paths; apply restores only those paths and skips a second
+  content compare. Backup, compare, and restore IO are concurrency-capped (16)
+  so large tracked sets do not open unbounded file handles.
 
 ## Files
 

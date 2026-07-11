@@ -2,7 +2,7 @@
  * restore.ts — map a /tree navigation target to the snapshot that should be
  * restored and apply it via the engine.
  */
-import { applySnapshot, collectChanges } from "./engine.ts";
+import { type ApplySnapshotOptions, applySnapshot, collectChanges } from "./engine.ts";
 import type { FileHistorySnapshot } from "./snapshot.ts";
 
 /** Minimal session view we need to walk the entry tree. */
@@ -50,10 +50,12 @@ export function snapshotChangedPaths(sessionId: string, snapshot: FileHistorySna
 
 /**
  * Restore the work tree to `snapshot` and return changed absolute paths.
+ * Pass `onlyPaths` from a prior snapshotChangedPaths call to skip re-compare.
  */
 export async function restoreToSnapshot(
 	sessionId: string,
 	snapshot: FileHistorySnapshot,
+	opts?: ApplySnapshotOptions,
 ): Promise<string[]> {
-	return applySnapshot(sessionId, snapshot);
+	return applySnapshot(sessionId, snapshot, opts);
 }

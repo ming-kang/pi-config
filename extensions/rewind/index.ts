@@ -59,9 +59,15 @@ configureStorage({ backupsRoot: rewindBackupsRoot(), sessionsRoot: sessionsDirec
 // /rewind menu changes take effect without a reload.
 let config: RewindConfig = loadRewindConfig();
 
+/** /tree confirm → apply payload (changedPaths skips a second originChanged pass). */
+interface PendingTreeRestore {
+	snapshot: FileHistorySnapshot;
+	changedPaths: string[];
+}
+
 // Per-session transient state held by the integration layer.
 const pendingPrompt = new Map<string, string>(); // turn prompt, captured for the snapshot label
-const pendingTreeRestore = new Map<string, FileHistorySnapshot | null>(); // /tree sync intent
+const pendingTreeRestore = new Map<string, PendingTreeRestore | null>(); // /tree sync intent
 
 // ---- helpers --------------------------------------------------------------
 
@@ -209,18 +215,23 @@ export default function rewind(pi: ExtensionAPI): void {
 			`Restore ${n} file${n === 1 ? "" : "s"} to this point?\n${formatRestorePreview(changed, ctx.cwd)}`,
 			["Yes, restore files", "No, conversation only"],
 		);
-		if (choice && choice.startsWith("Yes")) pendingTreeRestore.set(sid, target);
+		if (choice && choice.startsWith("Yes")) {
+			// Cache paths so session_tree can apply without a second full compare.
+			pendingTreeRestore.set(sid, { snapshot: target, changedPaths: changed });
+		}
 	});
 
 	// session_tree: execute any sync intent recorded above.
 	pi.on("session_tree", async (_event, ctx) => {
 		const sid = ctx.sessionManager.getSessionId();
 		if (!sid) return;
-		const target = pendingTreeRestore.get(sid);
+		const pending = pendingTreeRestore.get(sid);
 		pendingTreeRestore.set(sid, null);
-		if (!target) return;
+		if (!pending) return;
 		try {
-			const changed = await restoreToSnapshot(sid, target);
+			const changed = await restoreToSnapshot(sid, pending.snapshot, {
+				onlyPaths: new Set(pending.changedPaths),
+			});
 			if (changed.length > 0) {
 				ctx.ui.notify(`Restored ${changed.length} file${changed.length === 1 ? "" : "s"} to this checkpoint.`, "info");
 			}

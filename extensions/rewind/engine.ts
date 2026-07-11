@@ -36,12 +36,16 @@ import type { FileBackup, FileHistorySnapshot } from "./snapshot.ts";
 const MAX_SNAPSHOTS = 100;
 /** Avoid reading very large files solely to compare backup content. */
 const MAX_CONTENT_BYTES = 25 * 1024 * 1024;
+/** Cap concurrent backup/compare/restore IO so long tracked sets don't thrash handles. */
+const IO_CONCURRENCY = 16;
 
 export interface FileHistoryState {
 	/** Finalized + persisted frames, oldest first. */
 	snapshots: FileHistorySnapshot[];
 	/** All tracking-paths ever edited this session. */
 	trackedFiles: Set<string>;
+	/** Latest backup per tracking path (finalized + in-progress pending versions). */
+	latestByTracking: Map<string, FileBackup>;
 	/** The current turn's working frame (built across the turn, persisted at endTurn). */
 	pending: FileHistorySnapshot | null;
 	/** Whether the pending frame differs from the last finalized frame. */
@@ -50,13 +54,56 @@ export interface FileHistoryState {
 	seq: number;
 }
 
+export interface ApplySnapshotOptions {
+	/**
+	 * Absolute paths already known to differ (e.g. from collectChanges).
+	 * When set, only those paths are restored/deleted and originChanged is skipped.
+	 */
+	onlyPaths?: ReadonlySet<string>;
+}
+
 // ---- per-session state ----------------------------------------------------
 
 const states = new Map<string, FileHistoryState>();
 const cwds = new Map<string, string>();
 
 function freshState(): FileHistoryState {
-	return { snapshots: [], trackedFiles: new Set(), pending: null, dirty: false, seq: 0 };
+	return {
+		snapshots: [],
+		trackedFiles: new Set(),
+		latestByTracking: new Map(),
+		pending: null,
+		dirty: false,
+		seq: 0,
+	};
+}
+
+/** Run async work over items with a fixed concurrency cap. Preserves result order. */
+async function mapPool<T, R>(items: readonly T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+	if (items.length === 0) return [];
+	const results = new Array<R>(items.length);
+	let next = 0;
+	async function worker(): Promise<void> {
+		for (;;) {
+			const i = next++;
+			if (i >= items.length) return;
+			results[i] = await fn(items[i]!);
+		}
+	}
+	const n = Math.min(concurrency, items.length);
+	await Promise.all(Array.from({ length: n }, () => worker()));
+	return results;
+}
+
+/** Rebuild latestByTracking from finalized frames (oldest → newest, last write wins). */
+function rebuildLatestIndex(snapshots: FileHistorySnapshot[]): Map<string, FileBackup> {
+	const latest = new Map<string, FileBackup>();
+	for (const snap of snapshots) {
+		for (const [tracking, backup] of Object.entries(snap.trackedFileBackups)) {
+			latest.set(tracking, backup);
+		}
+	}
+	return latest;
 }
 
 function getState(sid: string): FileHistoryState {
@@ -112,11 +159,7 @@ function backupPathFor(sid: string, name: string): string {
 }
 
 function latestBackupOf(state: FileHistoryState, tracking: string): FileBackup | undefined {
-	for (let i = state.snapshots.length - 1; i >= 0; i--) {
-		const b = state.snapshots[i]!.trackedFileBackups[tracking];
-		if (b) return b;
-	}
-	return state.pending?.trackedFileBackups[tracking];
+	return state.latestByTracking.get(tracking);
 }
 
 /** First-ever recorded backup for a file (used when rewinding before it was tracked). */
@@ -126,6 +169,17 @@ function firstBackupName(state: FileHistoryState, tracking: string): string | nu
 		if (b && b.version === 1) return b.backupName;
 	}
 	return undefined;
+}
+
+/** Resolve the backup blob name for `tracking` at `target` (null = did not exist). */
+function backupNameForTarget(
+	state: FileHistoryState,
+	target: FileHistorySnapshot,
+	tracking: string,
+): string | null | undefined {
+	const tb = target.trackedFileBackups[tracking];
+	if (tb) return tb.backupName;
+	return firstBackupName(state, tracking);
 }
 
 // ---- change detection (ported fileHistory.ts compareStatsAndContent) ------
@@ -263,37 +317,39 @@ export async function beginTurn(sid: string): Promise<void> {
 	const backups: Record<string, FileBackup> = {};
 	let dirty = false;
 
-	await Promise.all(
-		Array.from(state.trackedFiles, async (tracking) => {
-			try {
-				const filePath = expand(tracking, cwd);
-				const latest = latestBackupOf(state, tracking);
-				const nextVersion = latest ? latest.version + 1 : 1;
-				const st = await statOrNull(filePath);
-				if (!st) {
-					// Already recorded absent in the latest frame -> reuse it. Allocating a
-					// fresh null version every turn would pin dirty=true forever once a
-					// tracked file is deleted, defeating the "skip unchanged turns" check
-					// and flushing real checkpoints out of the capped ring.
-					if (latest && latest.backupName === null) {
-						backups[tracking] = latest;
-						return;
-					}
-					backups[tracking] = { backupName: null, version: nextVersion };
-					dirty = true;
+	await mapPool(Array.from(state.trackedFiles), IO_CONCURRENCY, async (tracking) => {
+		try {
+			const filePath = expand(tracking, cwd);
+			const latest = latestBackupOf(state, tracking);
+			const nextVersion = latest ? latest.version + 1 : 1;
+			const st = await statOrNull(filePath);
+			if (!st) {
+				// Already recorded absent in the latest frame -> reuse it. Allocating a
+				// fresh null version every turn would pin dirty=true forever once a
+				// tracked file is deleted, defeating the "skip unchanged turns" check
+				// and flushing real checkpoints out of the capped ring.
+				if (latest && latest.backupName === null) {
+					backups[tracking] = latest;
 					return;
 				}
-				if (latest && latest.backupName !== null && !(await originChanged(sid, filePath, latest.backupName, st))) {
-					backups[tracking] = latest; // unchanged -> reuse
-					return;
-				}
-				backups[tracking] = await createBackup(sid, filePath, tracking, nextVersion);
+				const absent: FileBackup = { backupName: null, version: nextVersion };
+				backups[tracking] = absent;
+				state.latestByTracking.set(tracking, absent);
 				dirty = true;
-			} catch {
-				// skip this file; never break the turn
+				return;
 			}
-		}),
-	);
+			if (latest && latest.backupName !== null && !(await originChanged(sid, filePath, latest.backupName, st))) {
+				backups[tracking] = latest; // unchanged -> reuse
+				return;
+			}
+			const created = await createBackup(sid, filePath, tracking, nextVersion);
+			backups[tracking] = created;
+			state.latestByTracking.set(tracking, created);
+			dirty = true;
+		} catch {
+			// skip this file; never break the turn
+		}
+	});
 
 	state.pending = { v: 1, userEntryId: "", turnId: "", prompt: "", trackedFileBackups: backups, timestamp: "" };
 	state.dirty = dirty;
@@ -320,6 +376,7 @@ export function trackEdit(sid: string, absPath: string): void {
 	const backup = createBackupSync(sid, expand(tracking, cwd), tracking, version);
 	state.pending.trackedFileBackups[tracking] = backup;
 	state.trackedFiles.add(tracking);
+	state.latestByTracking.set(tracking, backup);
 	state.dirty = true;
 }
 
@@ -389,59 +446,72 @@ async function pruneDroppedBlobs(
 /**
  * Absolute paths that restoring to `target` would change on disk (empty =
  * nothing to do). Same walk applySnapshot performs, without writing — the
- * caller can both count and preview the files from one pass.
+ * caller can both count and preview the files from one pass. Concurrent with
+ * IO_CONCURRENCY; result order matches trackedFiles insertion order.
  */
 export async function collectChanges(sid: string, target: FileHistorySnapshot): Promise<string[]> {
 	const state = getState(sid);
 	const cwd = cwdFor(sid);
-	const changed: string[] = [];
-	for (const tracking of state.trackedFiles) {
+	const trackings = Array.from(state.trackedFiles);
+	const results = await mapPool(trackings, IO_CONCURRENCY, async (tracking) => {
 		try {
 			const filePath = expand(tracking, cwd);
-			const tb = target.trackedFileBackups[tracking];
-			const name = tb ? tb.backupName : firstBackupName(state, tracking);
-			if (name === undefined) continue;
+			const name = backupNameForTarget(state, target, tracking);
+			if (name === undefined) return null;
 			if (name === null) {
-				if (await statOrNull(filePath)) changed.push(filePath);
-				continue;
+				return (await statOrNull(filePath)) ? filePath : null;
 			}
-			if (await originChanged(sid, filePath, name)) changed.push(filePath);
+			return (await originChanged(sid, filePath, name)) ? filePath : null;
 		} catch {
-			// ignore
+			return null;
 		}
-	}
-	return changed;
+	});
+	return results.filter((p): p is string => p !== null);
 }
 
-/** Restore the work tree to `target`. Returns the list of changed file paths. */
-export async function applySnapshot(sid: string, target: FileHistorySnapshot): Promise<string[]> {
+/**
+ * Restore the work tree to `target`. Returns the list of changed file paths.
+ * Pass `onlyPaths` (from a prior collectChanges) to skip a second originChanged
+ * pass and only touch those absolute paths.
+ */
+export async function applySnapshot(
+	sid: string,
+	target: FileHistorySnapshot,
+	opts?: ApplySnapshotOptions,
+): Promise<string[]> {
 	const state = getState(sid);
 	const cwd = cwdFor(sid);
-	const changed: string[] = [];
-	for (const tracking of state.trackedFiles) {
+	const only = opts?.onlyPaths;
+	const trackings = Array.from(state.trackedFiles).filter((tracking) => {
+		if (!only) return true;
+		return only.has(expand(tracking, cwd));
+	});
+
+	const results = await mapPool(trackings, IO_CONCURRENCY, async (tracking) => {
 		try {
 			const filePath = expand(tracking, cwd);
-			const tb = target.trackedFileBackups[tracking];
-			const name = tb ? tb.backupName : firstBackupName(state, tracking);
-			if (name === undefined) continue; // can't resolve -> leave file alone
+			const name = backupNameForTarget(state, target, tracking);
+			if (name === undefined) return null; // can't resolve -> leave file alone
 			if (name === null) {
 				try {
 					await unlink(filePath);
-					changed.push(filePath);
+					return filePath;
 				} catch (e) {
 					if (!isENOENT(e)) throw e;
+					return null;
 				}
-				continue;
 			}
-			if (await originChanged(sid, filePath, name)) {
+			// onlyPaths already proven different at confirm time — skip re-compare.
+			if (only || (await originChanged(sid, filePath, name))) {
 				await restoreBackup(sid, filePath, name);
-				changed.push(filePath);
+				return filePath;
 			}
+			return null;
 		} catch {
-			// skip this file
+			return null;
 		}
-	}
-	return changed;
+	});
+	return results.filter((p): p is string => p !== null);
 }
 
 // ---- persistence rebuild + resume migration -------------------------------
@@ -466,7 +536,14 @@ export function restoreStateFromSnapshots(
 	for (const snap of retained) {
 		for (const key of Object.keys(snap.trackedFileBackups)) trackedFiles.add(key);
 	}
-	states.set(sid, { snapshots: [...retained], trackedFiles, pending: null, dirty: false, seq: retained.length });
+	states.set(sid, {
+		snapshots: [...retained],
+		trackedFiles,
+		latestByTracking: rebuildLatestIndex(retained),
+		pending: null,
+		dirty: false,
+		seq: retained.length,
+	});
 }
 
 /**
