@@ -94,7 +94,7 @@ interface BranchStats {
 
 /**
  * One pass over the branch: latest thinking level + cumulative usage.
- * Cached across footer renders while the leaf entry identity is unchanged.
+ * Cached across footer paints while leaf identity + usage fingerprint hold.
  */
 function computeBranchStats(branchEntries: SessionEntry[]): BranchStats {
 	let thinkingLevel: ThinkingLevel = "off";
@@ -135,23 +135,67 @@ function computeBranchStats(branchEntries: SessionEntry[]): BranchStats {
 	return { thinkingLevel, usage };
 }
 
-/** Cache keyed by branch length + last-entry reference (survives new array wrappers). */
+/**
+ * Fingerprint the leaf so streaming usage updates invalidate even when the
+ * SessionEntry object identity is reused in place.
+ */
+function leafUsageFingerprint(entry: SessionEntry | undefined): string {
+	if (!entry || entry.type !== "message" || entry.message.role !== "assistant") return "";
+	const assistantMessage = entry.message as AssistantMessage;
+	const usage = assistantMessage.usage;
+	if (!usage) return "";
+	return [
+		usage.input ?? 0,
+		usage.output ?? 0,
+		usage.cacheRead ?? 0,
+		usage.cacheWrite ?? 0,
+		usage.cost?.total ?? 0,
+	].join(":");
+}
+
+/** Cache keyed by branch length + leaf identity + usage fingerprint. */
 interface BranchStatsCache {
 	length: number;
 	lastEntry: SessionEntry | undefined;
+	leafUsage: string;
 	stats: BranchStats;
 }
 
 function getBranchStats(branchEntries: SessionEntry[], cache: { current: BranchStatsCache | null }): BranchStats {
 	const lastEntry = branchEntries.length > 0 ? branchEntries[branchEntries.length - 1] : undefined;
+	const leafUsage = leafUsageFingerprint(lastEntry);
 	const cached = cache.current;
-	if (cached && cached.length === branchEntries.length && cached.lastEntry === lastEntry) {
+	if (
+		cached &&
+		cached.length === branchEntries.length &&
+		cached.lastEntry === lastEntry &&
+		cached.leafUsage === leafUsage
+	) {
 		return cached.stats;
 	}
 
 	const stats = computeBranchStats(branchEntries);
-	cache.current = { length: branchEntries.length, lastEntry, stats };
+	cache.current = { length: branchEntries.length, lastEntry, leafUsage, stats };
 	return stats;
+}
+
+/** Avoid rebuilding the branch path (leaf→root walk) on every footer paint. */
+interface BranchPathCache {
+	leafId: string | null;
+	entries: SessionEntry[];
+}
+
+function getBranchEntries(
+	getLeafId: () => string | null,
+	getBranch: () => SessionEntry[],
+	cache: { current: BranchPathCache | null },
+): SessionEntry[] {
+	const leafId = getLeafId();
+	const cached = cache.current;
+	if (cached && cached.leafId === leafId) return cached.entries;
+	const entries = getBranch();
+	cache.current = { leafId, entries };
+	return entries;
 }
 
 function formatContextUsage(ctx: ExtensionContext, theme: Theme): string {
@@ -341,7 +385,9 @@ export default function statusline(pi: ExtensionAPI): void {
 	pi.on("session_start", (_event, ctx) => {
 		if (!isTui(ctx)) return;
 
-		// Per-footer instance: one branch walk per invalidation, not two every paint.
+		// Per-footer instance: branch path + stats cached across paints until the
+		// leaf moves (or streaming usage on the leaf changes).
+		const branchPathCache: { current: BranchPathCache | null } = { current: null };
 		const branchStatsCache: { current: BranchStatsCache | null } = { current: null };
 
 		ctx.ui.setFooter((tui, theme, footerData) => {
@@ -349,10 +395,15 @@ export default function statusline(pi: ExtensionAPI): void {
 			return {
 				dispose: unsubscribeFromBranchChanges,
 				invalidate() {
+					branchPathCache.current = null;
 					branchStatsCache.current = null;
 				},
 				render(width: number): string[] {
-					const branchEntries = ctx.sessionManager.getBranch();
+					const branchEntries = getBranchEntries(
+						() => ctx.sessionManager.getLeafId(),
+						() => ctx.sessionManager.getBranch(),
+						branchPathCache,
+					);
 					const { thinkingLevel, usage: usageSummary } = getBranchStats(branchEntries, branchStatsCache);
 					const model = ctx.model;
 					const modelName = theme.fg("toolTitle", theme.bold(model?.name ?? model?.id ?? "no-model"));

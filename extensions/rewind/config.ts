@@ -25,6 +25,9 @@ export const DEFAULT_CONFIG: RewindConfig = {
 	maxSnapshots: 100,
 };
 
+/** In-process cache so lifecycle hooks do not re-read config.json every turn. */
+let cached: RewindConfig | null = null;
+
 function clampInt(value: unknown, min: number, max: number, fallback: number): number {
 	if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
 	return Math.min(max, Math.max(min, Math.round(value)));
@@ -40,7 +43,7 @@ function normalize(raw: unknown): RewindConfig {
 	};
 }
 
-export function loadRewindConfig(): RewindConfig {
+function readConfigFromDisk(): RewindConfig {
 	const configPath = rewindConfigPath();
 	if (!existsSync(configPath)) return { ...DEFAULT_CONFIG };
 	try {
@@ -50,11 +53,26 @@ export function loadRewindConfig(): RewindConfig {
 	}
 }
 
+/** Cached config (reads disk once, then serves memory until reload/save). */
+export function loadRewindConfig(): RewindConfig {
+	if (!cached) cached = readConfigFromDisk();
+	return cached;
+}
+
+/** Force a disk re-read (call on session_start so external edits take effect). */
+export function reloadRewindConfig(): RewindConfig {
+	cached = readConfigFromDisk();
+	return cached;
+}
+
+/** Persist and update the in-memory cache so the next turn sees the change. */
 export function saveRewindConfig(config: RewindConfig): boolean {
+	const next = normalize(config);
 	const configPath = rewindConfigPath();
 	try {
 		mkdirSync(dirname(configPath), { recursive: true });
-		writeFileSync(configPath, JSON.stringify(normalize(config), null, 2) + "\n", "utf8");
+		writeFileSync(configPath, JSON.stringify(next, null, 2) + "\n", "utf8");
+		cached = next;
 		return true;
 	} catch {
 		return false;

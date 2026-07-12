@@ -13,10 +13,10 @@ Adds a `todo` tool plus `/todos` for multi-step work, with a live overlay above 
 
 ## Design notes
 
-- **Conversation-backed state.** Every tool result stores a full snapshot in `details`; lifecycle handlers replay the current branch on `/reload`, compaction, and session-tree navigation. There is no separate disk database. Compaction-safe by design: `sessionManager.getBranch()` returns the full branch history — only `buildSessionContext` summarizes for the LLM.
+- **Conversation-backed state.** Every tool result stores a full snapshot in `details`; lifecycle handlers replay the current branch on `/reload`, compaction, and session-tree navigation. There is no separate disk database. Compaction-safe by design: `sessionManager.getBranch()` returns the full branch history — only `buildSessionContext` summarizes for the LLM. Replay walks the branch **tail → head** and stops at the latest todo `toolResult` (long sessions do not re-scan the whole path).
 - **State is keyed per session id.** Resume and `/tree` can switch sessions within one process; `execute` and the lifecycle handlers re-point the active bucket before touching state (renderers get no ctx, hence the module-level pointer — see `state.ts`).
 - **Status transitions are gated.** `completed` can be reopened to `in_progress` or `pending`, but `deleted` is terminal. Reopening lets a premature completion recover without losing the task id and its `blockedBy` edges — matching the harness `TaskUpdate` semantics. Single-active is enforced on demote (not hard-reject) so the model does not need a retry loop.
-- **Overlay render is not cached.** `TodoOverlay.render` recomputes `renderOverlayLines` every call, so it is inherently width-correct on resize. It tracks which completed items were shown this turn (a render side effect) so `hideCompletedFromPreviousTurn` (on `agent_start`) can drop them next turn.
+- **Overlay paint is pure + width-cached.** Completed-item visibility bookkeeping runs in `update()` / `hideCompletedFromPreviousTurn()` (mutation time), not during `render`. Same terminal width reuses the last line array; `update` and visibility changes invalidate the cache. Resize still recomputes for the new width.
 - The overlay body is capped (10 rows), prioritizing non-completed items and showing a `+N more` line when truncated.
 
 ## Files
@@ -24,6 +24,6 @@ Adds a `todo` tool plus `/todos` for multi-step work, with a live overlay above 
 - `index.ts` — tool + `/todos` command, lifecycle handlers, render
 - `constants.ts` — tool/command identity and model-facing prompt copy
 - `schema.ts` — params, status/action types, details shape, and empty state
-- `state.ts` — mutation engine (`applyTodoMutation`), transition rules, cycle check, branch replay
+- `state.ts` — mutation engine (`applyTodoMutation`), transition rules, cycle check, reverse branch replay
 - `view.ts` — overlay/list formatting, status marks and colors
-- `overlay.ts` — the live `TodoOverlay` widget
+- `overlay.ts` — the live `TodoOverlay` widget (visibility bookkeeping + width-cached render)

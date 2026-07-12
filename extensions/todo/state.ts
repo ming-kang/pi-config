@@ -283,18 +283,22 @@ function isTodoDetails(value: unknown): value is TodoDetails {
 }
 
 export function replayTodosFromBranch(ctx: { sessionManager: { getBranch(): Iterable<unknown> } }): TodoState {
-	let snapshot = cloneState(EMPTY_TODO_STATE);
-	for (const entry of ctx.sessionManager.getBranch()) {
-		const item = entry as { type?: string; message?: { role?: string; toolName?: string; details?: unknown } };
+	// Latest todo toolResult wins; scan tail → head so long branches stop early.
+	const branch = Array.from(ctx.sessionManager.getBranch());
+	for (let i = branch.length - 1; i >= 0; i--) {
+		const item = branch[i] as {
+			type?: string;
+			message?: { role?: string; toolName?: string; details?: unknown };
+		};
 		if (item.type !== "message") continue;
 		if (item.message?.role !== "toolResult" || item.message.toolName !== TODO_TOOL_NAME) continue;
 		if (!isTodoDetails(item.message.details)) continue;
-		snapshot = {
+		return {
 			items: item.message.details.items.map((todo) => ({ ...todo })),
 			nextId: item.message.details.nextId,
 		};
 	}
-	return snapshot;
+	return cloneState(EMPTY_TODO_STATE);
 }
 
 export function buildTodoDetails(params: TodoParams, next: TodoState, operation: Operation): TodoDetails {

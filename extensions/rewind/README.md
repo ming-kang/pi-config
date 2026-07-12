@@ -68,7 +68,14 @@ rebuilt from them on `session_start`.
   every `/tree` navigation, so the plugins do not share mutable state.
 - **Change detection.** A file is re-backed-up only when its stat (mode/size) or
   content differs from its latest backup; an `mtime` older than the backup skips
-  the content read entirely.
+  the content read entirely. A process-local `lastSeen` index records worktree
+  mtime/size/mode at the last backup or unchanged confirmation so `beginTurn`
+  can skip backup-blob stats/content when the worktree has not moved (still one
+  worktree `stat` per tracked path). Content compare streams in 64 KiB chunks
+  instead of buffering whole files up to the 25 MB cap.
+- **Config is memory-cached.** `config.json` is re-read on `session_start` and
+  updated in memory when `/rewind` saves; lifecycle hooks no longer re-read the
+  file every turn.
 - **Restore path is single-scan.** The `/tree` confirm pass caches the changed
   absolute paths; apply restores only those paths and skips a second
   content compare. Coarse `+N / −M` stats are computed only for those paths
@@ -83,7 +90,7 @@ rebuilt from them on `session_start`.
 - `engine.ts` — the file-history backup engine (track / snapshot / apply /
   resume-migrate), ported from Claude Code's file-history
 - `snapshot.ts` — persisted snapshot data shapes (pure)
-- `config.ts` — load/save `rewind/config.json`
+- `config.ts` — load/save `rewind/config.json` (in-memory cache + `reloadRewindConfig`)
 - `gc.ts` — age + orphan storage reclamation; storage inventory for the menu
 - `menu.ts` — the `/rewind` settings + storage menu
 - `restore.ts` — `/tree`-target → snapshot matching and restore

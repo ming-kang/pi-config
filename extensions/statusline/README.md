@@ -87,6 +87,19 @@ Pi does not expose auto-compaction state to extension footer factories, so the
 native `(auto)` marker is intentionally not reproduced. Depending on private Pi
 state solely for that marker would make the extension unnecessarily fragile.
 
+## Performance notes
+
+Footer paint is hot (every TUI render). The extension caches:
+
+- **Branch path** by current leaf id — avoids rebuilding `getBranch()` (leaf→root
+  walk + reverse) when the leaf has not moved.
+- **Branch stats** (thinking level + cumulative usage) by branch length, leaf
+  entry identity, and a leaf usage fingerprint — so streaming token updates on
+  the same assistant entry still recompute, while unchanged paints reuse the
+  last walk.
+
+Both caches clear on footer `invalidate()`.
+
 ## Migration from the configurable version
 
 The previous `/statusline` command and

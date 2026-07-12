@@ -34,7 +34,7 @@ import path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { type RewindConfig, loadRewindConfig } from "./config.ts";
+import { type RewindConfig, loadRewindConfig, reloadRewindConfig } from "./config.ts";
 import {
 	beginTurn,
 	disposeSession,
@@ -63,8 +63,9 @@ import { editWriteTargetPath, resolveToolPath } from "./tool-path.ts";
 // importing paths.ts directly so they stay node-testable). Safe to call at load.
 configureStorage({ backupsRoot: rewindBackupsRoot(), sessionsRoot: sessionsDirectory() });
 
-// Global (one config.json). Refreshed at session_start and each turn boundary so
-// /rewind menu changes take effect without a reload.
+// Global (one config.json). Reloaded from disk at session_start; /rewind menu
+// saveRewindConfig updates the in-memory cache so the next turn sees changes
+// without re-reading the file every before_agent_start.
 let config: RewindConfig = loadRewindConfig();
 
 /** /tree confirm → apply payload (changedPaths skips a second originChanged pass). */
@@ -130,7 +131,7 @@ function formatRestorePreview(changedPaths: string[], cwd: string): string {
 export default function rewind(pi: ExtensionAPI): void {
 	// session_start: rebuild the index, migrate fork/resume blobs, reclaim storage.
 	pi.on("session_start", async (event, ctx) => {
-		config = loadRewindConfig();
+		config = reloadRewindConfig();
 		const sid = ctx.sessionManager.getSessionId();
 		if (!sid) return;
 		registerSession(sid, ctx.cwd);
@@ -175,6 +176,7 @@ export default function rewind(pi: ExtensionAPI): void {
 
 	// before_agent_start: open the turn's snapshot frame.
 	pi.on("before_agent_start", async (event, ctx) => {
+		// Memory-cached; session_start reloads disk, /rewind save updates cache.
 		config = loadRewindConfig();
 		if (!config.enabled) return;
 		const sid = ctx.sessionManager.getSessionId();
