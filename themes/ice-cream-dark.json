@@ -2,28 +2,30 @@
 	"$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
 	"name": "ice-cream-dark",
 	"vars": {
-		"seasalt": "#6fd4f5",
-		"sky": "#9ee0f7",
+		"seasalt": "#7dd3f0",
+		"sky": "#a8e0f5",
 		"ocean": "#5aafdf",
-		"cream": "#ffe9a8",
-		"gold": "#f5d06a",
-		"orange": "#f6ad5c",
-		"coral": "#f28b6c",
-		"seafoam": "#8fe0b8",
-		"red": "#f27a72",
-		"slate": "#6a7d84",
-		"text": "#f2f8f6",
-		"muted": "#c0ced0",
-		"dim": "#93a3a6",
-		"faint": "#5c6a70",
+		"cream": "#ffe09a",
+		"gold": "#f0c85a",
+		"orange": "#f0a05a",
+		"coral": "#e88870",
+		"seafoam": "#6ed9a0",
+		"red": "#ff7a88",
+		"slate": "#7a8a90",
+		"text": "#f7f9f8",
+		"userMsgText": "#ffffff",
+		"muted": "#9aa6aa",
+		"dim": "#6e7c80",
+		"faint": "#4a555b",
 
-		"bgBase": "#1c2126",
-		"bgSurface": "#2f373f",
-		"bgUserMsg": "#262c33",
-		"bgCustomMsg": "#3d4b57",
-		"bgToolPending": "#3e4f5c",
-		"bgToolSuccess": "#3d524a",
-		"bgToolError": "#524045"
+		"bgBase": "#14181c",
+		"bgSurface": "#252c34",
+		"bgUserMsg": "#3c424a",
+		"bgSelected": "#2a3848",
+		"bgCustomMsg": "#2e3842",
+		"bgToolPending": "#2a343c",
+		"bgToolSuccess": "#273832",
+		"bgToolError": "#3a2c30"
 	},
 	"colors": {
 		"accent": "seasalt",
@@ -36,17 +38,17 @@
 		"muted": "muted",
 		"dim": "dim",
 		"text": "text",
-		"thinkingText": "muted",
+		"thinkingText": "dim",
 
-		"selectedBg": "bgSurface",
+		"selectedBg": "bgSelected",
 		"userMessageBg": "bgUserMsg",
-		"userMessageText": "text",
-		"customMessageBg": "bgCustomMsg",
+		"userMessageText": "userMsgText",
+		"customMessageBg": "",
 		"customMessageText": "text",
 		"customMessageLabel": "sky",
-		"toolPendingBg": "bgToolPending",
-		"toolSuccessBg": "bgToolSuccess",
-		"toolErrorBg": "bgToolError",
+		"toolPendingBg": "",
+		"toolSuccessBg": "",
+		"toolErrorBg": "",
 		"toolTitle": "cream",
 		"toolOutput": "muted",
 
@@ -63,7 +65,7 @@
 
 		"toolDiffAdded": "seafoam",
 		"toolDiffRemoved": "red",
-		"toolDiffContext": "muted",
+		"toolDiffContext": "dim",
 
 		"syntaxComment": "dim",
 		"syntaxKeyword": "coral",
@@ -83,11 +85,11 @@
 		"thinkingXhigh": "coral",
 		"thinkingMax": "red",
 
-		"bashMode": "seafoam"
+		"bashMode": "coral"
 	},
 	"export": {
-		"pageBg": "#1c2126",
-		"cardBg": "#2f373f",
-		"infoBg": "#3e4f5c"
+		"pageBg": "#14181c",
+		"cardBg": "#252c34",
+		"infoBg": "#2a343c"
 	}
 }
