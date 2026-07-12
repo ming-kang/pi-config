@@ -6,7 +6,7 @@ Adds a `todo` tool plus `/todos` for multi-step work, with a live overlay above 
 
 - Actions: `create`, `update`, `list`, `get`, `delete`, `clear`. Statuses: `pending`, `in_progress`, `completed`, `deleted`. `list` accepts an optional `status` filter and `includeDeleted`.
 - The live overlay renders above the editor and hides itself when there are no visible tasks.
-- `blockedBy` dependencies are supported for sequencing; missing dependencies, deleted dependencies, self-dependencies, and cycles are rejected.
+- `blockedBy` dependencies are supported for sequencing; missing dependencies, deleted dependencies, self-dependencies, and cycles are rejected. A task cannot move to `in_progress` or `completed` until every `blockedBy` dependency is `completed`.
 - Completed tasks remain visible briefly, then drop from the overlay on the next agent turn so active work stays prominent.
 - **Exactly one `in_progress`.** Moving a task to `in_progress` auto-demotes any other `in_progress` tasks to `pending`; the tool result lists demoted ids so the model sees the side effect.
 - **Verification soft nudge.** When a completion leaves the list fully done with 3+ completed tasks and no subject/description matching `verif|test|check|review`, the tool result appends a short NOTE (text only — `details` schema unchanged).
@@ -16,6 +16,8 @@ Adds a `todo` tool plus `/todos` for multi-step work, with a live overlay above 
 - **Conversation-backed state.** Every tool result stores a full snapshot in `details`; lifecycle handlers replay the current branch on `/reload`, compaction, and session-tree navigation. There is no separate disk database. Compaction-safe by design: `sessionManager.getBranch()` returns the full branch history — only `buildSessionContext` summarizes for the LLM. Replay walks the branch **tail → head** and stops at the latest todo `toolResult` (long sessions do not re-scan the whole path).
 - **State is keyed per session id.** Resume and `/tree` can switch sessions within one process; `execute` and the lifecycle handlers re-point the active bucket before touching state (renderers get no ctx, hence the module-level pointer — see `state.ts`).
 - **Status transitions are gated.** `completed` can be reopened to `in_progress` or `pending`, but `deleted` is terminal. Reopening lets a premature completion recover without losing the task id and its `blockedBy` edges — matching the harness `TaskUpdate` semantics. Single-active is enforced on demote (not hard-reject) so the model does not need a retry loop.
+- **Tool execution is sequential** (`executionMode: "sequential"`) so parallel tool calls cannot race on in-memory state. Validation failures **throw** so Pi marks `isError: true` and the branch replays the last good snapshot.
+- **`list` output is bounded** (50 items by default) with a trailing notice when truncated.
 - **Overlay paint is pure + width-cached.** Completed-item visibility bookkeeping runs in `update()` / `hideCompletedFromPreviousTurn()` (mutation time), not during `render`. Same terminal width reuses the last line array; `update` and visibility changes invalidate the cache. Resize still recomputes for the new width.
 - The overlay body is capped (10 rows), prioritizing non-completed items and showing a `+N more` line when truncated.
 

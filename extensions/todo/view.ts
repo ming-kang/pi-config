@@ -1,6 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 
+import { dependenciesSatisfied } from "./state.ts";
 import type { TodoItem, TodoState, TodoStatus } from "./schema.ts";
 
 export const STATUS_MARK: Record<TodoStatus, string> = {
@@ -44,7 +45,7 @@ export function renderOverlayLines(state: TodoState, theme: Theme, width: number
 	const showIds = visible.some((item) => item.blockedBy?.length);
 	const body = chooseOverlayItems(visible, maxBody);
 	for (const item of body.items) {
-		lines.push(truncateToWidth(`  ${formatOverlayItem(item, theme, showIds)}`, width, "..."));
+		lines.push(truncateToWidth(`  ${formatOverlayItem(item, state, theme, showIds)}`, width, "..."));
 	}
 	if (body.hidden > 0) lines.push(truncateToWidth(theme.fg("dim", `  +${body.hidden} more`), width, "..."));
 	lines.push("");
@@ -65,13 +66,18 @@ function chooseOverlayItems(items: TodoItem[], maxBody: number): { items: TodoIt
 	return { items: selected, hidden: items.length - selected.length };
 }
 
-function formatOverlayItem(item: TodoItem, theme: Theme, showId: boolean): string {
+function formatOverlayItem(item: TodoItem, state: TodoState, theme: Theme, showId: boolean): string {
 	let text = theme.fg(STATUS_COLOR[item.status], STATUS_MARK[item.status]);
 	if (showId) text += ` ${theme.fg("accent", `#${item.id}`)}`;
 	const subject = item.status === "completed" ? theme.strikethrough(theme.fg("dim", item.subject)) : theme.fg("text", item.subject);
 	text += ` ${subject}`;
 	if (item.status === "in_progress" && item.activeForm) text += ` ${theme.fg("dim", `(${item.activeForm})`)}`;
-	if (item.blockedBy?.length) text += ` ${theme.fg("dim", `blocked by ${item.blockedBy.map((id) => `#${id}`).join(",")}`)}`;
+	if (item.blockedBy?.length) {
+		text += ` ${theme.fg("dim", `blocked by ${item.blockedBy.map((id) => `#${id}`).join(",")}`)}`;
+		if ((item.status === "pending" || item.status === "in_progress") && !dependenciesSatisfied(state, item)) {
+			text += ` ${theme.fg("warning", "(deps incomplete)")}`;
+		}
+	}
 	return text;
 }
 

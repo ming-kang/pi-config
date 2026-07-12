@@ -10,6 +10,9 @@ export const TODO_TOOL_NAME = "todo";
 export const TODO_TOOL_LABEL = "Todo";
 export const TODOS_COMMAND_NAME = "todos";
 
+/** Max tasks shown in a single `list` tool result body (model-facing). */
+export const LIST_DISPLAY_MAX_ITEMS = 50;
+
 export const TODO_TOOL_DESCRIPTION =
 	"Manage the conversation's task list for multi-step coding work. Actions: create, update, list, get, delete, clear. Tasks are short, outcome-oriented units (imperative subjects, reviewable scope) with pending/in_progress/completed status and optional blockedBy dependencies (validated, cycle-checked). Keep exactly one task in_progress: mark it before starting work, and mark it completed only when implementation and verification are genuinely done — never with failing tests or partial work; reopen a task instead of duplicating it. Use for work with three or more meaningful steps or user-provided task lists; skip it for trivial single-step tasks and simple Q&A.";
 

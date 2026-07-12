@@ -1,4 +1,4 @@
-import { TODO_TOOL_NAME } from "./constants.ts";
+import { LIST_DISPLAY_MAX_ITEMS, TODO_TOOL_NAME } from "./constants.ts";
 import { EMPTY_TODO_STATE, type TodoDetails, type TodoItem, type TodoParams, type TodoState, type TodoStatus } from "./schema.ts";
 
 type Operation =
@@ -53,6 +53,13 @@ export function commitTodoState(next: TodoState): void {
 	replaceTodoState(next);
 }
 
+/** Drop in-memory state for a session (call from session_shutdown). */
+export function disposeTodoSession(sid: string): void {
+	if (!sid) return;
+	states.delete(sid);
+	if (activeSid === sid) activeSid = "";
+}
+
 export function cloneState(source: TodoState): TodoState {
 	return {
 		items: source.items.map((item) => {
@@ -97,6 +104,28 @@ function validateDependencies(state: TodoState, deps: number[] | undefined, curr
 		if (item.status === "deleted") return `blockedBy: #${dep} is deleted`;
 	}
 	return undefined;
+}
+
+/** All listed dependencies must be completed before starting or closing a task. */
+function validateDependenciesReady(state: TodoState, deps: number[] | undefined): string | undefined {
+	if (!deps?.length) return undefined;
+	for (const dep of deps) {
+		const item = findItem(state, dep);
+		if (!item || item.status !== "completed") {
+			return `blockedBy: complete #${dep} before starting or finishing this task`;
+		}
+	}
+	return undefined;
+}
+
+/** True when every blockedBy dependency is completed (for overlay hints). */
+export function dependenciesSatisfied(state: TodoState, item: TodoItem): boolean {
+	if (!item.blockedBy?.length) return true;
+	for (const dep of item.blockedBy) {
+		const blocker = findItem(state, dep);
+		if (!blocker || blocker.status !== "completed") return false;
+	}
+	return true;
 }
 
 function createsCycle(items: TodoItem[], id: number, nextDeps: number[]): boolean {
@@ -185,6 +214,14 @@ export function applyTodoMutation(input: TodoState, params: TodoParams): Mutatio
 			}
 			if (createsCycle(state.items, current.id, nextDeps)) {
 				return error(state, "blockedBy would create a cycle");
+			}
+
+			if (
+				(nextStatus === "in_progress" || nextStatus === "completed") &&
+				current.status !== nextStatus
+			) {
+				const readyError = validateDependenciesReady(state, nextDeps);
+				if (readyError) return error(state, readyError);
 			}
 
 			const updated: TodoItem = { ...current, status: nextStatus };
@@ -293,10 +330,10 @@ export function replayTodosFromBranch(ctx: { sessionManager: { getBranch(): Iter
 		if (item.type !== "message") continue;
 		if (item.message?.role !== "toolResult" || item.message.toolName !== TODO_TOOL_NAME) continue;
 		if (!isTodoDetails(item.message.details)) continue;
-		return {
-			items: item.message.details.items.map((todo) => ({ ...todo })),
+		return cloneState({
+			items: item.message.details.items,
 			nextId: item.message.details.nextId,
-		};
+		});
 	}
 	return cloneState(EMPTY_TODO_STATE);
 }
@@ -337,7 +374,7 @@ export function formatTodoContent(operation: Operation, state: TodoState): strin
 			let view = state.items;
 			if (!operation.includeDeleted) view = view.filter((item) => item.status !== "deleted");
 			if (operation.status) view = view.filter((item) => item.status === operation.status);
-			return view.length ? view.map(formatListItem).join("\n") : "No tasks";
+			return formatBoundedList(view, operation.status, operation.includeDeleted);
 		}
 		case "get":
 			return formatDetailItem(operation.item, state);
@@ -359,6 +396,24 @@ function needsVerificationNudge(state: TodoState): boolean {
 	return !completed.some(
 		(item) => VERIFICATION_PATTERN.test(item.subject) || (item.description !== undefined && VERIFICATION_PATTERN.test(item.description)),
 	);
+}
+
+function formatBoundedList(
+	view: TodoItem[],
+	statusFilter: TodoStatus | undefined,
+	includeDeleted: boolean,
+): string {
+	if (!view.length) return "No tasks";
+	const shown = view.slice(0, LIST_DISPLAY_MAX_ITEMS);
+	const lines = shown.map(formatListItem);
+	const omitted = view.length - shown.length;
+	if (omitted > 0) {
+		const filterHint = statusFilter ? `status=${statusFilter}` : includeDeleted ? "includeDeleted=true" : "list";
+		lines.push(
+			`… and ${omitted} more (${shown.length} of ${view.length} shown). Narrow with ${filterHint} or use get with id=.`,
+		);
+	}
+	return lines.join("\n");
 }
 
 function formatListItem(item: TodoItem): string {

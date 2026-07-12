@@ -12,13 +12,14 @@
  * change the session within one process, and execute + lifecycle handlers
  * re-point the active bucket before touching state.
  */
-import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, ExtensionAPI, ToolExecutionMode } from "@earendil-works/pi-coding-agent";
 
 import { TodoOverlay } from "./overlay.ts";
 import {
 	applyTodoMutation,
 	buildTodoDetails,
 	commitTodoState,
+	disposeTodoSession,
 	formatTodoContent,
 	getTodoState,
 	replaceTodoState,
@@ -59,12 +60,16 @@ export default function todo(pi: ExtensionAPI): void {
 		promptSnippet: TODO_PROMPT_SNIPPET,
 		promptGuidelines: TODO_PROMPT_GUIDELINES,
 		parameters: TodoParamsSchema,
+		executionMode: "sequential" as ToolExecutionMode,
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<TodoDetails>> {
 			// Re-point the active bucket: resume//tree can switch sessions between
 			// lifecycle events and this call.
 			setActiveTodoSession(ctx.sessionManager.getSessionId());
 			const result = applyTodoMutation(getTodoState(), params);
+			if (result.operation.kind === "error") {
+				throw new Error(result.operation.message);
+			}
 			commitTodoState(result.state);
 			const text = formatTodoContent(result.operation, result.state);
 			return {
@@ -81,6 +86,7 @@ export default function todo(pi: ExtensionAPI): void {
 				ctx.ui.notify("/todos requires an interactive UI.", "warning");
 				return;
 			}
+			setActiveTodoSession(ctx.sessionManager.getSessionId());
 			ctx.ui.notify(formatCommandList(getTodoState()), "info");
 		},
 	});
@@ -107,7 +113,8 @@ export default function todo(pi: ExtensionAPI): void {
 		overlay?.update();
 	});
 
-	pi.on("session_shutdown", async () => {
+	pi.on("session_shutdown", async (_event, ctx) => {
+		disposeTodoSession(ctx.sessionManager.getSessionId());
 		overlay?.dispose();
 		overlay = undefined;
 	});
