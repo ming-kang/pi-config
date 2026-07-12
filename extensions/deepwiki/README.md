@@ -13,11 +13,11 @@ It is intentionally not a general MCP bridge. The extension exposes one dedicate
 ## Tool Parameters
 
 - `action`: `structure`, `contents`, or `question`
-- `repoName`: GitHub repository in `owner/repo` format, or an array of up to 10 repositories for `question`
+- `repoName`: one `owner/repo` string for `structure` and `contents`; for `question`, one repo as a string, or 2–10 repos as an array (comma-separated string also accepted)
 - `question`: required only for `action: "question"`
-- `page`: optional, only for `action: "contents"` — a page title (exact or unique partial match, case-insensitive) or 1-based index, as listed by `structure` or a truncation notice; reads that single page instead of the whole wiki. An unknown `page` fails with the available page titles listed.
+- `page`: optional, only for `action: "contents"` — 1-based index or page title from `structure` (plain titles such as `Extension System`, not numbered outline lines like `4.4 …`). Leading outline numbers on titles are stripped when matching. Unknown `page` fails with available titles listed.
 
-`repoName` is normalized before validation. `owner/repo` is the expected form, but common GitHub and DeepWiki URLs are accepted as a fallback. For model tolerance, comma-separated repo strings are also accepted and normalized into repo lists, and `pageName`/`pageTitle` are accepted as `page` aliases. If `action` is omitted, the tool defaults to `question` when a question is present, `contents` when a `page` is present, and `structure` otherwise. `structure` and `contents` require exactly one repository.
+`repoName` is normalized before validation (`owner/repo`, GitHub/DeepWiki URLs, JSON-array strings for multi-repo mistakes). `pageName`/`pageTitle` are accepted as `page` aliases. If `action` is omitted, defaults to `question` when a question is present, `contents` when `page` is present, else `structure`. Repositories not indexed on DeepWiki return repository-not-found errors — run `structure` first to detect that.
 
 ## How it works
 
@@ -51,7 +51,7 @@ Avoid DeepWiki when the authoritative source is local or time-sensitive:
 ## Notes
 
 - DeepWiki currently exposes this data through its public MCP HTTP endpoint; this extension calls only the three DeepWiki operations above.
-- DeepWiki may return generated explanations with source-file citations and "related pages" links; Pi presents the returned text through its native tool UI.
+- DeepWiki may return generated explanations with source-file citations and "related pages" links. The TUI uses a local renderer (`render.ts`) for a one-line collapsed summary and Markdown when expanded; Pi's default fallback would dump the full (often large) `content` text.
 - `contents` responses are truncated at a ~120k-character budget on `# Page:` boundaries (whole pages kept in order; at least the first page survives, cut mid-page if it alone exceeds the budget). A trailing notice reports shown/total pages, the full length, up to 20 omitted page titles, and points at `page` reads and `action: "question"` for the rest. Details carry `shownPages` / `truncatedChars` when this happens; `outputLength` always reflects the full untruncated response. Single-page reads set `requestedPage` / `pageIndex` instead and share the same budget.
 - A repository may not be indexed. DeepWiki can return that as normal text, so the extension treats repository-not-found messages as tool errors.
 - Successful responses are cached in-process for 10 minutes, keyed by action, repo, and question. Failed, aborted, and timed-out requests are not cached. The cache stores the full response; `contents` truncation is recomputed per call, so cached and fresh calls return identical text.

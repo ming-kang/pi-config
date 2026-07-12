@@ -1,6 +1,8 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
 
+import { normalizePageRef } from "./contents.ts";
+
 export const DEEPWIKI_ACTIONS = ["structure", "contents", "question"] as const;
 const MAX_QUESTION_REPOS = 10;
 
@@ -15,7 +17,7 @@ export const DeepWikiParamsSchema = Type.Object({
 		Type.String({
 			minLength: 1,
 			description:
-				'Public GitHub repo in "owner/repo" format. GitHub or DeepWiki URLs are accepted fallbacks, but owner/repo is preferred; use one repo for structure/contents.',
+				'One public GitHub repo as "owner/repo" (preferred), or a GitHub/DeepWiki URL. Required for structure and contents; for question with a single repo use this string form — not a one-element array.',
 		}),
 		Type.Array(
 			Type.String({
@@ -26,7 +28,7 @@ export const DeepWikiParamsSchema = Type.Object({
 				minItems: 1,
 				maxItems: MAX_QUESTION_REPOS,
 				description:
-					"Only for action question: compare patterns, APIs, architecture, or implementation approaches across 1-10 public GitHub repositories.",
+					"Only for action question when comparing 2-10 repos. Each entry is owner/repo. For one repo use a string repoName instead.",
 			},
 		),
 	]),
@@ -40,7 +42,7 @@ export const DeepWikiParamsSchema = Type.Object({
 	page: Type.Optional(
 		Type.Union([Type.String({ minLength: 1 }), Type.Number()], {
 			description:
-				"Only for action contents: read a single wiki page by title (exact or unique partial match, case-insensitive) or 1-based index, as listed by structure or a truncation notice. Prefer reading specific pages over fetching the whole wiki.",
+				'Only for action contents: one page by 1-based index or by title from structure (e.g. "Extension System") — titles do not include outline numbers like "4.4". Run structure first if unsure. Prefer page reads over omitting page.',
 		}),
 	),
 });
@@ -80,9 +82,23 @@ function readPageRef(record: Record<string, unknown>): string | number | undefin
 	for (const key of ["page", "pageName", "pageTitle"]) {
 		const value = record[key];
 		if (typeof value === "number" && Number.isFinite(value)) return value;
-		if (typeof value === "string" && value.trim()) return value.trim();
+		if (typeof value === "string" && value.trim()) return normalizePageRef(value.trim());
 	}
 	return undefined;
+}
+
+function coerceRepoNameInput(value: unknown): unknown {
+	if (Array.isArray(value)) return value;
+	if (typeof value !== "string") return value;
+	const trimmed = value.trim();
+	if (!trimmed.startsWith("[")) return value;
+	try {
+		const parsed: unknown = JSON.parse(trimmed);
+		if (Array.isArray(parsed)) return parsed;
+	} catch {
+		/* keep original string */
+	}
+	return value;
 }
 
 function normalizeAction(
@@ -146,6 +162,7 @@ export function normalizeRepoName(value: unknown): string {
 }
 
 function normalizeRepoNames(value: unknown): string[] {
+	value = coerceRepoNameInput(value);
 	const values =
 		typeof value === "string" && value.includes(",")
 			? value

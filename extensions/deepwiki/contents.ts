@@ -168,6 +168,15 @@ export interface PageLookup {
 	titles: string[];
 }
 
+/** Strip outline numbers copied from structure TOC (e.g. `4.4 Extension System` → `Extension System`). */
+export function normalizePageRef(pageRef: string | number): string | number {
+	if (typeof pageRef === "number") return pageRef;
+	const trimmed = pageRef.trim();
+	if (!trimmed) return trimmed;
+	const stripped = trimmed.replace(/^\d+(?:\.\d+)*\s+/, "");
+	return stripped.length > 0 ? stripped : trimmed;
+}
+
 /**
  * Slice one wiki page out of a full contents response. `pageRef` is matched
  * leniently, in this order: case-insensitive exact title, unique partial
@@ -180,10 +189,11 @@ export function extractPage(text: string, pageRef: string | number): PageLookup 
 	const titles = chunks.map((chunk) => chunk.title);
 	if (chunks.length === 0) return { titles };
 
-	const ref = String(pageRef).trim();
+	const normalized = normalizePageRef(pageRef);
+	const ref = String(normalized).trim();
 	let idx = -1;
-	if (/^\d+$/.test(ref)) {
-		const ordinal = Number.parseInt(ref, 10);
+	if (typeof normalized === "number" || /^\d+$/.test(ref)) {
+		const ordinal = typeof normalized === "number" ? normalized : Number.parseInt(ref, 10);
 		if (ordinal >= 1 && ordinal <= chunks.length) idx = ordinal - 1;
 	} else if (ref) {
 		const lower = ref.toLowerCase();

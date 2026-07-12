@@ -14,7 +14,8 @@ import {
 } from "./constants.ts";
 
 import { executeDeepWiki } from "./execute.ts";
-import { DeepWikiParamsSchema, normalizeDeepWikiParams } from "./schema.ts";
+import { renderDeepWikiCall, renderDeepWikiResult } from "./render.ts";
+import { DeepWikiParamsSchema, normalizeDeepWikiParams, type DeepWikiParams } from "./schema.ts";
 
 export default function deepwiki(pi: ExtensionAPI): void {
 	pi.registerTool({
@@ -28,6 +29,14 @@ export default function deepwiki(pi: ExtensionAPI): void {
 
 		async execute(_toolCallId, params, signal, onUpdate) {
 			return executeDeepWiki(params, signal, onUpdate);
+		},
+
+		renderCall(args, theme) {
+			return renderDeepWikiCall(args as DeepWikiParams, theme);
+		},
+
+		renderResult(result, options, theme, context) {
+			return renderDeepWikiResult(result, options, theme, context.isError);
 		},
 	});
 }
