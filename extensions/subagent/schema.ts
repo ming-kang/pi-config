@@ -80,6 +80,14 @@ export const SubagentTaskSchema = Type.Object({
 				'Reasoning effort override; "inherit" uses the current parent level.',
 		}),
 	),
+	maxTurns: Type.Optional(
+		Type.Integer({
+			description:
+				"Safety cap: stop the worker after this many assistant turns. The run ends as completed with a turn-limit note.",
+			minimum: 1,
+			maximum: 100,
+		}),
+	),
 });
 
 export const SubagentParamsSchema = Type.Object({
@@ -93,6 +101,7 @@ export const SubagentParamsSchema = Type.Object({
 	tools: Type.Optional(SubagentTaskSchema.properties.tools),
 	cwd: Type.Optional(SubagentTaskSchema.properties.cwd),
 	thinkingLevel: Type.Optional(SubagentTaskSchema.properties.thinkingLevel),
+	maxTurns: Type.Optional(SubagentTaskSchema.properties.maxTurns),
 	tasks: Type.Optional(
 		Type.Array(SubagentTaskSchema, {
 			description: "Independent tasks to enqueue together",

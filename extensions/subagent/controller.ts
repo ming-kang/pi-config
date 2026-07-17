@@ -742,6 +742,7 @@ export class SubagentController implements SubagentPanelHost {
 				...(params.thinkingLevel
 					? { thinkingLevel: params.thinkingLevel }
 					: {}),
+				...(params.maxTurns ? { maxTurns: params.maxTurns } : {}),
 			},
 		];
 	}
@@ -862,6 +863,7 @@ export class SubagentController implements SubagentPanelHost {
 					cwd,
 					thinkingLevel,
 					agentScope: scope,
+					...(task.maxTurns ? { maxTurns: task.maxTurns } : {}),
 				},
 				agentDefinition,
 				resolvedModel,
@@ -958,6 +960,7 @@ export class SubagentController implements SubagentPanelHost {
 		record.currentActivity = "Starting isolated AgentSession...";
 		record.runCount++;
 		record.unread = false;
+		record.turnLimitHit = false;
 		if (run.fresh) {
 			this.releaseSession(record);
 			record.usage = emptyUsage();
@@ -994,7 +997,7 @@ export class SubagentController implements SubagentPanelHost {
 			const finalMessage = latestAssistantMessage(session.messages);
 			const failed =
 				finalMessage?.stopReason === "error" ||
-				finalMessage?.stopReason === "aborted";
+				(finalMessage?.stopReason === "aborted" && !record.turnLimitHit);
 			record.status = failed ? "failed" : "completed";
 			record.error = failed
 				? finalMessage?.errorMessage ||
@@ -1096,6 +1099,22 @@ export class SubagentController implements SubagentPanelHost {
 					record.usage.cost += message.usage?.cost?.total ?? 0;
 					if (message.stopReason === "error" && message.errorMessage)
 						record.error = message.errorMessage;
+					if (
+						record.maxTurns &&
+						!record.turnLimitHit &&
+						record.usage.turns >= record.maxTurns &&
+						(record.status === "running" || record.status === "starting")
+					) {
+						record.turnLimitHit = true;
+						this.addTimeline(
+							record,
+							"system",
+							`Turn limit (${record.maxTurns}) reached; ending this run.`,
+						);
+						void record.session?.abort().catch(() => {
+							// The run finalizer reports the outcome.
+						});
+					}
 					this.requestPanelRender();
 				}
 				break;
@@ -1157,6 +1176,9 @@ export class SubagentController implements SubagentPanelHost {
 			COMPLETION_OUTPUT_CHARS,
 			"completion output",
 		);
+		const statusLine = record.turnLimitHit
+			? `${record.status} (stopped at the ${record.maxTurns}-turn limit; the result below is its latest state)`
+			: record.status;
 		const stats = [
 			`${record.usage.toolUses} tool use${record.usage.toolUses === 1 ? "" : "s"}`,
 			`${record.usage.turns} turn${record.usage.turns === 1 ? "" : "s"}`,
@@ -1168,7 +1190,7 @@ export class SubagentController implements SubagentPanelHost {
 			.filter(Boolean)
 			.join(" · ");
 		const content = [
-			`Subagent ${record.id} (${record.label}, agent=${record.agentName}) ${record.status}.`,
+			`Subagent ${record.id} (${record.label}, agent=${record.agentName}) ${statusLine}.`,
 			`Task: ${oneLine(record.task, 500)}`,
 			`Stats: ${stats}`,
 			`Result:\n${output}`,
@@ -1523,6 +1545,7 @@ export class SubagentController implements SubagentPanelHost {
 			...(record.currentActivity
 				? { currentActivity: record.currentActivity }
 				: {}),
+			...(record.maxTurns ? { maxTurns: record.maxTurns } : {}),
 			timeline: record.timeline.map((item: TimelineItem) => ({ ...item })),
 			usage: { ...record.usage },
 			...(record.resolvedModel
