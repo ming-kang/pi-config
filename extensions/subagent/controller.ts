@@ -233,6 +233,7 @@ export class SubagentController implements SubagentPanelHost {
 	private disposed = false;
 	private panelOpen = false;
 	private panel: SubagentPanel | undefined;
+	private widget: SubagentFooterWidget | undefined;
 	private widgetVisible = false;
 	private preferencesLoaded = false;
 	private userConfig: SubagentUserConfig = {
@@ -605,6 +606,7 @@ export class SubagentController implements SubagentPanelHost {
 			this.ctx.ui.setStatus(SUBAGENT_STATUS_KEY, undefined);
 			if (this.widgetVisible) {
 				this.widgetVisible = false;
+				this.widget = undefined;
 				this.ctx.ui.setWidget(SUBAGENT_WIDGET_KEY, undefined);
 			}
 		}
@@ -1618,16 +1620,25 @@ export class SubagentController implements SubagentPanelHost {
 		const ctx = this.ctx;
 		if (!ctx || ctx.mode !== "tui") return;
 		const shouldShow = !this.disposed && this.records.size > 0;
-		if (shouldShow === this.widgetVisible) return;
+		if (shouldShow === this.widgetVisible) {
+			this.widget?.requestRender();
+			return;
+		}
 		this.widgetVisible = shouldShow;
 		if (shouldShow) {
 			ctx.ui.setWidget(
 				SUBAGENT_WIDGET_KEY,
-				(tui, theme) =>
-					new SubagentFooterWidget(tui, theme, () => this.getSnapshots()),
+				(tui, theme) => {
+					const widget = new SubagentFooterWidget(tui, theme, () =>
+						this.getSnapshots(),
+					);
+					this.widget = widget;
+					return widget;
+				},
 				{ placement: "belowEditor" },
 			);
 		} else {
+			this.widget = undefined;
 			ctx.ui.setWidget(SUBAGENT_WIDGET_KEY, undefined);
 		}
 	}

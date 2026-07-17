@@ -599,6 +599,8 @@ export class SubagentPanel implements Component {
 			this.view = "list";
 			return this.renderList(width);
 		}
+		// Seeing the transcript counts as reading a completion that lands mid-view.
+		if (snapshot.unread) this.host.markViewed(snapshot.id);
 
 		const innerWidth = Math.max(1, width - 2);
 		const snapshots = sortSnapshots(this.host.getSnapshots());

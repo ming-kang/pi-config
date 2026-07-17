@@ -57,6 +57,11 @@ export class SubagentFooterWidget implements Component {
 		// Stateless between renders; nothing cached to drop.
 	}
 
+	/** Repaint on state changes; the interval only covers active-worker animation. */
+	requestRender(): void {
+		this.tui.requestRender();
+	}
+
 	render(width: number): string[] {
 		const snapshots = sortForWidget(this.getSnapshots());
 		this.syncTimer(snapshots);
