@@ -14,6 +14,7 @@ import {
 } from "@earendil-works/pi-tui";
 
 import { SUBAGENT_TOOL_LABEL } from "./constants.ts";
+import { formatTokens } from "./format.ts";
 import type { SubagentParams } from "./schema.ts";
 import type { SubagentDetails } from "./types.ts";
 
@@ -82,7 +83,13 @@ function summarizeDetails(
 	}
 	const agent = agents[0];
 	if (agent) {
-		return `${agent.id} ${agent.status} · ${oneLine(agent.label, 72)} · ${agent.turns} turn${agent.turns === 1 ? "" : "s"}`;
+		const stats = [
+			`${agent.toolUses} tool use${agent.toolUses === 1 ? "" : "s"}`,
+			agent.outputTokens ? `↓${formatTokens(agent.outputTokens)} tokens` : "",
+		]
+			.filter(Boolean)
+			.join(" · ");
+		return `${agent.id} ${agent.status} · ${oneLine(agent.label, 72)} · ${stats}`;
 	}
 	return oneLine(firstLine(fallback), 180);
 }

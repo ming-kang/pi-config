@@ -5,8 +5,11 @@ export const SUBAGENT_TOOL_LABEL = "Subagent";
 export const SUBAGENT_SETTINGS_COMMAND_NAME = "subagent";
 export const SUBAGENTS_COMMAND_NAME = "subagents";
 export const SUBAGENTS_SHORTCUT = "ctrl+alt+a" as const;
+/** Jump straight into the most relevant worker's transcript from the main session. */
+export const SUBAGENT_VIEW_SHORTCUT = "alt+o" as const;
 
 export const SUBAGENT_STATUS_KEY = "subagent";
+export const SUBAGENT_WIDGET_KEY = "subagent";
 export const SUBAGENT_CONFIG_ENTRY_TYPE = "pi-config-subagent-config";
 export const SUBAGENT_NOTIFICATION_TYPE = "pi-config-subagent-notification";
 export const SUBAGENT_USER_CONFIG_VERSION = 1;

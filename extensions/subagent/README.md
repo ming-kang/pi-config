@@ -1,9 +1,15 @@
 # subagent — background Pi workers
 
 Adds a model-callable `subagent` tool backed by isolated in-memory Pi
-`AgentSession` instances. Workers run in the background, appear in the package
-statusline, stream into a right-side TUI overlay, and send a bounded completion
-message back to the parent conversation.
+`AgentSession` instances. Workers run in the background, surface in a
+persistent footer widget with live progress, stream into a keyboard-driven
+manager overlay, and send a bounded completion message back to the parent
+conversation.
+
+The interaction model follows Claude Code's background-agent UX as closely as
+Pi's public extension API allows, with some ideas borrowed from Grok Build's
+unified tasks pane (running-first ordering, single-key stop, auto-appearing
+list).
 
 ## Built-in profiles and inheritance
 
@@ -57,25 +63,83 @@ automatically when a slot opens.
 
 ## TUI
 
-- Status is published with `ctx.ui.setStatus()`, so the bundled `statusline`
-  shows running, queued, and unread-completion counts without a cross-extension
-  import.
-- Tool calls use a compact private renderer because Pi's generic custom-tool
-  fallback prints the entire retained snapshot. `Ctrl+O` expands the full
-  model-visible result on demand.
-- `/subagents [id]` or `Ctrl+Alt+A` opens the manager. The shortcut avoids
-  `Ctrl+Shift+A`, which Windows Terminal commonly reserves for Select All.
-- Arrow keys select a worker; Enter opens its transcript.
-- In the detail view, Enter sends a steering instruction and Ctrl+Enter queues
-  a follow-up. PageUp/PageDown scroll, Ctrl+R restarts, Ctrl+X stops, Escape
-  returns to the list, and Ctrl+C closes the overlay.
-- The panel is anchored at `top-right` and capped at 72% terminal height so the
-  parent editor and statusline remain visible. It uses the active Pi theme and
-  updates while workers stream tool activity and assistant text.
+### Footer widget (always visible while workers exist)
 
-Pi's public extension Component API currently exposes keyboard focus but no
-mouse events or footer hit-testing. The statusline therefore cannot be clicked,
-and the panel is an experimental overlay rather than a permanent split pane.
+A below-editor widget appears automatically on the first spawn and disappears
+when the last record is cleared. Each row shows a pulse spinner (running),
+status icon, id, label, agent profile, the current tool activity (wide
+terminals), and right-aligned `elapsed · ↓ tokens`. Completed-but-unviewed
+workers carry a `*` mark and an `N unread` counter in the hint line. The
+spinner and elapsed times animate only while a worker is active. At most 5
+rows are shown, with a `… +N more` overflow line.
+
+`ctx.ui.setStatus()` still publishes a compact `N running · M queued · K done`
+summary so the bundled `statusline` extension shows counts without a
+cross-extension import.
+
+### Opening the manager
+
+- `alt+o` jumps straight into the transcript of the most relevant worker
+  (unread first, then running, then most recently updated).
+- `/subagents [id]` or `ctrl+alt+a` opens the manager list (the shortcut
+  avoids `ctrl+shift+a`, which Windows Terminal reserves for Select All).
+- With exactly one worker, the list is skipped and its transcript opens
+  directly.
+
+The overlay is anchored top-right at 55% width and capped at 72% terminal
+height, so the parent editor, widget, and statusline remain visible.
+
+### List view
+
+`↑/↓` or `j/k` select; `Home`/`End` jump; `1-9` open the Nth row directly;
+`Enter` opens the transcript; `x` stops; `r` restarts; `c` clears finished
+records; `Esc` closes. Rows are sorted running → queued → failed → completed,
+and the selected row shows its live tool activity (or error/last output) on a
+`⎿` sub-line.
+
+### Transcript view
+
+The header shows the pulse spinner/status icon, label, id, status, and a
+`(n/total)` position, with agent profile, resolved model, elapsed, tool-use
+and token stats beneath. The body renders the retained timeline:
+
+- `›` user instructions, `→` tool calls in humanized form (`bash <command>`,
+  `read <path>`, `grep <pattern>`), `⎿` one-line tool-result summaries,
+  `!` errors, `•` system notes, and streaming assistant text.
+- `↑/↓` scroll by line, `PgUp`/`PgDn` by half-page; the view follows the tail
+  until scrolled, then shows `▾ N newer lines · ↓ to follow`.
+- While the worker runs, a live status line shows the spinner, current tool
+  activity, elapsed time, and output tokens.
+- `Tab` / `shift+Tab` cycle directly between workers without returning to the
+  list.
+
+### Instruction input
+
+The input line is always focused and its mode follows the worker state:
+
+| State | Mode label | Enter behavior |
+|---|---|---|
+| running | `[steer]` / `[follow-up]` (toggle with `ctrl+t`) | steer delivers after the current tool batch; follow-up waits until work settles |
+| queued/starting | `[on start]` | attaches the message before the run starts |
+| completed | `[continue]` | continues the existing conversation |
+| failed/stopped | `[restart]` | restarts fresh; the input becomes the new task |
+
+`ctrl+enter` is a shortcut for an immediate follow-up on terminals that can
+distinguish it; `ctrl+t` works everywhere. `ctrl+r` restarts and `ctrl+x`
+stops from the transcript; `Esc` returns to the list and `ctrl+c` closes the
+overlay.
+
+### Main-transcript rendering
+
+Tool calls use a compact private renderer because Pi's generic custom-tool
+fallback prints the entire retained snapshot. Collapsed results show the CC
+stats phrasing (`sa-01 completed · label · 5 tool uses · ↓12.3k tokens`);
+`ctrl+o` expands the full model-visible result.
+
+Pi's public extension Component API exposes keyboard focus for overlays and
+passive widgets but no mouse events or footer hit-testing, so the widget is
+informational and the transcript lives in a focused overlay rather than a
+split pane.
 
 ## Agent definitions
 
@@ -127,9 +191,13 @@ implemented.
 
 - `index.ts` — tool/command/shortcut registration and lifecycle hooks
 - `controller.ts` — scheduling, AgentSession lifecycle, parent notifications,
-  and tool actions
-- `panel.ts` — keyboard-focused right-side manager and transcript input
+  tool actions, and widget lifecycle
+- `panel.ts` — manager overlay: list view and transcript view with the
+  state-aware instruction input
+- `widget.ts` — persistent below-editor live worker list
 - `render.ts` — compact tool call/result UI with Ctrl+O expansion
+- `format.ts` — shared spinner frames, status icons, duration/token/stat
+  formatting
 - `agents.ts` — built-in profiles and Markdown discovery
 - `config.ts` — user profile model/thinking preferences
 - `schema.ts` / `types.ts` / `constants.ts` — model-facing contract and local

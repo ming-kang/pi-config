@@ -1,13 +1,18 @@
 /**
  * subagent — isolated background AgentSession workers with parent feedback.
  *
- * Pi's public TUI API supports focused keyboard overlays but does not expose
- * footer hit-testing or mouse events to extension Components. The statusline is
- * therefore informational; `/subagents` and Ctrl+Alt+A open the right-side
- * manager. The panel is an experimental Pi overlay, not a permanent split pane.
- * Pi's generic custom-tool fallback also dumps full retained snapshots and does
- * not provide a useful collapsed view, so this extension owns a small private
- * call/result renderer with Ctrl+O expansion.
+ * Interaction model (closest Pi-native approximation of Claude Code's
+ * background-agent UX): a persistent below-editor widget lists workers with a
+ * live pulse spinner, elapsed time, and output tokens; `alt+o` jumps straight
+ * into the most relevant worker's transcript; `ctrl+alt+a` / `/subagents`
+ * opens the manager; inside the overlay Tab cycles between workers and the
+ * inline input steers, follows up, continues, or restarts depending on state.
+ *
+ * Pi's public TUI API supports focused keyboard overlays plus passive widgets
+ * but no footer hit-testing or mouse events, so the widget is informational
+ * and the transcript lives in a focused overlay rather than a split pane.
+ * Pi's generic custom-tool fallback dumps full retained snapshots, so this
+ * extension owns a small private call/result renderer with Ctrl+O expansion.
  */
 import type {
 	AgentToolResult,
@@ -24,6 +29,7 @@ import {
 	SUBAGENT_TOOL_DESCRIPTION,
 	SUBAGENT_TOOL_LABEL,
 	SUBAGENT_TOOL_NAME,
+	SUBAGENT_VIEW_SHORTCUT,
 	SUBAGENTS_COMMAND_NAME,
 	SUBAGENTS_SHORTCUT,
 } from "./constants.ts";
@@ -123,6 +129,19 @@ export default function subagent(pi: ExtensionAPI): void {
 		handler: async (ctx) => {
 			if (ctx.mode !== "tui") return;
 			await controller.openPanel(ctx);
+		},
+	});
+
+	pi.registerShortcut(SUBAGENT_VIEW_SHORTCUT, {
+		description: "Open the most relevant subagent transcript",
+		handler: async (ctx) => {
+			if (ctx.mode !== "tui") return;
+			const id = controller.mostRelevantId();
+			if (!id) {
+				ctx.ui.notify("No background subagents in this session.", "info");
+				return;
+			}
+			await controller.openPanel(ctx, id);
 		},
 	});
 

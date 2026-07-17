@@ -46,7 +46,13 @@ export type SubagentStatus =
 	| "failed"
 	| "stopped";
 
-export type TimelineKind = "assistant" | "tool" | "system" | "error" | "user";
+export type TimelineKind =
+	| "assistant"
+	| "tool"
+	| "toolResult"
+	| "system"
+	| "error"
+	| "user";
 
 export interface TimelineItem {
 	kind: TimelineKind;
@@ -56,6 +62,7 @@ export interface TimelineItem {
 
 export interface SubagentUsage {
 	turns: number;
+	toolUses: number;
 	input: number;
 	output: number;
 	cacheRead: number;
@@ -138,6 +145,8 @@ export interface SubagentDetails {
 		cwd: string;
 		runCount: number;
 		turns: number;
+		toolUses: number;
+		outputTokens: number;
 		unread: boolean;
 	}>;
 	errorCode?: string;
@@ -154,4 +163,6 @@ export interface SubagentPanelHost {
 	): Promise<string>;
 	restartAgent(id: string, message?: string): Promise<string>;
 	stopAgent(id: string): Promise<string>;
+	/** Remove all terminal (completed/failed/stopped) records; returns a feedback line. */
+	clearFinished(): string;
 }

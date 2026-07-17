@@ -32,6 +32,7 @@ import {
 	SUBAGENT_NOTIFICATION_TYPE,
 	SUBAGENT_STATUS_KEY,
 	SUBAGENT_USER_CONFIG_VERSION,
+	SUBAGENT_WIDGET_KEY,
 	TIMELINE_MAX_CHARS,
 	TIMELINE_MAX_ITEMS,
 } from "./constants.ts";
@@ -60,6 +61,7 @@ import type {
 	TimelineItem,
 	TimelineKind,
 } from "./types.ts";
+import { SubagentFooterWidget } from "./widget.ts";
 
 const BUILTIN_TOOLS = new Set([
 	"read",
@@ -74,6 +76,7 @@ const BUILTIN_TOOLS = new Set([
 function emptyUsage(): SubagentUsage {
 	return {
 		turns: 0,
+		toolUses: 0,
 		input: 0,
 		output: 0,
 		cacheRead: 0,
@@ -130,14 +133,55 @@ function oneLine(text: string, maxChars = 160): string {
 		: `${flattened.slice(0, Math.max(1, maxChars - 3))}...`;
 }
 
-function formatToolArgs(args: unknown): string {
-	let serialized: string;
-	try {
-		serialized = JSON.stringify(args);
-	} catch {
-		serialized = String(args);
+function formatToolCall(toolName: string, args: unknown): string {
+	const record =
+		args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+	const first = (...keys: string[]): string => {
+		for (const key of keys) {
+			const value = record[key];
+			if (typeof value === "string" && value.trim()) return value.trim();
+		}
+		return "";
+	};
+	let detail = "";
+	switch (toolName) {
+		case "bash":
+			detail = first("command", "cmd");
+			break;
+		case "read":
+		case "write":
+		case "edit":
+			detail = first("path", "file_path", "filePath");
+			break;
+		case "grep":
+			detail = [first("pattern"), first("path")].filter(Boolean).join(" in ");
+			break;
+		case "find":
+			detail = [first("pattern", "name"), first("path")]
+				.filter(Boolean)
+				.join(" in ");
+			break;
+		case "ls":
+			detail = first("path") || ".";
+			break;
+		default: {
+			try {
+				detail = JSON.stringify(record);
+			} catch {
+				detail = String(args);
+			}
+			if (detail === "{}") detail = "";
+		}
 	}
-	return oneLine(serialized, 240);
+	return detail ? `${toolName} ${oneLine(detail, 160)}` : toolName;
+}
+
+function summarizeToolResult(result: unknown): string {
+	const text = extractToolResultText(result);
+	if (!text) return "";
+	const lines = text.split("\n").filter((line) => line.trim().length > 0);
+	const head = oneLine(lines[0] ?? "", 110);
+	return lines.length > 1 ? `${head} (+${lines.length - 1} lines)` : head;
 }
 
 function extractToolResultText(result: unknown): string {
@@ -189,6 +233,7 @@ export class SubagentController implements SubagentPanelHost {
 	private disposed = false;
 	private panelOpen = false;
 	private panel: SubagentPanel | undefined;
+	private widgetVisible = false;
 	private preferencesLoaded = false;
 	private userConfig: SubagentUserConfig = {
 		version: SUBAGENT_USER_CONFIG_VERSION,
@@ -207,6 +252,7 @@ export class SubagentController implements SubagentPanelHost {
 		this.disposed = false;
 		if (persistedConfig) this.applyConfig(persistedConfig, false);
 		this.updateStatus();
+		this.syncWidget();
 	}
 
 	getConfig(): SubagentConfig {
@@ -215,6 +261,19 @@ export class SubagentController implements SubagentPanelHost {
 
 	getSnapshots(): SubagentSnapshot[] {
 		return [...this.records.values()].map((record) => this.snapshot(record));
+	}
+
+	/** The worker the user most likely wants to open: unread first, then active, then most recent. */
+	mostRelevantId(): string | undefined {
+		const records = [...this.records.values()];
+		const score = (record: SubagentRecord): number =>
+			(record.unread ? 2 : 0) +
+			(record.status === "running" || record.status === "starting" ? 1 : 0);
+		records.sort(
+			(first, second) =>
+				score(second) - score(first) || second.updatedAt - first.updatedAt,
+		);
+		return records[0]?.id;
 	}
 
 	async loadPreferences(ctx?: ExtensionContext): Promise<void> {
@@ -351,7 +410,7 @@ export class SubagentController implements SubagentPanelHost {
 		const record = this.records.get(id);
 		if (!record || !record.unread) return;
 		record.unread = false;
-		this.updateStatus();
+		this.stateChanged();
 	}
 
 	async openPanel(ctx: ExtensionContext, initialId?: string): Promise<void> {
@@ -524,12 +583,31 @@ export class SubagentController implements SubagentPanelHost {
 		return `${record.id} is already ${record.status}.`;
 	}
 
+	clearFinished(): string {
+		const targets = [...this.records.values()].filter((record) =>
+			isTerminalStatus(record.status),
+		);
+		if (!targets.length) return "No finished subagents to clear.";
+		for (const record of targets) {
+			this.removeFromQueue(record.id);
+			this.releaseSession(record);
+			this.records.delete(record.id);
+		}
+		this.stateChanged();
+		return `Cleared ${targets.length} finished record${targets.length === 1 ? "" : "s"}.`;
+	}
+
 	async dispose(): Promise<void> {
 		if (this.disposed) return;
 		this.disposed = true;
 		this.queue.length = 0;
-		if (this.ctx?.mode === "tui")
+		if (this.ctx?.mode === "tui") {
 			this.ctx.ui.setStatus(SUBAGENT_STATUS_KEY, undefined);
+			if (this.widgetVisible) {
+				this.widgetVisible = false;
+				this.ctx.ui.setWidget(SUBAGENT_WIDGET_KEY, undefined);
+			}
+		}
 
 		await Promise.all(
 			[...this.records.values()].map(async (record) => {
@@ -1023,7 +1101,8 @@ export class SubagentController implements SubagentPanelHost {
 				break;
 
 			case "tool_execution_start":
-				record.currentActivity = `${event.toolName} ${formatToolArgs(event.args)}`;
+				record.currentActivity = formatToolCall(event.toolName, event.args);
+				record.usage.toolUses++;
 				this.addTimeline(record, "tool", record.currentActivity);
 				this.requestPanelRender();
 				break;
@@ -1040,8 +1119,11 @@ export class SubagentController implements SubagentPanelHost {
 					this.addTimeline(
 						record,
 						"error",
-						`${event.toolName} failed${text ? `: ${text}` : ""}`,
+						`${event.toolName} failed${text ? `: ${oneLine(text, 200)}` : ""}`,
 					);
+				} else {
+					const summary = summarizeToolResult(event.result);
+					if (summary) this.addTimeline(record, "toolResult", summary);
 				}
 				this.requestPanelRender();
 				break;
@@ -1075,9 +1157,20 @@ export class SubagentController implements SubagentPanelHost {
 			COMPLETION_OUTPUT_CHARS,
 			"completion output",
 		);
+		const stats = [
+			`${record.usage.toolUses} tool use${record.usage.toolUses === 1 ? "" : "s"}`,
+			`${record.usage.turns} turn${record.usage.turns === 1 ? "" : "s"}`,
+			record.usage.output ? `output ${record.usage.output} tokens` : "",
+			record.startedAt
+				? `elapsed ${Math.max(0, Math.round(((record.endedAt ?? Date.now()) - record.startedAt) / 1000))}s`
+				: "",
+		]
+			.filter(Boolean)
+			.join(" · ");
 		const content = [
 			`Subagent ${record.id} (${record.label}, agent=${record.agentName}) ${record.status}.`,
 			`Task: ${oneLine(record.task, 500)}`,
+			`Stats: ${stats}`,
 			`Result:\n${output}`,
 			"Respond to the user once with a concise synthesis. Do not quote this notification verbatim and do not call subagent read/list merely to confirm completion.",
 			`Control: use subagent action "read" for its retained snapshot, "send" to continue/steer it, or "restart" for a fresh context.`,
@@ -1240,7 +1333,7 @@ export class SubagentController implements SubagentPanelHost {
 			const elapsed = record.startedAt
 				? `${Math.max(0, Math.floor(((record.endedAt ?? Date.now()) - record.startedAt) / 1000))}s`
 				: "-";
-			return `- ${record.id} [${record.status}] ${record.label} agent=${record.agentName} turns=${record.usage.turns} elapsed=${elapsed}${record.currentActivity ? ` activity=${oneLine(record.currentActivity, 100)}` : ""}`;
+			return `- ${record.id} [${record.status}] ${record.label} agent=${record.agentName} toolUses=${record.usage.toolUses} elapsed=${elapsed}${record.currentActivity ? ` activity=${oneLine(record.currentActivity, 100)}` : ""}`;
 		});
 		return this.result(
 			"list",
@@ -1281,7 +1374,7 @@ export class SubagentController implements SubagentPanelHost {
 			`Agent: ${record.agentName} (${record.agentDefinition.source})`,
 			`Cwd: ${record.cwd}`,
 			`Task: ${record.task}`,
-			`Runs: ${record.runCount}; turns: ${record.usage.turns}; tokens: input=${record.usage.input}, output=${record.usage.output}, cacheRead=${record.usage.cacheRead}, cacheWrite=${record.usage.cacheWrite}; cost=$${record.usage.cost.toFixed(4)}`,
+			`Runs: ${record.runCount}; turns: ${record.usage.turns}; tool uses: ${record.usage.toolUses}; tokens: input=${record.usage.input}, output=${record.usage.output}, cacheRead=${record.usage.cacheRead}, cacheWrite=${record.usage.cacheWrite}; cost=$${record.usage.cost.toFixed(4)}`,
 			record.currentActivity
 				? `Current activity: ${record.currentActivity}`
 				: "",
@@ -1484,6 +1577,8 @@ export class SubagentController implements SubagentPanelHost {
 				cwd: record.cwd,
 				runCount: record.runCount,
 				turns: record.usage.turns,
+				toolUses: record.usage.toolUses,
+				outputTokens: record.usage.output,
 				unread: record.unread,
 			})),
 		};
@@ -1491,7 +1586,27 @@ export class SubagentController implements SubagentPanelHost {
 
 	private stateChanged(): void {
 		this.updateStatus();
+		this.syncWidget();
 		this.requestPanelRender();
+	}
+
+	/** Show the footer widget while records exist; remove it when the session has none. */
+	private syncWidget(): void {
+		const ctx = this.ctx;
+		if (!ctx || ctx.mode !== "tui") return;
+		const shouldShow = !this.disposed && this.records.size > 0;
+		if (shouldShow === this.widgetVisible) return;
+		this.widgetVisible = shouldShow;
+		if (shouldShow) {
+			ctx.ui.setWidget(
+				SUBAGENT_WIDGET_KEY,
+				(tui, theme) =>
+					new SubagentFooterWidget(tui, theme, () => this.getSnapshots()),
+				{ placement: "belowEditor" },
+			);
+		} else {
+			ctx.ui.setWidget(SUBAGENT_WIDGET_KEY, undefined);
+		}
 	}
 
 	private requestPanelRender(): void {
