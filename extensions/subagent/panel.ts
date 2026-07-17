@@ -359,11 +359,17 @@ export class SubagentPanel implements Component {
 	}
 
 	private listBodyRows(): number {
-		return Math.max(4, Math.min(24, this.tui.terminal.rows - 8));
+		return Math.max(
+			4,
+			Math.min(18, Math.floor(this.tui.terminal.rows * 0.72) - 8),
+		);
 	}
 
 	private detailBodyRows(): number {
-		return Math.max(5, Math.min(28, this.tui.terminal.rows - 12));
+		return Math.max(
+			5,
+			Math.min(18, Math.floor(this.tui.terminal.rows * 0.72) - 12),
+		);
 	}
 
 	private renderList(width: number): string[] {
@@ -491,8 +497,8 @@ export class SubagentPanel implements Component {
 
 		lines.push(` ${this.theme.fg("dim", "─".repeat(Math.max(1, width - 4)))}`);
 		this.input.focused = this.focused && this.view === "detail";
-		const [inputLine = ""] = this.input.render(Math.max(1, innerWidth - 4));
-		lines.push(` ${this.theme.fg("accent", "> ")}${inputLine}`);
+		const [inputLine = ""] = this.input.render(Math.max(1, innerWidth - 14));
+		lines.push(` ${this.theme.fg("accent", "Instruction ")}${inputLine}`);
 		lines.push(
 			` ${this.theme.fg(this.feedback.startsWith("Error:") ? "error" : "dim", this.feedback || "Enter sends steer; Ctrl+Enter queues follow-up")}`,
 		);

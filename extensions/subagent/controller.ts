@@ -382,11 +382,11 @@ export class SubagentController implements SubagentPanelHost {
 				{
 					overlay: true,
 					overlayOptions: {
-						anchor: "right-center",
+						anchor: "top-right",
 						width: "55%",
 						minWidth: 42,
-						maxHeight: "90%",
-						margin: { right: 1 },
+						maxHeight: "72%",
+						margin: { top: 1, right: 1 },
 					},
 				},
 			);

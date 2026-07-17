@@ -63,13 +63,15 @@ automatically when a slot opens.
 - Tool calls use a compact private renderer because Pi's generic custom-tool
   fallback prints the entire retained snapshot. `Ctrl+O` expands the full
   model-visible result on demand.
-- `/subagents [id]` or `Ctrl+Shift+A` opens the manager.
+- `/subagents [id]` or `Ctrl+Alt+A` opens the manager. The shortcut avoids
+  `Ctrl+Shift+A`, which Windows Terminal commonly reserves for Select All.
 - Arrow keys select a worker; Enter opens its transcript.
 - In the detail view, Enter sends a steering instruction and Ctrl+Enter queues
   a follow-up. PageUp/PageDown scroll, Ctrl+R restarts, Ctrl+X stops, Escape
   returns to the list, and Ctrl+C closes the overlay.
-- The panel is anchored at `right-center`, uses the active Pi theme, and updates
-  while workers stream tool activity and assistant text.
+- The panel is anchored at `top-right` and capped at 72% terminal height so the
+  parent editor and statusline remain visible. It uses the active Pi theme and
+  updates while workers stream tool activity and assistant text.
 
 Pi's public extension Component API currently exposes keyboard focus but no
 mouse events or footer hit-testing. The statusline therefore cannot be clicked,

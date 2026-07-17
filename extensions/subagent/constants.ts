@@ -4,7 +4,7 @@ export const SUBAGENT_TOOL_NAME = "subagent";
 export const SUBAGENT_TOOL_LABEL = "Subagent";
 export const SUBAGENT_SETTINGS_COMMAND_NAME = "subagent";
 export const SUBAGENTS_COMMAND_NAME = "subagents";
-export const SUBAGENTS_SHORTCUT = "ctrl+shift+a" as const;
+export const SUBAGENTS_SHORTCUT = "ctrl+alt+a" as const;
 
 export const SUBAGENT_STATUS_KEY = "subagent";
 export const SUBAGENT_CONFIG_ENTRY_TYPE = "pi-config-subagent-config";

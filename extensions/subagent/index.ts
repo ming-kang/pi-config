@@ -3,7 +3,7 @@
  *
  * Pi's public TUI API supports focused keyboard overlays but does not expose
  * footer hit-testing or mouse events to extension Components. The statusline is
- * therefore informational; `/subagents` and Ctrl+Shift+A open the right-side
+ * therefore informational; `/subagents` and Ctrl+Alt+A open the right-side
  * manager. The panel is an experimental Pi overlay, not a permanent split pane.
  * Pi's generic custom-tool fallback also dumps full retained snapshots and does
  * not provide a useful collapsed view, so this extension owns a small private
