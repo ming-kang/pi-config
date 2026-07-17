@@ -10,6 +10,7 @@
  * call/result renderer with Ctrl+O expansion.
  */
 import type {
+	AgentToolResult,
 	ExtensionAPI,
 	ExtensionContext,
 	ToolExecutionMode,
@@ -29,7 +30,7 @@ import {
 import { SubagentController } from "./controller.ts";
 import { renderSubagentCall, renderSubagentResult } from "./render.ts";
 import { SubagentParamsSchema } from "./schema.ts";
-import type { SubagentConfig } from "./types.ts";
+import type { SubagentConfig, SubagentDetails } from "./types.ts";
 
 function replayConfig(
 	ctx: ExtensionContext,
@@ -66,12 +67,6 @@ export default function subagent(pi: ExtensionAPI): void {
 		promptGuidelines: SUBAGENT_PROMPT_GUIDELINES,
 		parameters: SubagentParamsSchema,
 		executionMode: "sequential" as ToolExecutionMode,
-		renderCall(args, theme) {
-			return renderSubagentCall(args, theme);
-		},
-		renderResult(result, options, theme, context) {
-			return renderSubagentResult(result, options, theme, context.isError);
-		},
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const result = await controller.execute(params, ctx);
@@ -84,6 +79,18 @@ export default function subagent(pi: ExtensionAPI): void {
 				);
 			}
 			return result;
+		},
+
+		renderCall(args, theme) {
+			return renderSubagentCall(args, theme);
+		},
+		renderResult(result, options, theme, context) {
+			return renderSubagentResult(
+				result as AgentToolResult<SubagentDetails>,
+				options,
+				theme,
+				context.isError,
+			);
 		},
 	});
 
