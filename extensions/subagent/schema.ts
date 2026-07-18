@@ -8,16 +8,7 @@ import {
 } from "./constants.ts";
 
 export const SubagentActionSchema = StringEnum(
-	[
-		"spawn",
-		"list",
-		"read",
-		"send",
-		"restart",
-		"stop",
-		"clear",
-		"configure",
-	] as const,
+	["spawn", "read", "send", "stop"] as const,
 	{ description: "Operation to perform on background subagents" },
 );
 
@@ -25,14 +16,14 @@ export const AgentScopeSchema = StringEnum(
 	["user", "project", "both"] as const,
 	{
 		description:
-			'Agent definition scope. Default: "user". Project definitions come from the nearest .pi/agents directory.',
+			'For spawn: agent definition scope. Default: "user". Project definitions come from the nearest .pi/agents directory.',
 		default: "user",
 	},
 );
 
 export const DeliverySchema = StringEnum(["steer", "followUp"] as const, {
 	description:
-		'For a running agent, "steer" delivers after the current tool batch; "followUp" waits until its current work settles.',
+		'For send to a running agent, "steer" delivers after the current tool batch; "followUp" waits until its current work settles.',
 	default: "steer",
 });
 
@@ -95,7 +86,7 @@ export const SubagentParamsSchema = Type.Object({
 	thinkingLevel: Type.Optional(SubagentTaskSchema.properties.thinkingLevel),
 	tasks: Type.Optional(
 		Type.Array(SubagentTaskSchema, {
-			description: "Independent tasks to enqueue together",
+			description: "For spawn: independent tasks to enqueue together",
 			minItems: 1,
 			maxItems: MAX_BATCH_TASKS,
 		}),
@@ -103,32 +94,40 @@ export const SubagentParamsSchema = Type.Object({
 
 	// Existing-agent actions.
 	id: Type.Optional(
-		Type.String({ description: "Stable subagent id returned by spawn/list" }),
+		Type.String({
+			description: "For read/send/stop: stable subagent id returned by spawn/read",
+		}),
 	),
 	message: Type.Optional(
 		Type.String({
 			description:
-				"Instruction to send, or optional replacement prompt for restart",
+				"For send: instruction to attach, steer, continue with, or use as a fresh replacement task",
 			minLength: 1,
 			maxLength: 20_000,
 		}),
 	),
 	delivery: Type.Optional(DeliverySchema),
+	fresh: Type.Optional(
+		Type.Boolean({
+			description:
+				"For send: start a fresh isolated context. Failed/stopped workers rerun fresh automatically.",
+		}),
+	),
 
 	// Discovery/security.
 	agentScope: Type.Optional(AgentScopeSchema),
 	confirmProjectAgents: Type.Optional(
 		Type.Boolean({
 			description:
-				"Prompt before executing repository-controlled project agent definitions. Default: true.",
+				"For spawn: prompt before executing repository-controlled project agent definitions. Default: true.",
 			default: true,
 		}),
 	),
 
-	// Session-local deployment limits.
+	// Spawn-time session deployment limits.
 	maxConcurrency: Type.Optional(
 		Type.Integer({
-			description: "Maximum concurrently running subagents",
+			description: "For spawn: maximum concurrently running subagents",
 			minimum: 1,
 			maximum: HARD_MAX_CONCURRENCY,
 		}),
@@ -136,7 +135,7 @@ export const SubagentParamsSchema = Type.Object({
 	maxAgents: Type.Optional(
 		Type.Integer({
 			description:
-				"Maximum retained subagent records, including completed workers",
+				"For spawn: maximum retained subagent records, including completed workers",
 			minimum: 1,
 			maximum: HARD_MAX_AGENTS,
 		}),

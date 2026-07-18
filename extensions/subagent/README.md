@@ -22,7 +22,7 @@ Model and thinking resolution is deterministic:
 
 Built-in profiles have no fixed model or thinking level, so their untouched default is `inherit`. Explicitly selecting `inherit` in `/agents settings` also overrides a Markdown agent's fixed setting.
 
-`/agents settings [profile]` opens the settings menu. It can save an explicit model, an explicit thinking level, force either field to `inherit`, or clear the saved override and return to the agent definition. Settings are stored outside the repo at `~/.pi/agent/pi-config/subagent.json`; no credentials are written. Preferences are keyed by profile name only, so a user-level and a project-level definition with the same name share one saved override.
+`/agents settings [profile]` opens the profile settings menu. It can save an explicit model, an explicit thinking level, force either field to `inherit`, or clear the saved override and return to the agent definition. Settings are stored outside the repo at `~/.pi/agent/pi-config/subagent.json`; no credentials are written. Preferences are keyed by profile name only, so a user-level and a project-level definition with the same name share one saved override. `/agents limits` configures session-local concurrency/retention, and `/agents clear [id|all]` disposes terminal records.
 
 ## Background control tool
 
@@ -31,15 +31,11 @@ The `subagent` tool exposes these actions:
 | Action | Purpose |
 |---|---|
 | `spawn` | Enqueue one `task` or a `tasks` batch and return stable ids immediately |
-| `list` | Show running, queued, and retained terminal workers |
-| `read` | Return a bounded retained snapshot for one id |
-| `send` | `steer` a running worker, queue a `followUp`, or continue a completed conversation |
-| `restart` | Start the same id with a fresh isolated context |
+| `read` | Without `id`, list retained workers; with `id`, return one bounded snapshot |
+| `send` | Attach to queued work, steer/follow up a running worker, continue a completed conversation, or fresh-rerun with `fresh: true`; failed/stopped workers rerun fresh automatically |
 | `stop` | Abort a running worker or remove a queued worker |
-| `clear` | Dispose and remove terminal records |
-| `configure` | Set session-local `maxConcurrency` and/or `maxAgents` |
 
-`spawn` accepts `agent`, `model`, `thinkingLevel`, `tools`, `cwd`, and `label` per task. Use `model: "inherit"` or `thinkingLevel: "inherit"` to force the parent setting for that invocation. An explicit empty `tools` list creates a model-only worker with no tools. The default limits are 3 concurrent and 16 retained agents; hard limits are 8 and 32. Excess tasks remain queued and start automatically when a slot opens. Before a spawn fails at `maxAgents`, the controller automatically reclaims the oldest eligible terminal records, preferring viewed successful/stopped work and protecting active workers, unsettled batch members, and unread failures.
+`spawn` accepts `agent`, `model`, `thinkingLevel`, `tools`, `cwd`, and `label` per task, plus optional spawn-level `maxConcurrency` / `maxAgents` overrides. Use `model: "inherit"` or `thinkingLevel: "inherit"` to force the parent setting for that invocation. An explicit empty `tools` list creates a model-only worker with no tools. The default limits are 3 concurrent and 16 retained agents; hard limits are 8 and 32. Excess tasks remain queued and start automatically when a slot opens. Before a spawn fails at `maxAgents`, the controller automatically reclaims the oldest eligible terminal records, preferring viewed successful/stopped work and protecting active workers, unsettled batch members, and unread failures.
 
 ## TUI
 
@@ -53,11 +49,11 @@ The footer widget is the single source of live status, so the extension no longe
 
 ### Transcript overlay
 
-- `/agents` opens the most relevant worker (unread first, then running, then most recently updated); `/agents <id>` targets a specific worker, and an unknown id shows a one-line usage hint. Arguments tab-complete: worker ids (with status and label), the `settings` subcommand, and profile names after `settings `. The extension registers no global shortcuts. The collapsed spawn result in the main transcript also names `/agents`.
+- `/agents` opens the most relevant worker (unread first, then running, then most recently updated); `/agents <id>` targets a specific worker, and an unknown id shows a one-line usage hint. Arguments tab-complete worker ids and the `settings`, `limits`, and `clear` subcommands (including profiles/terminal ids where applicable). The extension registers no global shortcuts. The collapsed spawn result in the main transcript also names `/agents`.
 - `Tab` cycles between workers (`shift+Tab` reverses); the hint line shows `Tab next (n/total)` whenever more than one worker exists.
 - `↑`/`↓` scroll by line, `PgUp`/`PgDn` by half page, `Home`/`End` jump to top/tail. The view follows the tail until scrolled, then shows `▾ N newer lines · End to follow`. Mouse wheel scrolling cannot work here: Pi renders into the normal terminal screen without mouse tracking, so the wheel always scrolls the terminal's own scrollback.
 - The header is one line (status, label, id, state) plus a metadata line (profile, model, elapsed, tool uses, tokens, cost) that is dropped on short terminals. While running, a live status line above the input shows the current tool activity, including `Thinking...` while a reasoning model works pre-response and explicit retry start/end transitions.
-- Tool events render as a bounded `Activity` section with status icons and compact semantic rows such as `Read controller.ts`, `Search "maxTurns"`, `Edit schema.ts · 2 changes`, and `Run git diff --check`; short result summaries appear beneath the corresponding row. User instructions, retry/compaction notices, and errors remain in the chronological conversation updates.
+- Tool events render as a bounded `Activity` section with status icons and compact semantic rows such as `Read controller.ts`, `Search "completionGroup"`, `Edit schema.ts · 2 changes`, and `Run git diff --check`; short result summaries appear beneath the corresponding row. User instructions, retry/compaction notices, and errors remain in the chronological conversation updates.
 - A terminal worker renders its latest assistant answer separately under `Result` as Markdown with the same theme as the main session (headings, code blocks with syntax highlighting, lists, inline code), reusing Pi's `Markdown` component and `getMarkdownTheme()`. The streaming tail stays plain text until the message completes, since half-written fences and tables re-render unstably. Extremely large panel results are bounded with an explicit omission notice; model-facing completion and `read` retain their smaller documented budgets.
 - `ctrl+c` follows terminal convention: it stops the worker being viewed if it is active, and closes the overlay otherwise. `Esc` always closes.
 
@@ -74,7 +70,7 @@ The input line is always focused, and Enter always performs the single action th
 | completed | `[continue]` | continues the existing conversation |
 | failed/stopped | `[rerun]` | reruns fresh — empty input repeats the task, typed text replaces it |
 
-Pressing Enter with an empty input (outside `[rerun]`) shows a short explanation instead of doing nothing. Steer-vs-follow-up delivery is a model-side concept only (`send` action `delivery`); the human UI always steers. Clearing finished records is likewise a model-side action (`clear`).
+Pressing Enter with an empty input (outside `[rerun]`) shows a short explanation instead of doing nothing. Steer-vs-follow-up delivery is a model-side concept only (`send` action `delivery`); the human UI always steers. Human housekeeping uses `/agents clear [id|all]` and `/agents limits` rather than model tool actions.
 
 ### Main-transcript rendering
 

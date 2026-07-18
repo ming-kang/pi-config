@@ -179,9 +179,9 @@ export interface SubagentPanelHost {
 	markViewed(id: string): void;
 	sendInstruction(
 		id: string,
-		message: string,
+		message: string | undefined,
 		delivery: DeliveryMode,
+		fresh?: boolean,
 	): Promise<string>;
-	restartAgent(id: string, message?: string): Promise<string>;
 	stopAgent(id: string): Promise<string>;
 }

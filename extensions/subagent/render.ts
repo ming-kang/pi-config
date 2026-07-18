@@ -47,6 +47,9 @@ export function renderSubagentCall(
 		line += ` ${theme.fg("accent", count > 1 ? `${count} workers` : agent)}`;
 		const task = args.task ?? args.tasks?.[0]?.task;
 		if (task) line += ` ${theme.fg("dim", oneLine(task, 72))}`;
+	} else if (args.action === "send") {
+		if (args.fresh) line += ` ${theme.fg("accent", "fresh")}`;
+		if (args.message) line += ` ${theme.fg("dim", oneLine(args.message, 72))}`;
 	}
 	return new Text(line, 0, 0);
 }
@@ -57,7 +60,7 @@ function summarizeDetails(
 ): string {
 	if (!details) return oneLine(firstLine(fallback), 180);
 	const agents = details.agents;
-	if (details.action === "list") {
+	if (details.action === "read_list") {
 		const active = agents.filter(
 			(agent) => agent.status === "starting" || agent.status === "running",
 		).length;

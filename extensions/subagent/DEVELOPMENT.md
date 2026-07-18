@@ -174,7 +174,7 @@ Acceptance:
 
 ### Batch 5 — Simplify the model-facing control contract
 
-**Status:** pending
+**Status:** complete
 
 Scope:
 
@@ -236,14 +236,14 @@ load checks; “runtime” means the behavior was driven through Pi.
 | queued/starting/running states | pending | pending | |
 | tool activity start/success/error | pass | pending | Batch 2: formatter assertions + typed event mapping |
 | complete final result | pass | pending | Dedicated bounded Markdown `Result` section |
-| `read` list and snapshot | partial | pending | Snapshot includes activity and explicit final result; list unchanged |
-| `send` attach/steer/continue/fresh rerun | pending | pending | |
-| `stop` queued/running | pending | pending | |
+| `read` list and snapshot | pass | partial | Pi-loaded harness verified optional-id list/snapshot routing and viewed state |
+| `send` attach/steer/continue/fresh rerun | pass | partial | Harness verified queued attach, completed continue, and failed automatic fresh rerun; live steer pending |
+| `stop` queued/running | pass | partial | Batch harness covered queued stop settlement; live abort pending |
 | batch parent notification | pass | partial | Pi-loaded harness verified one notification after full/stopped batch |
 | automatic retention eviction | pass | partial | Harness verified viewed-success eviction and unread-failure protection |
 | collapsed/expanded tool rendering | pass | pending | Structured errors retain details; visual state check pending |
 | footer widget | pass | pending | Semantic `currentActivity` source wired; visual check pending |
-| `/agents` panel and commands | pass | pending | Activity/conversation/result renderer type-checked |
+| `/agents` panel and commands | pass | partial | Command registration/completion and limits/clear routing harness passed; visual panel/menu states pending |
 | `/reload`, `/tree`, shutdown cleanup | pending | pending | |
 
 ## Checkpoint log
@@ -337,6 +337,40 @@ load checks; “runtime” means the behavior was driven through Pi.
   disposal, and queued-stop settlement.
 - Live multi-model batch execution and combined parent synthesis remain in the
   final runtime matrix.
+- Checkpoint commit: `59019ff` (`feat(subagent): aggregate batch completions`).
+
+### Batch 5 — simplified control contract
+
+- Reduced the public tool schema from eight actions to `spawn`, `read`, `send`,
+  and `stop`. `read` now lists retained workers when `id` is omitted and returns
+  one bounded snapshot when it is present.
+- Added state-aware `send.fresh`: queued/starting workers accept attached
+  instructions, running workers accept steer/follow-up delivery, completed
+  workers continue their retained conversation, and failed/stopped workers
+  fresh-rerun automatically. `fresh: true` forces a new isolated context from
+  any state.
+- Routed panel Enter actions through the same send state machine used by model
+  calls, including the failed/stopped rerun path.
+- Moved housekeeping to `/agents clear [id|all]` and deployment configuration to
+  `/agents limits`; command completions expose both surfaces while keeping them
+  out of the model schema. Per-spawn limit overrides remain available.
+- Added pre-validation compatibility aliases for resumed calls whose semantics
+  map exactly: `list` becomes an id-less `read`, and `restart` becomes `send`
+  with `fresh: true`. Legacy `clear`/`configure` remain invalid rather than being
+  silently reinterpreted.
+- Updated call/result rendering, prompt guidance, parent-completion copy, schema
+  descriptions, usage errors, and README documentation for the four-action
+  contract.
+- Static verification: strict TypeScript no-emit check, `git diff --check`, and
+  `pi -ne -e . --list-models --offline` all passed.
+- Pi-loaded scratch harness verified the exact public action enum, both legacy
+  aliases, unsupported legacy housekeeping remaining unmapped, optional-id
+  reads, queued attach, completed continuation, failed automatic fresh rerun,
+  terminal-only clearing, persisted limit changes, and `/agents` completion /
+  command routing.
+- Live running-worker steer/follow-up, visual limits menu, and collapsed/expanded
+  cards remain in the final runtime matrix.
+- Checkpoint commit: this checkpoint (`refactor(subagent): simplify control contract`).
 
 ## Open risks and rollback notes
 

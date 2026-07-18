@@ -333,7 +333,9 @@ export class SubagentPanel implements Component {
 		const replacement = this.input.getValue().trim() || undefined;
 		this.input.setValue("");
 		this.scrollFromBottom = 0;
-		this.runAction(() => this.host.restartAgent(selected.id, replacement));
+		this.runAction(() =>
+			this.host.sendInstruction(selected.id, replacement, "steer", true),
+		);
 	}
 
 	private stopSelected(): void {

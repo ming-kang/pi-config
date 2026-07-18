@@ -411,6 +411,47 @@ export class SubagentController implements SubagentPanelHost {
 		}
 	}
 
+	async openLimitsMenu(ctx: ExtensionContext): Promise<void> {
+		if (!ctx.hasUI) {
+			ctx.ui.notify("/agents limits requires an interactive UI.", "warning");
+			return;
+		}
+		while (true) {
+			const concurrencyItem = `Max concurrency · ${this.config.maxConcurrency}`;
+			const retainedItem = `Retained agents · ${this.config.maxAgents}`;
+			const doneItem = "Done";
+			const action = await ctx.ui.select("Subagent deployment limits", [
+				concurrencyItem,
+				retainedItem,
+				doneItem,
+			]);
+			if (!action || action === doneItem) return;
+
+			if (action === concurrencyItem) {
+				const value = await ctx.ui.select(
+					"Maximum concurrent subagents",
+					Array.from({ length: HARD_MAX_CONCURRENCY }, (_, index) =>
+						String(index + 1),
+					),
+				);
+				if (!value) continue;
+				const text = this.configureLimits(Number(value), undefined);
+				ctx.ui.notify(text, "info");
+				continue;
+			}
+
+			const value = await ctx.ui.select(
+				"Maximum retained subagent records",
+				Array.from({ length: HARD_MAX_AGENTS }, (_, index) =>
+					String(index + 1),
+				),
+			);
+			if (!value) continue;
+			const text = this.configureLimits(undefined, Number(value));
+			ctx.ui.notify(text, "info");
+		}
+	}
+
 	markViewed(id: string): void {
 		const record = this.records.get(id);
 		if (!record || !record.unread) return;
@@ -481,8 +522,6 @@ export class SubagentController implements SubagentPanelHost {
 		switch (params.action) {
 			case "spawn":
 				return this.spawn(params, ctx);
-			case "list":
-				return this.listResult();
 			case "read":
 				return this.readResult(params.id);
 			case "send":
@@ -490,26 +529,38 @@ export class SubagentController implements SubagentPanelHost {
 					params.id,
 					params.message,
 					params.delivery ?? "steer",
+					params.fresh ?? false,
 				);
-			case "restart":
-				return this.restartResult(params.id, params.message);
 			case "stop":
 				return this.stopResult(params.id);
-			case "clear":
-				return this.clearResult(params.id);
-			case "configure":
-				return this.configureResult(params.maxConcurrency, params.maxAgents);
 		}
 	}
 
 	async sendInstruction(
 		id: string,
-		message: string,
+		message: string | undefined,
 		delivery: DeliveryMode,
+		fresh = false,
+	): Promise<string> {
+		return this.sendAgent(id, message, delivery, fresh);
+	}
+
+	private async sendAgent(
+		id: string,
+		message: string | undefined,
+		delivery: DeliveryMode,
+		fresh: boolean,
 	): Promise<string> {
 		const record = this.requireRecord(id);
-		const instruction = message.trim();
-		if (!instruction) throw new Error("Instruction cannot be empty.");
+		const instruction = message?.trim();
+		if (fresh || record.status === "failed" || record.status === "stopped") {
+			return this.restartAgent(id, instruction);
+		}
+		if (!instruction) {
+			throw new Error(
+				`${record.id} is ${record.status}; send requires a message unless fresh=true or the worker is failed/stopped.`,
+			);
+		}
 
 		if (record.status === "queued" || record.status === "starting") {
 			record.pendingInstructions.push({ message: instruction, delivery });
@@ -532,17 +583,11 @@ export class SubagentController implements SubagentPanelHost {
 				: `Sent — ${record.id} sees it after the current tool batch.`;
 		}
 
-		if (record.status === "completed") {
-			this.enqueueRun(record, { prompt: instruction, fresh: false });
-			return `Continuing — ${record.id} resumes its conversation.`;
-		}
-
-		throw new Error(
-			`${record.id} is ${record.status}; use restart for a fresh run.`,
-		);
+		this.enqueueRun(record, { prompt: instruction, fresh: false });
+		return `Continuing — ${record.id} resumes its conversation.`;
 	}
 
-	async restartAgent(id: string, message?: string): Promise<string> {
+	private async restartAgent(id: string, message?: string): Promise<string> {
 		const record = this.requireRecord(id);
 		if (
 			record.status === "queued" ||
@@ -556,7 +601,7 @@ export class SubagentController implements SubagentPanelHost {
 		this.addTimeline(
 			record,
 			"system",
-			"Restart requested with a fresh isolated context.",
+			"Fresh rerun requested with a new isolated context.",
 		);
 		this.enqueueRun(record, { prompt, fresh: true });
 		return `Rerunning ${record.id} with a fresh context.`;
@@ -1412,8 +1457,8 @@ export class SubagentController implements SubagentPanelHost {
 			[
 				`Subagent batch ${groupId} settled: ${completed}/${notices.length} completed successfully.`,
 				...sections,
-				"Respond to the user once with a concise synthesis of the whole batch. Do not quote this notification verbatim and do not call subagent read/list merely to confirm completion.",
-				`Control: use subagent action "read" for a retained snapshot, "send" to continue/steer a worker, or "restart" for a fresh context.`,
+				"Respond to the user once with a concise synthesis of the whole batch. Do not quote this notification verbatim and do not call subagent read merely to confirm completion.",
+				`Control: use subagent action "read" for a retained snapshot, or "send" to continue/steer a worker; set fresh=true for a new isolated context.`,
 			].join("\n\n---\n\n"),
 			COMPLETION_OUTPUT_CHARS,
 			"batch completion",
@@ -1471,8 +1516,8 @@ export class SubagentController implements SubagentPanelHost {
 			`Task: ${oneLine(record.task, 500)}`,
 			`Stats: ${stats}`,
 			`Result:\n${output}`,
-			"Respond to the user once with a concise synthesis. Do not quote this notification verbatim and do not call subagent read/list merely to confirm completion.",
-			`Control: use subagent action "read" for its retained snapshot, "send" to continue/steer it, or "restart" for a fresh context.`,
+			"Respond to the user once with a concise synthesis. Do not quote this notification verbatim and do not call subagent read merely to confirm completion.",
+			`Control: use subagent action "read" for its retained snapshot, or "send" to continue/steer it; set fresh=true for a new isolated context.`,
 		].join("\n\n");
 
 		try {
@@ -1665,7 +1710,7 @@ export class SubagentController implements SubagentPanelHost {
 			});
 		if (candidates.length < required) {
 			return {
-				error: `Spawning ${count} worker(s) would exceed maxAgents=${maxAgents}. Active workers, unsettled batch members, and unread failures are protected; stop/view/clear records or raise the limit (hard maximum ${HARD_MAX_AGENTS}).`,
+				error: `Spawning ${count} worker(s) would exceed maxAgents=${maxAgents}. Active workers, unsettled batch members, and unread failures are protected; stop/view records, use /agents clear, or raise the limit (hard maximum ${HARD_MAX_AGENTS}).`,
 			};
 		}
 
@@ -1700,26 +1745,19 @@ export class SubagentController implements SubagentPanelHost {
 		}
 	}
 
-	private configureResult(
+	configureLimits(
 		maxConcurrency: number | undefined,
 		maxAgents: number | undefined,
-	): AgentToolResult<SubagentDetails> {
+	): string {
 		if (maxConcurrency === undefined && maxAgents === undefined) {
-			return this.errorResult(
-				"configure",
-				"invalid_parameters",
-				"configure requires maxConcurrency and/or maxAgents.",
-			);
+			throw new Error("Specify maxConcurrency and/or maxAgents.");
 		}
 		this.applyConfig({ maxConcurrency, maxAgents }, true);
 		const warning =
 			this.records.size > this.config.maxAgents
-				? ` ${this.records.size - this.config.maxAgents} retained record(s) exceed the new cap; no new spawns are allowed until cleared.`
+				? ` ${this.records.size - this.config.maxAgents} retained record(s) exceed the new cap; new spawns reclaim eligible terminal records before failing.`
 				: "";
-		return this.result(
-			"configure",
-			`Subagent limits updated: maxConcurrency=${this.config.maxConcurrency}, maxAgents=${this.config.maxAgents}.${warning}`,
-		);
+		return `Subagent limits updated: maxConcurrency=${this.config.maxConcurrency}, maxAgents=${this.config.maxAgents}.${warning}`;
 	}
 
 	private listResult(): AgentToolResult<SubagentDetails> {
@@ -1728,7 +1766,7 @@ export class SubagentController implements SubagentPanelHost {
 		);
 		if (!records.length) {
 			return this.result(
-				"list",
+				"read_list",
 				`No subagents in this session. Limits: maxConcurrency=${this.config.maxConcurrency}, maxAgents=${this.config.maxAgents}.`,
 			);
 		}
@@ -1739,7 +1777,7 @@ export class SubagentController implements SubagentPanelHost {
 			return `- ${record.id} [${record.status}] ${record.label} agent=${record.agentName} toolUses=${record.usage.toolUses} elapsed=${elapsed}${record.currentActivity ? ` activity=${oneLine(record.currentActivity, 100)}` : ""}`;
 		});
 		return this.result(
-			"list",
+			"read_list",
 			[
 				`Subagents (${this.activeRuns}/${this.config.maxConcurrency} active, ${this.queue.length} queued, ${records.length}/${this.config.maxAgents} retained):`,
 				...lines,
@@ -1749,12 +1787,7 @@ export class SubagentController implements SubagentPanelHost {
 	}
 
 	private readResult(id: string | undefined): AgentToolResult<SubagentDetails> {
-		if (!id)
-			return this.errorResult(
-				"read",
-				"invalid_parameters",
-				"read requires id.",
-			);
+		if (!id) return this.listResult();
 		const record = this.records.get(id);
 		if (!record)
 			return this.errorResult(
@@ -1825,43 +1858,22 @@ export class SubagentController implements SubagentPanelHost {
 		id: string | undefined,
 		message: string | undefined,
 		delivery: DeliveryMode,
+		fresh: boolean,
 	): Promise<AgentToolResult<SubagentDetails>> {
-		if (!id || !message?.trim()) {
+		if (!id) {
 			return this.errorResult(
 				"send",
 				"invalid_parameters",
-				"send requires id and message.",
+				"send requires id.",
 			);
 		}
 		try {
-			const text = await this.sendInstruction(id, message, delivery);
+			const text = await this.sendAgent(id, message, delivery, fresh);
 			return this.result("send", text, [this.requireRecord(id)]);
 		} catch (error) {
 			return this.errorResult(
 				"send",
 				"send_failed",
-				error instanceof Error ? error.message : String(error),
-			);
-		}
-	}
-
-	private async restartResult(
-		id: string | undefined,
-		message: string | undefined,
-	): Promise<AgentToolResult<SubagentDetails>> {
-		if (!id)
-			return this.errorResult(
-				"restart",
-				"invalid_parameters",
-				"restart requires id.",
-			);
-		try {
-			const text = await this.restartAgent(id, message);
-			return this.result("restart", text, [this.requireRecord(id)]);
-		} catch (error) {
-			return this.errorResult(
-				"restart",
-				"restart_failed",
 				error instanceof Error ? error.message : String(error),
 			);
 		}
@@ -1888,9 +1900,7 @@ export class SubagentController implements SubagentPanelHost {
 		}
 	}
 
-	private clearResult(
-		id: string | undefined,
-	): AgentToolResult<SubagentDetails> {
+	clearAgents(id: string | undefined): string {
 		const targets = id
 			? [this.records.get(id)].filter((record): record is SubagentRecord =>
 					Boolean(record),
@@ -1898,28 +1908,20 @@ export class SubagentController implements SubagentPanelHost {
 			: [...this.records.values()].filter((record) =>
 					isTerminalStatus(record.status),
 				);
-		if (id && targets.length === 0)
-			return this.errorResult(
-				"clear",
-				"not_found",
-				`Unknown subagent id: ${id}.`,
-			);
+		if (id && targets.length === 0) {
+			throw new Error(`Unknown subagent id: ${id}.`);
+		}
 		const nonTerminal = targets.find(
 			(record) => !isTerminalStatus(record.status),
 		);
 		if (nonTerminal) {
-			return this.errorResult(
-				"clear",
-				"still_running",
+			throw new Error(
 				`${nonTerminal.id} is ${nonTerminal.status}; stop it before clearing.`,
 			);
 		}
 		for (const record of targets) this.deleteRecord(record);
 		this.stateChanged();
-		return this.result(
-			"clear",
-			`Cleared ${targets.length} terminal subagent record${targets.length === 1 ? "" : "s"}.`,
-		);
+		return `Cleared ${targets.length} terminal subagent record${targets.length === 1 ? "" : "s"}.`;
 	}
 
 	private requireRecord(id: string): SubagentRecord {

@@ -6,7 +6,8 @@
  * persistent below-editor widget lists workers with a live pulse spinner,
  * elapsed time, and output tokens; the single `/agents` command opens one
  * focused transcript overlay — the widget is the list, the overlay is the
- * interaction. `/agents settings` opens profile model/thinking configuration.
+ * interaction. `/agents settings` configures profiles, `/agents limits`
+ * configures deployment bounds, and `/agents clear` removes terminal records.
  * The extension registers no global shortcuts, keeping that namespace clean.
  * Inside the overlay only universal keys apply: Enter does the one
  * state-appropriate action, Tab cycles workers, arrows/PgUp/PgDn/Home/End
@@ -40,7 +41,7 @@ import {
 } from "./constants.ts";
 import { SubagentController } from "./controller.ts";
 import { renderSubagentCall, renderSubagentResult } from "./render.ts";
-import { SubagentParamsSchema } from "./schema.ts";
+import { SubagentParamsSchema, type SubagentParams } from "./schema.ts";
 import type { SubagentConfig, SubagentDetails } from "./types.ts";
 
 function replayConfig(
@@ -77,6 +78,20 @@ export default function subagent(pi: ExtensionAPI): void {
 		promptSnippet: SUBAGENT_PROMPT_SNIPPET,
 		promptGuidelines: SUBAGENT_PROMPT_GUIDELINES,
 		parameters: SubagentParamsSchema,
+		// Resumed sessions may replay calls emitted under the previous contract.
+		// Normalize only aliases whose effects are exactly preserved.
+		prepareArguments(args) {
+			if (!args || typeof args !== "object") return args as SubagentParams;
+			const input = args as Record<string, unknown>;
+			if (input.action === "list") {
+				const { id: _legacyIgnoredId, ...rest } = input;
+				return { ...rest, action: "read" } as SubagentParams;
+			}
+			if (input.action === "restart") {
+				return { ...input, action: "send", fresh: true } as SubagentParams;
+			}
+			return args as SubagentParams;
+		},
 		executionMode: "sequential" as ToolExecutionMode,
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -108,7 +123,7 @@ export default function subagent(pi: ExtensionAPI): void {
 
 	pi.registerCommand(AGENTS_COMMAND_NAME, {
 		description:
-			"Background subagents: /agents [id] opens the panel, /agents settings [profile] configures profiles",
+			"Background subagents: open a worker, configure profile/limits, or clear terminal records",
 		getArgumentCompletions: (prefix): AutocompleteItem[] | null => {
 			// The returned value replaces the whole argument text after
 			// "/agents ", so profile items must carry the "settings " prefix.
@@ -128,11 +143,47 @@ export default function subagent(pi: ExtensionAPI): void {
 				);
 				return filtered.length ? filtered : null;
 			}
+			const clearMatch = /^clear\s+(.*)$/.exec(prefix);
+			if (clearMatch) {
+				const items: AutocompleteItem[] = [
+					{
+						value: "clear all",
+						label: "all",
+						description: "clear every terminal record",
+					},
+					...controller
+						.getCompletionWorkers()
+						.filter((worker) =>
+							["completed", "failed", "stopped"].includes(worker.status),
+						)
+						.map((worker) => ({
+							value: `clear ${worker.id}`,
+							label: worker.id,
+							description: `${worker.status} · ${worker.label}`,
+						})),
+				];
+				const filtered = fuzzyFilter(
+					items,
+					clearMatch[1] ?? "",
+					(item) => item.label,
+				);
+				return filtered.length ? filtered : null;
+			}
 			const items: AutocompleteItem[] = [
 				{
 					value: "settings",
 					label: "settings",
 					description: "configure profile model/thinking",
+				},
+				{
+					value: "limits",
+					label: "limits",
+					description: "configure concurrency and retention",
+				},
+				{
+					value: "clear",
+					label: "clear",
+					description: "clear terminal records",
 				},
 				...controller.getCompletionWorkers().map((worker) => ({
 					value: worker.id,
@@ -159,6 +210,44 @@ export default function subagent(pi: ExtensionAPI): void {
 				);
 				return;
 			}
+			if (input === "limits") {
+				if (!ctx.hasUI) {
+					ctx.ui.notify(
+						`/${AGENTS_COMMAND_NAME} limits requires an interactive UI.`,
+						"warning",
+					);
+					return;
+				}
+				await controller.openLimitsMenu(ctx);
+				return;
+			}
+			if (input === "clear" || input.startsWith("clear ")) {
+				if (!ctx.hasUI) {
+					ctx.ui.notify(
+						`/${AGENTS_COMMAND_NAME} clear requires an interactive UI.`,
+						"warning",
+					);
+					return;
+				}
+				const requested = input.slice("clear".length).trim();
+				const id = requested && requested !== "all" ? requested : undefined;
+				try {
+					ctx.ui.notify(controller.clearAgents(id), "info");
+				} catch (error) {
+					ctx.ui.notify(
+						error instanceof Error ? error.message : String(error),
+						"warning",
+					);
+				}
+				return;
+			}
+			if (input.startsWith("limits ")) {
+				ctx.ui.notify(
+					`Usage: /${AGENTS_COMMAND_NAME} limits`,
+					"info",
+				);
+				return;
+			}
 			if (ctx.mode !== "tui") {
 				ctx.ui.notify(
 					`/${AGENTS_COMMAND_NAME} requires the Pi TUI.`,
@@ -169,7 +258,7 @@ export default function subagent(pi: ExtensionAPI): void {
 			let id: string | undefined = input || undefined;
 			if (id && !controller.hasAgent(id)) {
 				ctx.ui.notify(
-					`Unknown subagent "${id}" — usage: /agents [id] · /agents settings [profile]`,
+					`Unknown subagent "${id}" — usage: /agents [id] · /agents settings [profile] · /agents limits · /agents clear [id|all]`,
 					"info",
 				);
 				id = undefined;

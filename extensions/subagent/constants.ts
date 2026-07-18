@@ -28,18 +28,19 @@ export const PANEL_RENDER_THROTTLE_MS = 80;
 
 export const SUBAGENT_TOOL_DESCRIPTION = [
 	"Launch and control isolated background Pi AgentSession workers.",
-	"Actions: spawn one task or a batch; list/read progress; send steer or follow-up instructions; restart, stop, clear, or configure limits.",
-	"Spawns return immediately. Completion is delivered back to the parent conversation automatically; do not poll with sleep/list/read while waiting.",
+	"Actions: spawn one task or a batch; read the retained list or one snapshot; send state-aware instructions or fresh reruns; stop active work.",
+	"Spawns return immediately. Completion is delivered back to the parent conversation automatically; do not poll while waiting.",
 ].join(" ");
 
 export const SUBAGENT_PROMPT_SNIPPET =
-	"Launch isolated background workers and later inspect, steer, continue, restart, or stop them";
+	"Launch isolated background workers and later inspect, steer, continue, fresh-rerun, or stop them";
 
 export const SUBAGENT_PROMPT_GUIDELINES = [
 	"Use `subagent` action `spawn` for bounded work that can proceed independently; the call returns immediately with stable subagent ids.",
-	"After `subagent` action `spawn`, do not poll with `bash` sleep, `subagent` list, or `subagent` read merely to wait; finish the current turn or do other useful work because completion automatically queues a parent follow-up turn.",
+	"After `subagent` action `spawn`, do not poll with `bash` sleep or repeated `subagent` reads merely to wait; finish the current turn or do other useful work because completion automatically queues a parent follow-up turn.",
 	"Choose the `subagent` profile deliberately: `general` may edit, while `explorer` is a built-in read-only reconnaissance profile; omitted model/thinking settings inherit through the configured profile chain.",
-	"Use `subagent` action `list` or `read` only when the user requests progress or the result needs inspection; use `send` to steer or queue a follow-up, and `restart` only when a fresh context is preferable.",
+	"Use `subagent` action `read` without an id to list retained workers, or with an id only when the user requests progress or a result needs inspection; do not poll merely to wait.",
+	"Use `subagent` action `send` to attach/steer/continue according to worker state; set `fresh: true` only when a new isolated context is preferable. Failed or stopped workers rerun fresh automatically.",
 	"Avoid assigning overlapping edits to multiple `subagent` workers because they share the requested working directory unless the tasks are explicitly coordinated.",
-	"Use `subagent` action `configure`, or `maxConcurrency` on `spawn`, to bound concurrent deployments; queued workers start automatically as slots become available.",
+	"Use `maxConcurrency` or `maxAgents` on `subagent` action `spawn` only when the deployment needs explicit bounds; queued workers start automatically as slots become available.",
 ];
