@@ -1,160 +1,132 @@
-# `models` — structured custom-model management
+# `models` — custom-provider and model management
 
-`/models` manages `~/.pi/agent/models.json` through provider and model menus.
-Users never need to edit the complete JSON document inside Pi.
-
-The entry experience is browse-first: short lists use Pi's native menu, while
-larger lists support fuzzy filtering by ID, API, or URL. A search
-input only appears after the user types (or opens `/models <query>`), so a
-normal menu never looks like an accidental form.
-
-The supported fields follow Pi's upstream
+`/models` manages `~/.pi/agent/models.json` without making users hand-edit the
+whole document. Its field hierarchy follows Pi's upstream
 [Custom Models documentation](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md).
+
+Provider ID is the only Provider identity in this UI. There is no separate
+Provider display name.
 
 ## Main flow
 
 ```text
 /models
-└─ Provider list (browse, then type to filter when needed)
+└─ Provider list
    ├─ + Add provider
-   │  └─ Choose starter: OpenAI-compatible, Ollama, Anthropic, Google, blank
+   │  ├─ Provider ID, Base URL, API key, API protocol
+   │  ├─ Create provider and fetch its model catalog
+   │  └─ Models workspace
    ├─ Reload models.json
-   └─ <provider>
-      ├─ Workspace
-      │  ├─ Models (primary)
-      │  │  ├─ + Add model IDs (comma-separated paste)
-      │  │  ├─ Discover remote models (save workspace first)
-      │  │  ├─ Bulk edit selected models
-      │  │  └─ <model> → essentials / capabilities / limits / advanced
-      │  ├─ Provider ID
-      │  ├─ Connection (API, base URL, authentication)
-      │  └─ Advanced (headers, compatibility, built-in model overrides)
+   └─ <Provider ID>
+      ├─ Models
+      ├─ Connection
+      ├─ Advanced
+      ├─ Save changes
       └─ Remove provider
 ```
 
-Every editor works on an in-memory draft. Cancel discards the draft; saving
-updates `models.json`, reloads Pi's registry, and keeps the editor open if Pi
-rejects the result.
+The new-provider screen does not ask users to select a server template. API
+protocol is a direct four-choice setting:
 
-## Deliberate field hierarchy
+- `openai-completions`
+- `openai-responses`
+- `anthropic-messages`
+- `google-generative-ai`
 
-Most custom providers only need a provider ID, API, base URL, and one or more
-model IDs. The workspace therefore keeps model management, connection, and the
-provider ID visible, and moves rarely needed protocol controls behind
-**Advanced**. No documented provider or model field is silently removed; other
-existing JSON fields are preserved untouched rather than promoted into the UI.
+`apiKey` accepts a literal, `$ENV_VAR`, interpolation, or `!command`. It may
+be left empty for keyless local servers or a later `/login <provider-id>`.
 
-The new-provider starters prefill common transport choices. They never invent
-user secrets or model metadata (the Ollama starter uses Pi's documented
-`"ollama"` placeholder); users still set their own provider ID, endpoint, and
-model IDs.
+## Provider and model workspaces
 
-## Provider settings
+Provider edits share one in-memory draft. Child screens update that draft;
+Ctrl+S or **Save changes** writes it atomically and reloads Pi's model registry.
+Leaving a dirty Provider offers save, discard, or continue editing.
 
-The provider editor exposes:
+The Models workspace is list-first:
 
-- provider ID;
-- default API and base URL;
-- API-key configuration (`literal`, `$ENV_VAR`, interpolation, or `!command`);
-- Radius OAuth and `authHeader`;
-- structured header add/edit/rename/remove (Advanced);
-- compatibility fields, including a list of documented keys plus custom keys
-  (Advanced);
-- per-model overrides for built-in models (Advanced);
-- the provider's model list (the primary workspace action).
+- Enter edits the current model.
+- Space selects models for bulk actions.
+- Tab opens fetch, manual-add, bulk-edit, and remove actions.
+- Ctrl+A/Ctrl+X select or clear all (or the current filter).
+- Ctrl+S saves the Provider draft.
+- Typing reveals a fuzzy filter; Esc clears the active filter before returning.
 
-Renaming a provider is committed as one read and one write. Unknown provider
-fields that the menu does not understand are preserved unchanged.
+Model IDs can be pasted as comma- or newline-separated values. A model detail
+screen exposes the documented common fields first:
 
-## Model editing and bulk work
+- Model ID and optional `name`;
+- reasoning support and text/image input;
+- context window and maximum output tokens;
+- thinking-level mapping;
+- Advanced: model API override, cost, and compatibility.
 
-Adding a model only asks for its ID. Paste several comma-separated IDs to add
-an entire known catalog without repeated forms. The **Bulk edit** multi-select
-then applies reasoning support, input type, context window, or max output
-tokens to any selected models at once; clearing an override is supported too.
+Bulk editing applies reasoning, input, context, max output, and thinking maps
+to the selected models. Clearing a field is distinct from leaving it unchanged.
 
-An individual model shows these common groups first:
+The manager does not promote undocumented model-level `baseUrl` or `headers`.
+Existing unknown fields remain untouched. Provider Advanced keeps documented
+headers, `authHeader`, Radius OAuth, compatibility, and built-in model
+overrides; compatibility menus list only documented keys and preserve unknown
+existing keys unchanged.
 
-- ID and optional display name;
-- capabilities (reasoning and text/image input);
-- limits (context window and maximum output tokens);
-- Advanced settings only when a model needs a transport, pricing, or protocol
-  exception.
+## Thinking-level mapping
 
-Advanced model settings can configure:
+Each model has a seven-row `thinkingLevelMap` table:
 
-- API and base-URL overrides;
-- a structured thinking-level map (`off` through `max`, including unsupported
-  `null` levels);
-- input/output/cache token costs and pricing tiers;
-- model-specific headers and compatibility fields.
+```text
+off → minimal → low → medium → high → xhigh → max
+```
 
-Model overrides use the same relevant field editors for built-in or
-extension-registered models. Unknown model and override fields are preserved.
+For every Pi level, choose one of:
 
-## Fetching model lists
+- **Pi default** — remove the key. `off` through `high` use Pi's default
+  mapping; unmapped `xhigh` and `max` are not offered.
+- **Hidden** — write `null`, making that Pi level unavailable.
+- **Map to provider value** — write a string sent to the provider.
 
-**Discover remote models**, inside the Models workspace, first saves the
-provider draft and then resolves its effective URL, API key, and headers
-through Pi. It supports:
+The **High / Max only** preset maps `minimal` through `high` to `"high"`, and
+`xhigh`/`max` to `"max"`; `off` remains unchanged. The identity preset makes
+all levels through `max` explicit. The same table supports batch changes with a
+per-row **leave unchanged** state.
 
-- OpenAI Chat Completions / Responses: `<baseUrl>/models`;
-- Ollama fallback for `/v1` base paths: `<origin>/api/tags`;
-- paginated Google Generative AI model lists;
-- Anthropic Messages: no fetch, because Anthropic exposes no public catalog
-  endpoint.
+## Discovering remote models
 
-Results are deduplicated and sorted, then displayed in a scrollable
-multi-select. It starts as a clean checklist; typing reveals fuzzy filtering,
-and filtering never discards selections made outside the current result set.
-Selected entries are appended once as minimal model definitions; their fields
-can then be customized from the Models workspace.
+Creating a Provider automatically tries to fetch its catalog. The Models
+workspace can fetch again after applying any dirty connection changes.
 
-Catalog requests are bounded to 10 seconds, 4 MiB, and 2,000 model IDs. The
-extension does not currently enrich results from `models.dev`; remote discovery
-and per-model customization remain separate, predictable operations.
+- OpenAI Completions/Responses: `<baseUrl>/models`.
+- Ollama fallback for `/v1` URLs: `<origin>/api/tags`.
+- Google Generative AI: paginated `<baseUrl>/models`.
+- Anthropic Messages: no public catalog endpoint, so it goes directly to
+  manual model-ID entry.
 
-## Command shortcuts
+Catalog rows start unselected. Results are deduplicated, sorted, bounded to
+2,000 IDs / 4 MiB / 10 seconds, and import only returned `id` plus a returned
+`name` when present. A failed fetch offers retry, connection editing, or manual
+entry instead of ending the workflow.
 
-The `/models` menu is the primary interface. Thin shortcuts are also available:
+## Commands and persistence
 
 | Command | Behavior |
 |---|---|
-| `/models` | Open the provider list. |
-| `/models <provider-id>` | Open one exact provider, or seed the provider search. |
-| `/models list` | Same as `/models`. |
-| `/models add` | Choose a provider starter, then open its workspace draft. |
-| `/models edit <provider-id>` | Open the provider workspace. |
-| `/models remove <provider-id>` | Confirm and remove a provider. |
-| `/models probe <provider-id>` | Fetch and select remote models. |
+| `/models` | Browse providers. |
+| `/models <provider-id>` | Open an exact Provider ID or seed search. |
+| `/models add` | Create a Provider, then discover or enter models. |
+| `/models edit <provider-id>` | Open a Provider workspace. |
+| `/models probe <provider-id>` | Fetch models, then open its Models workspace. |
+| `/models remove <provider-id>` | Confirm and remove a Provider. |
 | `/models reload` | Reload `models.json`. |
 
-Completion offers provider IDs and model-count descriptions both directly and
-after `edit`, `remove`, and `probe`.
-
-## Persistence and recovery
-
-- The whole document is read before every mutation, preserving unrelated
-  providers and unknown top-level fields.
-- Pi-style line and block comments are accepted on read. Managed writes format
-  the result as JSON, so comments are not retained.
-- Writes use a unique temporary file and atomic rename.
-- Existing permissions are retained where supported by the platform.
-- After every mutation, `ctx.modelRegistry.refresh()` is authoritative. Schema
-  or provider-composition failures restore the exact original file bytes and
-  refresh the previous registry state.
-- Probe re-reads the provider before appending selections, avoiding duplicate
-  models and reducing overwrite risk from concurrent manual edits.
-
-Provider IDs created through the manager use letters, digits, `_`, and `-`
-(maximum 64 characters). Authentication login/logout remains the responsibility
-of `/login` and `/logout`.
+Writes read the complete document first, preserve unrelated and unknown fields,
+use atomic replacement, and restore the exact prior bytes if Pi rejects the
+new registry configuration. Provider IDs must be nonempty and cannot contain
+`/` (Pi reserves `provider/model` references); the manager imposes no extra
+ASCII or length restriction.
 
 ## Files
 
-- `index.ts` — command/menu routing, registry refresh, rollback, and probe integration.
-- `editor.ts` — staged provider workspace, batch model operations, and focused advanced editors.
-- `dialog.ts` — single-line input plus browse-first fuzzy selectors and multi-select components.
-- `store.ts` — comment-aware reads, lossless mutations, snapshots, and atomic writes.
+- `index.ts` — command routing, transactional saves, and catalog fetches.
+- `editor.ts` — Provider/model drafts, bulk work, and advanced field editors.
+- `dialog.ts` — browse-first selectors, checklists, and Models workspace UI.
+- `store.ts` — comment-aware, lossless models.json storage.
 - `probe.ts` — bounded catalog requests and response normalization.
-- `constants.ts` — command parsing, API choices, and defaults.

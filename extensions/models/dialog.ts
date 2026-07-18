@@ -431,8 +431,189 @@ export function createProbeChecklist(
 			label: model.name && model.name !== model.id ? `${model.id} — ${model.name}` : model.id,
 			searchText: `${model.id} ${model.name ?? ""}`,
 		})),
-		initialSelected: models.map((model) => model.id),
+		// A remote catalog can be huge. Importing is an explicit selection, not
+		// an opt-out of every model the endpoint happens to expose.
+		initialSelected: [],
 		confirmLabel: "add",
 		emptyMessage: "No matching models",
 	});
+}
+
+export interface ModelWorkspaceItem {
+	id: string;
+	label: string;
+	searchText?: string;
+}
+
+export type ModelWorkspaceResult =
+	| { kind: "edit"; id: string; selectedIds: string[] }
+	| { kind: "actions"; selectedIds: string[] }
+	| { kind: "save"; selectedIds: string[] }
+	| { kind: "back"; selectedIds: string[] };
+
+/**
+ * Provider-local model management. Unlike a checklist, Enter edits the
+ * current model and Space builds an explicit selection for bulk actions.
+ * The search Input is mounted only after the user starts filtering.
+ */
+export function createModelWorkspace(
+	title: string,
+	items: readonly ModelWorkspaceItem[],
+	initialSelected: readonly string[],
+	dirty: boolean,
+): (
+	tui: TUI,
+	theme: Theme,
+	keybindings: KeybindingsManager,
+	done: (result: ModelWorkspaceResult) => void,
+) => Container {
+	return (tui, theme, keybindings, done) => {
+		const allItems = [...items];
+		const selected = new Set(initialSelected);
+		let filteredItems = allItems;
+		let index = 0;
+		let offset = 0;
+		const viewport = 10;
+		const input = new Input();
+		const topBorder = new DynamicBorder((text) => theme.fg("border", text));
+		const bottomBorder = new DynamicBorder((text) => theme.fg("border", text));
+		const enableAllKey = keybindings.getKeys("app.models.enableAll").join("/") || "ctrl+a";
+		const clearAllKey = keybindings.getKeys("app.models.clearAll").join("/") || "ctrl+x";
+		const saveKey = keybindings.getKeys("app.models.save").join("/") || "ctrl+s";
+		const container = new Container() as Container & {
+			render: (width: number) => string[];
+			handleInput: (data: string) => void;
+			focused: boolean;
+		};
+
+		const selectedIds = () => allItems.map((item) => item.id).filter((id) => selected.has(id));
+		const refresh = () => {
+			container.invalidate();
+			tui.requestRender();
+		};
+		const keepVisible = () => {
+			if (index < offset) offset = index;
+			if (index >= offset + viewport) offset = index - viewport + 1;
+		};
+		const applyFilter = () => {
+			const query = input.getValue();
+			filteredItems = query
+				? fuzzyFilter(allItems, query, (item) => item.searchText ?? `${item.label} ${item.id}`)
+				: allItems;
+			index = 0;
+			offset = 0;
+			refresh();
+		};
+
+		container.render = (width: number): string[] => {
+			const lines = [...topBorder.render(width), "", truncateToWidth(theme.fg("accent", theme.bold(title)), width)];
+			lines.push(theme.fg("muted", `  ${selected.size}/${allItems.length} selected${dirty ? " · unsaved" : ""}`), "");
+			if (input.getValue()) lines.push(...input.render(Math.max(1, width - 2)).map((line) => ` ${line}`), "");
+			const end = Math.min(filteredItems.length, offset + viewport);
+			for (let row = offset; row < end; row++) {
+				const item = filteredItems[row]!;
+				const active = row === index;
+				const cursor = active ? theme.fg("accent", "▶") : " ";
+				const box = selected.has(item.id) ? theme.fg("success", "[x]") : theme.fg("muted", "[ ]");
+				const label = truncate(item.label, Math.max(12, width - 9));
+				lines.push(
+					truncateToWidth(`${cursor} ${box} ${active ? theme.fg("accent", label) : theme.fg("text", label)}`, width),
+				);
+			}
+			if (filteredItems.length === 0) lines.push(theme.fg("muted", "  No matching models"));
+			else if (filteredItems.length > viewport) lines.push(theme.fg("dim", `  showing ${offset + 1}–${end} of ${filteredItems.length}`));
+			lines.push("");
+			lines.push(
+				truncateToWidth(
+					theme.fg(
+						"dim",
+						`  Enter edit · Space select · Tab actions · ${enableAllKey} all · ${clearAllKey} clear · ${saveKey} save · type to filter · Esc ${input.getValue() ? "clear" : "back"}`,
+					),
+					width,
+				),
+			);
+			lines.push("", ...bottomBorder.render(width));
+			return lines;
+		};
+
+		container.handleInput = (data: string) => {
+			if (keybindings.matches(data, "tui.select.up")) {
+				if (filteredItems.length === 0) return;
+				index = index === 0 ? filteredItems.length - 1 : index - 1;
+				keepVisible();
+				refresh();
+				return;
+			}
+			if (keybindings.matches(data, "tui.select.down")) {
+				if (filteredItems.length === 0) return;
+				index = index === filteredItems.length - 1 ? 0 : index + 1;
+				keepVisible();
+				refresh();
+				return;
+			}
+			if (keybindings.matches(data, "tui.select.pageUp")) {
+				index = Math.max(0, index - viewport);
+				keepVisible();
+				refresh();
+				return;
+			}
+			if (keybindings.matches(data, "tui.select.pageDown")) {
+				index = Math.min(Math.max(0, filteredItems.length - 1), index + viewport);
+				keepVisible();
+				refresh();
+				return;
+			}
+			if (data === " ") {
+				const item = filteredItems[index];
+				if (item) {
+					if (selected.has(item.id)) selected.delete(item.id);
+					else selected.add(item.id);
+					refresh();
+				}
+				return;
+			}
+			if (keybindings.matches(data, "tui.input.tab")) {
+				done({ kind: "actions", selectedIds: selectedIds() });
+				return;
+			}
+			if (keybindings.matches(data, "app.models.enableAll")) {
+				for (const item of input.getValue() ? filteredItems : allItems) selected.add(item.id);
+				refresh();
+				return;
+			}
+			if (keybindings.matches(data, "app.models.clearAll")) {
+				for (const item of input.getValue() ? filteredItems : allItems) selected.delete(item.id);
+				refresh();
+				return;
+			}
+			if (keybindings.matches(data, "app.models.save")) {
+				done({ kind: "save", selectedIds: selectedIds() });
+				return;
+			}
+			if (keybindings.matches(data, "tui.select.confirm")) {
+				const item = filteredItems[index];
+				if (item) done({ kind: "edit", id: item.id, selectedIds: selectedIds() });
+				return;
+			}
+			if (keybindings.matches(data, "tui.select.cancel")) {
+				if (input.getValue()) {
+					input.setValue("");
+					applyFilter();
+					return;
+				}
+				done({ kind: "back", selectedIds: selectedIds() });
+				return;
+			}
+			input.handleInput(data);
+			applyFilter();
+		};
+
+		Object.defineProperty(container, "focused", {
+			get: () => input.focused,
+			set: (focused: boolean) => {
+				input.focused = focused;
+			},
+		});
+		return container;
+	};
 }

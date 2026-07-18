@@ -39,10 +39,10 @@ export const API_CHOICES = [
 	{ value: "google-generative-ai", label: "Google Generative AI" },
 ] as const;
 
-const PROVIDER_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
-
 export function isValidProviderId(id: string): boolean {
-	return PROVIDER_ID_PATTERN.test(id) && id.length <= 64;
+	// Pi's models.json schema accepts arbitrary object keys. Slash is the one
+	// practical exception: Pi parses model references as provider/model.
+	return Boolean(id) && !id.includes("/") && !/[\u0000-\u001f\u007f]/.test(id);
 }
 
 export function truncate(value: string, maxLength: number): string {

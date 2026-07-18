@@ -17,7 +17,7 @@ import {
 	truncate,
 } from "./constants.ts";
 import { createProbeChecklist, createSearchableSelector } from "./dialog.ts";
-import { chooseProviderStarter, editProvider, type SaveAttempt } from "./editor.ts";
+import { createProviderSetup, editProvider, type SaveAttempt } from "./editor.ts";
 import { probeModels } from "./probe.ts";
 import {
 	captureModelsJsonSnapshot,
@@ -120,7 +120,10 @@ async function dispatch(args: string, ctx: ExtensionCommandContext): Promise<voi
 	if (!parsed.target) return notifyUsage(ctx, parsed.subcommand);
 	if (parsed.subcommand === "edit") await editExistingProvider(parsed.target, ctx);
 	if (parsed.subcommand === "remove") await confirmAndRemove(parsed.target, ctx);
-	if (parsed.subcommand === "probe") await probeFlow(parsed.target, ctx);
+	if (parsed.subcommand === "probe") {
+		await probeFlow(parsed.target, ctx);
+		await editExistingProvider(parsed.target, ctx, "models");
+	}
 }
 
 async function openProviderReference(providerRef: string, ctx: ExtensionCommandContext): Promise<void> {
@@ -202,30 +205,25 @@ async function openProviderActions(providerId: string, ctx: ExtensionCommandCont
 }
 
 async function addProvider(ctx: ExtensionCommandContext): Promise<string | undefined> {
-	const starter = await chooseProviderStarter(ctx);
-	if (!starter) return undefined;
-	const result = await editProvider(ctx, {
-		mode: "add",
-		initialId: "",
-		initialEntry: starter,
-		existingIds: await listProviderIds(),
-		onSave: (id, entry) =>
-			commitModelsChange(
-				ctx,
-				() => saveProvider(undefined, id, entry),
-				`Saved provider "${id}" and reloaded the model registry.`,
-			),
-	});
-	if (result.kind === "discover") {
-		await probeFlow(result.id, ctx);
-		return result.id;
+	const draft = await createProviderSetup(ctx, await listProviderIds());
+	if (!draft) return undefined;
+	const saved = await commitModelsChange(
+		ctx,
+		() => saveProvider(undefined, draft.id, draft.entry),
+		`Created provider "${draft.id}". Finding available models…`,
+	);
+	if (!saved.ok) {
+		ctx.ui.notify(saved.error ?? "Provider could not be created.", "error");
+		return undefined;
 	}
-	return result.kind === "saved" ? result.id : undefined;
+	await probeFlow(draft.id, ctx);
+	return (await editExistingProvider(draft.id, ctx, "models")) ?? draft.id;
 }
 
 async function editExistingProvider(
 	providerId: string,
 	ctx: ExtensionCommandContext,
+	initialSection?: "models",
 ): Promise<string | undefined> {
 	const entry = await getProvider(providerId);
 	if (!entry) {
@@ -233,22 +231,22 @@ async function editExistingProvider(
 		return undefined;
 	}
 	const result = await editProvider(ctx, {
-		mode: "edit",
 		initialId: providerId,
 		initialEntry: entry,
 		existingIds: await listProviderIds(),
-		onSave: (id, updated) =>
+		initialSection,
+		onSave: (originalId, id, updated) =>
 			commitModelsChange(
 				ctx,
-				() => saveProvider(providerId, id, updated),
+				() => saveProvider(originalId, id, updated),
 				`Saved provider "${id}" and reloaded the model registry.`,
 			),
 	});
 	if (result.kind === "discover") {
 		await probeFlow(result.id, ctx);
-		return result.id;
+		return (await editExistingProvider(result.id, ctx, "models")) ?? result.id;
 	}
-	return result.kind === "saved" ? result.id : undefined;
+	return result.id;
 }
 
 async function confirmAndRemove(providerId: string, ctx: ExtensionCommandContext): Promise<boolean> {
@@ -276,67 +274,132 @@ async function reloadModels(ctx: ExtensionCommandContext): Promise<void> {
 }
 
 async function probeFlow(providerId: string, ctx: ExtensionCommandContext): Promise<void> {
-	const entry = await getProvider(providerId);
-	if (!entry) {
-		ctx.ui.notify(`Provider "${providerId}" was not found in models.json.`, "warning");
-		return;
-	}
-	const inheritedModel = ctx.modelRegistry.getAll().find((model) => model.provider === providerId);
-	const baseUrl = typeof entry.baseUrl === "string" ? entry.baseUrl : inheritedModel?.baseUrl;
-	const api = typeof entry.api === "string" ? entry.api : inheritedModel?.api;
-	if (!baseUrl || !api) {
-		ctx.ui.notify("Configure an effective base URL and API before fetching models.", "warning");
-		return;
-	}
-
-	let apiKey: string | undefined;
-	let resolvedHeaders: Record<string, string> | undefined;
-	try {
-		if (inheritedModel) {
-			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(inheritedModel);
-			if (!auth.ok) throw new Error(auth.error);
-			apiKey = auth.apiKey;
-			resolvedHeaders = auth.headers;
-		} else {
-			apiKey = await ctx.modelRegistry.getApiKeyForProvider(providerId);
+	while (true) {
+		const entry = await getProvider(providerId);
+		if (!entry) {
+			ctx.ui.notify(`Provider "${providerId}" was not found in models.json.`, "warning");
+			return;
 		}
-	} catch (error) {
-		ctx.ui.notify(`Could not resolve provider authentication: ${formatError(error)}`, "error");
-		return;
-	}
+		const inheritedModel = ctx.modelRegistry.getAll().find((model) => model.provider === providerId);
+		const baseUrl = typeof entry.baseUrl === "string" ? entry.baseUrl : inheritedModel?.baseUrl;
+		const api = typeof entry.api === "string" ? entry.api : inheritedModel?.api;
+		if (!baseUrl || !api) {
+			const action = await selectProbeFailureAction(ctx, "Configure an effective Base URL and API protocol before fetching models.");
+			if (action === "edit") await editExistingProvider(providerId, ctx);
+			if (action === "manual") await addManualModels(providerId, ctx);
+			if (action === "retry") continue;
+			return;
+		}
 
-	ctx.ui.notify(`Fetching models from ${baseUrl} …`, "info");
-	const result = await probeModels({
-		baseUrl,
-		api: String(api),
-		apiKey: apiKey ?? literalConfigValue(entry.apiKey),
-		headers: { ...literalHeaders(entry.headers), ...resolvedHeaders },
-	});
-	if (!result.ok) {
-		ctx.ui.notify(`Model fetch failed: ${result.error}`, "error");
-		return;
-	}
-	const existing = new Set(Array.isArray(entry.models) ? entry.models.map((model) => model.id) : []);
-	const available = result.models.filter((model) => !existing.has(model.id));
-	if (available.length === 0) {
-		ctx.ui.notify("All fetched models are already configured.", "info");
-		return;
-	}
-	if (result.truncated) ctx.ui.notify("The remote catalog exceeded the 2,000-model limit and was truncated.", "warning");
+		if (api === "anthropic-messages") {
+			ctx.ui.notify("Anthropic Messages has no public model-list endpoint. Add model IDs manually.", "info");
+			await addManualModels(providerId, ctx);
+			return;
+		}
 
-	let selectedIds: string[];
-	if (ctx.mode === "tui") {
-		const choice = await ctx.ui.custom(createProbeChecklist(providerId, available));
-		selectedIds = choice.kind === "save" ? choice.selectedIds : [];
-	} else {
-		selectedIds = (await ctx.ui.confirm(
-			`Add ${available.length} fetched model${available.length === 1 ? "" : "s"}?`,
-			"Terminal UI supports searching and selecting individual models; this mode can add the complete fetched set.",
-		))
-			? available.map((model) => model.id)
-			: [];
+		let apiKey: string | undefined;
+		let resolvedHeaders: Record<string, string> | undefined;
+		try {
+			if (inheritedModel) {
+				const auth = await ctx.modelRegistry.getApiKeyAndHeaders(inheritedModel);
+				if (!auth.ok) throw new Error(auth.error);
+				apiKey = auth.apiKey;
+				resolvedHeaders = auth.headers;
+			} else {
+				apiKey = await ctx.modelRegistry.getApiKeyForProvider(providerId);
+			}
+		} catch (error) {
+			const action = await selectProbeFailureAction(ctx, `Could not resolve provider authentication: ${formatError(error)}`);
+			if (action === "edit") await editExistingProvider(providerId, ctx);
+			if (action === "manual") await addManualModels(providerId, ctx);
+			if (action === "retry") continue;
+			return;
+		}
+
+		ctx.ui.notify(`Fetching models from ${baseUrl} …`, "info");
+		const result = await probeModels({
+			baseUrl,
+			api: String(api),
+			apiKey: apiKey ?? literalConfigValue(entry.apiKey),
+			headers: { ...literalHeaders(entry.headers), ...resolvedHeaders },
+		});
+		if (!result.ok) {
+			const action = await selectProbeFailureAction(ctx, `Model fetch failed: ${result.error}`);
+			if (action === "edit") await editExistingProvider(providerId, ctx);
+			if (action === "manual") await addManualModels(providerId, ctx);
+			if (action === "retry") continue;
+			return;
+		}
+		const existing = new Set(Array.isArray(entry.models) ? entry.models.map((model) => model.id) : []);
+		const available = result.models.filter((model) => !existing.has(model.id));
+		if (available.length === 0) {
+			ctx.ui.notify("The remote catalog has no models that are not already configured.", "info");
+			return;
+		}
+		if (result.truncated) ctx.ui.notify("The remote catalog exceeded the 2,000-model limit and was truncated.", "warning");
+
+		let selectedIds: string[];
+		if (ctx.mode === "tui") {
+			const choice = await ctx.ui.custom(createProbeChecklist(providerId, available));
+			selectedIds = choice.kind === "save" ? choice.selectedIds : [];
+		} else {
+			selectedIds = (await ctx.ui.confirm(
+				`Add ${available.length} fetched model${available.length === 1 ? "" : "s"}?`,
+				"This UI can select individual models in the terminal; this mode adds the complete fetched set.",
+			))
+				? available.map((model) => model.id)
+				: [];
+		}
+		if (selectedIds.length === 0) return;
+		await appendModels(providerId, selectedIds, available, ctx);
+		return;
 	}
-	if (selectedIds.length === 0) return;
+}
+
+async function selectProbeFailureAction(
+	ctx: ExtensionCommandContext,
+	message: string,
+): Promise<"retry" | "edit" | "manual" | "back" | undefined> {
+	return selectNativeItem(ctx, message, [
+		{ value: "retry", label: "Retry" },
+		{ value: "edit", label: "Edit provider connection" },
+		{ value: "manual", label: "Add model IDs manually" },
+		{ value: "back", label: "Back" },
+	]);
+}
+
+async function addManualModels(providerId: string, ctx: ExtensionCommandContext): Promise<void> {
+	const entry = await getProvider(providerId);
+	if (!entry || (entry.models !== undefined && !Array.isArray(entry.models))) {
+		ctx.ui.notify("Provider models changed; reopen the provider and try again.", "error");
+		return;
+	}
+	const existing = new Set((entry.models ?? []).map((model) => model.id));
+	let value: string | undefined;
+	while (true) {
+		value = await ctx.ui.input("Model IDs · comma-separated", "model-a, model-b, model-c");
+		if (value === undefined) return;
+		const ids = parseManualModelIds(value);
+		const duplicate = ids.find((id, index) => ids.indexOf(id) !== index || existing.has(id));
+		if (ids.length === 0) {
+			ctx.ui.notify("Enter at least one model ID.", "warning");
+			continue;
+		}
+		if (duplicate) {
+			ctx.ui.notify(`Model "${duplicate}" already exists in this provider.`, "warning");
+			continue;
+		}
+		await appendModels(providerId, ids, ids.map((id) => ({ id })), ctx);
+		return;
+	}
+}
+
+async function appendModels(
+	providerId: string,
+	selectedIds: readonly string[],
+	available: ReadonlyArray<{ id: string; name?: string }>,
+	ctx: ExtensionCommandContext,
+): Promise<void> {
 	const latest = await getProvider(providerId);
 	if (!latest || (latest.models !== undefined && !Array.isArray(latest.models))) {
 		ctx.ui.notify("Provider models changed while the catalog was open; reopen the provider and try again.", "error");
@@ -354,7 +417,14 @@ async function probeFlow(providerId: string, ctx: ExtensionCommandContext): Prom
 		() => saveProvider(providerId, providerId, latest),
 		`Added ${additions.length} model${additions.length === 1 ? "" : "s"} to "${providerId}".`,
 	);
-	if (!saved.ok) ctx.ui.notify(saved.error ?? "Fetched models could not be saved.", "error");
+	if (!saved.ok) ctx.ui.notify(saved.error ?? "Models could not be saved.", "error");
+}
+
+function parseManualModelIds(value: string): string[] {
+	return value
+		.split(/[,\r\n]+/)
+		.map((id) => id.trim())
+		.filter(Boolean);
 }
 
 async function commitModelsChange(
