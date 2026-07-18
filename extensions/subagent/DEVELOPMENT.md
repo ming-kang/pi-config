@@ -147,7 +147,7 @@ Acceptance:
 
 ### Batch 4 — Batch completion aggregation and automatic retention
 
-**Status:** pending
+**Status:** complete
 
 Scope:
 
@@ -232,15 +232,15 @@ load checks; “runtime” means the behavior was driven through Pi.
 | Surface | Static | Runtime | Notes |
 |---|---:|---:|---|
 | Extension/package loads | pass | pending | Batch 1: `pi -ne -e . --list-models --offline` |
-| `spawn` single and batch | pending | pending | |
+| `spawn` single and batch | pass | partial | Batch grouping/capacity harness passed; live model run pending |
 | queued/starting/running states | pending | pending | |
 | tool activity start/success/error | pass | pending | Batch 2: formatter assertions + typed event mapping |
 | complete final result | pass | pending | Dedicated bounded Markdown `Result` section |
 | `read` list and snapshot | partial | pending | Snapshot includes activity and explicit final result; list unchanged |
 | `send` attach/steer/continue/fresh rerun | pending | pending | |
 | `stop` queued/running | pending | pending | |
-| batch parent notification | pending | pending | |
-| automatic retention eviction | pending | pending | |
+| batch parent notification | pass | partial | Pi-loaded harness verified one notification after full/stopped batch |
+| automatic retention eviction | pass | partial | Harness verified viewed-success eviction and unread-failure protection |
 | collapsed/expanded tool rendering | pass | pending | Structured errors retain details; visual state check pending |
 | footer widget | pass | pending | Semantic `currentActivity` source wired; visual check pending |
 | `/agents` panel and commands | pass | pending | Activity/conversation/result renderer type-checked |
@@ -313,6 +313,30 @@ load checks; “runtime” means the behavior was driven through Pi.
 - Load verification: `pi -ne -e . --list-models --offline` exited successfully.
 - Runtime streaming cadence and native error-row rendering remain scheduled for
   the final Pi UI pass.
+- Checkpoint commit: `49070a1` (`perf(subagent): coalesce progress rendering`).
+
+### Batch 4 — grouped completion and automatic retention
+
+- Initial runs created by one multi-task spawn now share an internal completion
+  group. The workers keep independent ids/records, but the group captures each
+  terminal result and sends one bounded parent follow-up only after all members
+  settle.
+- Completion snapshots belong to the initial run, so later continuation or
+  restart activity cannot overwrite the batch summary.
+- Queued and active stops settle their initial group; single stopped workers keep
+  the existing no-automatic-notification behavior.
+- Spawn capacity now evicts only preselected safe terminal candidates. Ordering
+  prefers viewed records, then successful/stopped work, then age. Active workers,
+  unsettled group members, and unread failures are protected.
+- Spawn output reports reclaimed ids; README documents grouped notification and
+  automatic retention behavior.
+- Static verification: strict TypeScript no-emit check, extension load, and
+  `git diff --check` passed.
+- Pi-loaded scratch harness verified safe eviction, unread-failure protection,
+  no early group notification, exactly one full-group notification, group
+  disposal, and queued-stop settlement.
+- Live multi-model batch execution and combined parent synthesis remain in the
+  final runtime matrix.
 
 ## Open risks and rollback notes
 

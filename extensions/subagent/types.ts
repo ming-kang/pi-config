@@ -98,6 +98,8 @@ export interface SubagentLaunchSpec {
 export interface PendingRun {
 	prompt: string;
 	fresh: boolean;
+	/** Initial multi-worker spawn group; continuations and restarts omit it. */
+	completionGroupId?: string;
 }
 
 export interface SubagentRecord extends SubagentLaunchSpec {
@@ -120,6 +122,8 @@ export interface SubagentRecord extends SubagentLaunchSpec {
 	timeline: TimelineItem[];
 	usage: SubagentUsage;
 	pendingRun?: PendingRun;
+	/** Protects a settled initial batch member until the group notification fires. */
+	currentCompletionGroupId?: string;
 	pendingInstructions: Array<{ message: string; delivery: DeliveryMode }>;
 	session?: AgentSession;
 	unsubscribe?: () => void;

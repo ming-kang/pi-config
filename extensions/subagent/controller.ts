@@ -148,6 +148,25 @@ function cloneConfig(config: SubagentConfig): SubagentConfig {
 	return { maxConcurrency: config.maxConcurrency, maxAgents: config.maxAgents };
 }
 
+interface CompletionNotice {
+	id: string;
+	label: string;
+	agentName: string;
+	status: SubagentStatus;
+	task: string;
+	lastOutput: string;
+	error?: string;
+	usage: SubagentUsage;
+	startedAt?: number;
+	endedAt?: number;
+}
+
+interface CompletionGroup {
+	id: string;
+	memberIds: string[];
+	settled: Map<string, CompletionNotice>;
+}
+
 export class SubagentController implements SubagentPanelHost {
 	private readonly pi: ExtensionAPI;
 	private readonly records = new Map<string, SubagentRecord>();
@@ -158,6 +177,8 @@ export class SubagentController implements SubagentPanelHost {
 	};
 	private ctx: ExtensionContext | undefined;
 	private nextId = 1;
+	private nextCompletionGroupId = 1;
+	private readonly completionGroups = new Map<string, CompletionGroup>();
 	private activeRuns = 0;
 	private pumping = false;
 	private disposed = false;
@@ -544,6 +565,7 @@ export class SubagentController implements SubagentPanelHost {
 	async stopAgent(id: string): Promise<string> {
 		const record = this.requireRecord(id);
 		if (record.status === "queued") {
+			const completionGroupId = record.pendingRun?.completionGroupId;
 			this.removeFromQueue(record.id);
 			record.pendingRun = undefined;
 			record.pendingInstructions = [];
@@ -553,10 +575,12 @@ export class SubagentController implements SubagentPanelHost {
 			record.unread = true;
 			this.addTimeline(record, "system", "Stopped before execution started.");
 			this.stateChanged();
+			this.settleCompletion(record, completionGroupId, false);
 			return `${record.id} removed from the queue.`;
 		}
 
 		if (record.status === "starting" || record.status === "running") {
+			const completionGroupId = record.currentCompletionGroupId;
 			record.generation++;
 			record.status = "stopped";
 			record.endedAt = Date.now();
@@ -567,6 +591,7 @@ export class SubagentController implements SubagentPanelHost {
 			record.unread = true;
 			this.addTimeline(record, "system", "Stopped by the parent session.");
 			this.stateChanged();
+			this.settleCompletion(record, completionGroupId, false);
 			try {
 				await record.session?.abort();
 			} catch {
@@ -582,6 +607,7 @@ export class SubagentController implements SubagentPanelHost {
 		if (this.disposed) return;
 		this.disposed = true;
 		this.queue.length = 0;
+		this.completionGroups.clear();
 		this.cancelPanelRenderTimer();
 		if (this.ctx?.mode === "tui") {
 			if (this.widgetVisible) {
@@ -622,17 +648,6 @@ export class SubagentController implements SubagentPanelHost {
 		const tasks = this.normalizeSpawnTasks(params);
 		if ("error" in tasks)
 			return this.errorResult("spawn", "invalid_parameters", tasks.error);
-		if (
-			this.records.size + tasks.length >
-			(params.maxAgents ?? this.config.maxAgents)
-		) {
-			return this.errorResult(
-				"spawn",
-				"max_agents",
-				`Spawning ${tasks.length} worker(s) would exceed maxAgents=${params.maxAgents ?? this.config.maxAgents}. Clear completed agents or raise the limit (hard maximum 32).`,
-			);
-		}
-
 		const scope = params.agentScope ?? "user";
 		const discovery = discoverAgents(ctx.cwd, scope);
 		const prepared = this.prepareLaunchSpecs(tasks, scope, discovery, ctx);
@@ -669,6 +684,14 @@ export class SubagentController implements SubagentPanelHost {
 			maxConcurrency: params.maxConcurrency ?? this.config.maxConcurrency,
 			maxAgents: params.maxAgents ?? this.config.maxAgents,
 		};
+		const targetMaxAgents = Math.max(
+			1,
+			Math.min(HARD_MAX_AGENTS, nextConfig.maxAgents),
+		);
+		const capacity = this.makeRoomForSpawn(tasks.length, targetMaxAgents);
+		if ("error" in capacity) {
+			return this.errorResult("spawn", "max_agents", capacity.error);
+		}
 		this.applyConfig(nextConfig, true);
 
 		const spawned: SubagentRecord[] = [];
@@ -696,7 +719,25 @@ export class SubagentController implements SubagentPanelHost {
 			};
 			this.records.set(id, record);
 			spawned.push(record);
-			this.enqueueRun(record, { prompt: record.task, fresh: true });
+		}
+
+		const completionGroupId =
+			spawned.length > 1
+				? `batch-${String(this.nextCompletionGroupId++).padStart(2, "0")}`
+				: undefined;
+		if (completionGroupId) {
+			this.completionGroups.set(completionGroupId, {
+				id: completionGroupId,
+				memberIds: spawned.map((record) => record.id),
+				settled: new Map(),
+			});
+		}
+		for (const record of spawned) {
+			this.enqueueRun(record, {
+				prompt: record.task,
+				fresh: true,
+				...(completionGroupId ? { completionGroupId } : {}),
+			});
 		}
 
 		const text = [
@@ -705,8 +746,13 @@ export class SubagentController implements SubagentPanelHost {
 				(record) =>
 					`- ${record.id} [${record.status}] ${record.label} (${record.agentName}) — ${oneLine(record.task, 180)}`,
 			),
-			`Concurrency: ${this.activeRuns}/${this.config.maxConcurrency} active; ${this.queue.length} queued. Completion notifications will be delivered automatically.`,
-		].join("\n");
+			capacity.evicted.length
+				? `Reclaimed ${capacity.evicted.length} terminal record${capacity.evicted.length === 1 ? "" : "s"}: ${capacity.evicted.join(", ")}.`
+				: "",
+			`Concurrency: ${this.activeRuns}/${this.config.maxConcurrency} active; ${this.queue.length} queued. ${completionGroupId ? "One combined completion notification will be delivered after the batch settles." : "Completion notification will be delivered automatically."}`,
+		]
+			.filter(Boolean)
+			.join("\n");
 		return this.result("spawn", text, spawned);
 	}
 
@@ -943,6 +989,7 @@ export class SubagentController implements SubagentPanelHost {
 		run: PendingRun,
 	): Promise<void> {
 		const generation = ++record.generation;
+		record.currentCompletionGroupId = run.completionGroupId;
 		record.status = "starting";
 		record.startedAt = Date.now();
 		record.updatedAt = Date.now();
@@ -997,7 +1044,7 @@ export class SubagentController implements SubagentPanelHost {
 			record.currentActivity = undefined;
 			record.unread = true;
 			this.stateChanged();
-			this.notifyParent(record);
+			this.settleCompletion(record, run.completionGroupId, true);
 		} catch (error) {
 			if (this.disposed || record.generation !== generation) return;
 			const message = error instanceof Error ? error.message : String(error);
@@ -1010,7 +1057,7 @@ export class SubagentController implements SubagentPanelHost {
 			record.unread = true;
 			this.addTimeline(record, "error", message);
 			this.stateChanged();
-			this.notifyParent(record);
+			this.settleCompletion(record, run.completionGroupId, true);
 		}
 	}
 
@@ -1272,6 +1319,132 @@ export class SubagentController implements SubagentPanelHost {
 		}
 	}
 
+	private captureCompletion(record: SubagentRecord): CompletionNotice {
+		return {
+			id: record.id,
+			label: record.label,
+			agentName: record.agentName,
+			status: record.status,
+			task: record.task,
+			lastOutput: record.lastOutput,
+			...(record.error ? { error: record.error } : {}),
+			usage: { ...record.usage },
+			...(record.startedAt ? { startedAt: record.startedAt } : {}),
+			...(record.endedAt ? { endedAt: record.endedAt } : {}),
+		};
+	}
+
+	private settleCompletion(
+		record: SubagentRecord,
+		completionGroupId: string | undefined,
+		notifySingle: boolean,
+	): void {
+		if (!completionGroupId) {
+			record.currentCompletionGroupId = undefined;
+			if (notifySingle) this.notifyParent(record);
+			return;
+		}
+
+		const group = this.completionGroups.get(completionGroupId);
+		if (!group) {
+			record.currentCompletionGroupId = undefined;
+			if (notifySingle) this.notifyParent(record);
+			return;
+		}
+		if (!group.settled.has(record.id)) {
+			group.settled.set(record.id, this.captureCompletion(record));
+		}
+		if (group.settled.size < group.memberIds.length) return;
+
+		const notices = group.memberIds
+			.map((id) => group.settled.get(id))
+			.filter((notice): notice is CompletionNotice => Boolean(notice));
+		for (const id of group.memberIds) {
+			const member = this.records.get(id);
+			if (member?.currentCompletionGroupId === completionGroupId) {
+				member.currentCompletionGroupId = undefined;
+			}
+		}
+		this.completionGroups.delete(completionGroupId);
+		this.notifyParentBatch(group.id, notices);
+	}
+
+	private completionStats(notice: CompletionNotice): string {
+		return [
+			`${notice.usage.toolUses} tool use${notice.usage.toolUses === 1 ? "" : "s"}`,
+			`${notice.usage.turns} turn${notice.usage.turns === 1 ? "" : "s"}`,
+			notice.usage.output
+				? `output ${formatTokens(notice.usage.output)} tokens`
+				: "",
+			notice.startedAt
+				? `elapsed ${formatDuration(notice.startedAt, notice.endedAt ?? Date.now())}`
+				: "",
+		]
+			.filter(Boolean)
+			.join(" · ");
+	}
+
+	private notifyParentBatch(
+		groupId: string,
+		notices: CompletionNotice[],
+	): void {
+		if (this.disposed || !notices.length) return;
+		const resultBudget = Math.max(
+			800,
+			Math.floor((COMPLETION_OUTPUT_CHARS - 4_000) / notices.length),
+		);
+		const sections = notices.map((notice) => {
+			const succeeded = notice.status === "completed";
+			const rawOutput = succeeded
+				? notice.lastOutput || "(completed without text output)"
+				: notice.error || notice.lastOutput || "(no diagnostics)";
+			return [
+				`## ${notice.id} [${notice.status}] ${notice.label} (agent=${notice.agentName})`,
+				`Task: ${oneLine(notice.task, 500)}`,
+				`Stats: ${this.completionStats(notice)}`,
+				`Result:\n${truncateText(rawOutput, resultBudget, `${notice.id} result`)}`,
+			].join("\n\n");
+		});
+		const completed = notices.filter(
+			(notice) => notice.status === "completed",
+		).length;
+		const content = truncateText(
+			[
+				`Subagent batch ${groupId} settled: ${completed}/${notices.length} completed successfully.`,
+				...sections,
+				"Respond to the user once with a concise synthesis of the whole batch. Do not quote this notification verbatim and do not call subagent read/list merely to confirm completion.",
+				`Control: use subagent action "read" for a retained snapshot, "send" to continue/steer a worker, or "restart" for a fresh context.`,
+			].join("\n\n---\n\n"),
+			COMPLETION_OUTPUT_CHARS,
+			"batch completion",
+		);
+
+		try {
+			this.pi.sendMessage(
+				{
+					customType: SUBAGENT_NOTIFICATION_TYPE,
+					content,
+					display: false,
+					details: {
+						batchId: groupId,
+						ids: notices.map((notice) => notice.id),
+						statuses: notices.map((notice) => notice.status),
+					},
+				},
+				{ triggerTurn: true, deliverAs: "followUp" },
+			);
+		} catch {
+			// The parent session may be shutting down; retained records still hold results.
+		}
+
+		if (this.ctx?.hasUI) {
+			this.ctx.ui.notify(
+				`Subagent batch finished: ${completed}/${notices.length} completed`,
+				completed === notices.length ? "info" : "warning",
+			);
+		}
+	}
+
 	private notifyParent(record: SubagentRecord): void {
 		if (this.disposed) return;
 		const succeeded = record.status === "completed";
@@ -1455,6 +1628,50 @@ export class SubagentController implements SubagentPanelHost {
 		for (let index = this.queue.length - 1; index >= 0; index--) {
 			if (this.queue[index] === id) this.queue.splice(index, 1);
 		}
+	}
+
+	private deleteRecord(record: SubagentRecord): void {
+		this.removeFromQueue(record.id);
+		this.releaseSession(record);
+		this.records.delete(record.id);
+	}
+
+	private makeRoomForSpawn(
+		count: number,
+		maxAgents: number,
+	): { evicted: string[] } | { error: string } {
+		const required = this.records.size + count - maxAgents;
+		if (required <= 0) return { evicted: [] };
+
+		const candidates = [...this.records.values()]
+			.filter(
+				(record) =>
+					isTerminalStatus(record.status) &&
+					!record.currentCompletionGroupId &&
+					!(record.status === "failed" && record.unread),
+			)
+			.sort((first, second) => {
+				const firstUnread = first.unread ? 1 : 0;
+				const secondUnread = second.unread ? 1 : 0;
+				const firstFailure = first.status === "failed" ? 1 : 0;
+				const secondFailure = second.status === "failed" ? 1 : 0;
+				return (
+					firstUnread - secondUnread ||
+					firstFailure - secondFailure ||
+					(first.endedAt ?? first.updatedAt) -
+						(second.endedAt ?? second.updatedAt) ||
+					first.createdAt - second.createdAt
+				);
+			});
+		if (candidates.length < required) {
+			return {
+				error: `Spawning ${count} worker(s) would exceed maxAgents=${maxAgents}. Active workers, unsettled batch members, and unread failures are protected; stop/view/clear records or raise the limit (hard maximum ${HARD_MAX_AGENTS}).`,
+			};
+		}
+
+		const selected = candidates.slice(0, required);
+		for (const record of selected) this.deleteRecord(record);
+		return { evicted: selected.map((record) => record.id) };
 	}
 
 	private applyConfig(config: Partial<SubagentConfig>, persist: boolean): void {
@@ -1697,11 +1914,7 @@ export class SubagentController implements SubagentPanelHost {
 				`${nonTerminal.id} is ${nonTerminal.status}; stop it before clearing.`,
 			);
 		}
-		for (const record of targets) {
-			this.removeFromQueue(record.id);
-			this.releaseSession(record);
-			this.records.delete(record.id);
-		}
+		for (const record of targets) this.deleteRecord(record);
 		this.stateChanged();
 		return this.result(
 			"clear",
