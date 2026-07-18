@@ -3,6 +3,10 @@
 `/models` manages `~/.pi/agent/models.json` through provider and model menus.
 Users never need to edit the complete JSON document inside Pi.
 
+The entry experience follows Pi's built-in `/login`: the provider selector is
+fuzzy-searchable by ID, display name, API, or URL; it shows compact provider
+status beside each result and supports the configured select/cancel keybindings.
+
 The supported fields follow Pi's upstream
 [Custom Models documentation](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md).
 
@@ -10,7 +14,7 @@ The supported fields follow Pi's upstream
 
 ```text
 /models
-└─ Provider list
+└─ Searchable provider list
    ├─ + Add provider
    ├─ Reload models.json
    └─ <provider>
@@ -74,9 +78,11 @@ headers through Pi, then supports:
 - Anthropic Messages: no fetch, because Anthropic exposes no public catalog
   endpoint.
 
-Results are deduplicated and sorted, then displayed in a scrollable
-multi-select. Selected entries are appended once as minimal model definitions;
-their fields can then be customized from the Models menu.
+Results are deduplicated and sorted, then displayed in a fuzzy-searchable,
+scrollable multi-select. Filtering does not discard selections made outside the
+current result set. Selected entries are appended once as minimal model
+definitions; their fields can then be customized from the searchable Models
+menu.
 
 Catalog requests are bounded to 10 seconds, 4 MiB, and 2,000 model IDs. The
 extension does not currently enrich results from `models.dev`; remote discovery
@@ -88,7 +94,8 @@ The `/models` menu is the primary interface. Thin shortcuts are also available:
 
 | Command | Behavior |
 |---|---|
-| `/models` | Open the provider list. |
+| `/models` | Open the searchable provider list. |
+| `/models <provider-id-or-name>` | Open one exact provider, or seed the provider search. |
 | `/models list` | Same as `/models`. |
 | `/models add` | Open a new provider draft. |
 | `/models edit <provider-id>` | Open the provider field editor. |
@@ -96,7 +103,8 @@ The `/models` menu is the primary interface. Thin shortcuts are also available:
 | `/models probe <provider-id>` | Fetch and select remote models. |
 | `/models reload` | Reload `models.json`. |
 
-Completion offers provider IDs after `edit`, `remove`, and `probe`.
+Completion offers provider IDs and display-name/model-count descriptions both
+directly and after `edit`, `remove`, and `probe`.
 
 ## Persistence and recovery
 
@@ -120,7 +128,7 @@ of `/login` and `/logout`.
 
 - `index.ts` — command/menu routing, registry refresh, rollback, and probe integration.
 - `editor.ts` — staged provider, model, header, compatibility, override, thinking, and cost menus.
-- `dialog.ts` — single-line input and remote-model multi-select components.
+- `dialog.ts` — single-line input, fuzzy selectors, and remote-model multi-select components.
 - `store.ts` — comment-aware reads, lossless mutations, snapshots, and atomic writes.
 - `probe.ts` — bounded catalog requests and response normalization.
 - `constants.ts` — command parsing, API choices, and defaults.

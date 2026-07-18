@@ -2,7 +2,7 @@
 
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { API_CHOICES, DEFAULTS, isValidProviderId, truncate } from "./constants.ts";
-import { createTextInput } from "./dialog.ts";
+import { createSearchableSelector, createTextInput } from "./dialog.ts";
 import type {
 	Cost,
 	CostTier,
@@ -205,7 +205,7 @@ async function editModels(
 			{ key: "done", label: "Done" },
 			{ key: "cancel", label: "Cancel model changes" },
 		);
-		const choice = await selectKey(ctx, `Models · ${working.length}`, options);
+		const choice = await selectSearchableKey(ctx, `Models · ${working.length}`, options);
 		if (choice === undefined || choice === "cancel") {
 			if (jsonEqual(original, working) || (await ctx.ui.confirm("Discard model changes?", "Unsaved model changes will be lost."))) {
 				return { changed: false };
@@ -365,7 +365,7 @@ async function editModelOverrides(
 			{ key: "done", label: "Done" },
 			{ key: "cancel", label: "Cancel override changes" },
 		);
-		const choice = await selectKey(ctx, `Model overrides · ${ids.length}`, options);
+		const choice = await selectSearchableKey(ctx, `Model overrides · ${ids.length}`, options);
 		if (choice === undefined || choice === "cancel") {
 			if (jsonEqual(original, working) || (await ctx.ui.confirm("Discard override changes?", "Unsaved override changes will be lost."))) {
 				return { changed: false };
@@ -966,6 +966,16 @@ async function promptText(
 	placeholder?: string,
 	validate?: (value: string) => string | undefined,
 ): Promise<string | undefined> {
+	if (ctx.mode !== "tui") {
+		while (true) {
+			const hints = [placeholder, initial ? `current: ${initial}` : undefined].filter(Boolean).join(" · ");
+			const value = await ctx.ui.input(title, hints || undefined);
+			if (value === undefined) return undefined;
+			const error = validate?.(value);
+			if (!error) return value;
+			ctx.ui.notify(error, "error");
+		}
+	}
 	return ctx.ui.custom(createTextInput({ title, initial, placeholder, validate }));
 }
 
@@ -978,6 +988,23 @@ async function selectKey<T extends string>(
 	const selected = await ctx.ui.select(title, labels);
 	if (selected === undefined) return undefined;
 	return options[labels.indexOf(selected)]?.key;
+}
+
+async function selectSearchableKey<T extends string>(
+	ctx: ExtensionCommandContext,
+	title: string,
+	options: readonly MenuOption<T>[],
+): Promise<T | undefined> {
+	if (ctx.mode !== "tui") return selectKey(ctx, title, options);
+	return ctx.ui.custom(
+		createSearchableSelector({
+			title,
+			items: options.map((option) => ({
+				value: option.key,
+				label: option.label,
+			})),
+		}),
+	);
 }
 
 function validateProvider(

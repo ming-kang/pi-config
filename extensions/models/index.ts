@@ -7,6 +7,7 @@
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { fuzzyFilter, type AutocompleteItem } from "@earendil-works/pi-tui";
 import {
 	COMMAND_DESCRIPTION,
 	COMMAND_NAME,
@@ -15,7 +16,7 @@ import {
 	parseArgs,
 	truncate,
 } from "./constants.ts";
-import { createProbeChecklist } from "./dialog.ts";
+import { createProbeChecklist, createSearchableSelector } from "./dialog.ts";
 import { editProvider, type SaveAttempt } from "./editor.ts";
 import { probeModels } from "./probe.ts";
 import {
@@ -47,18 +48,47 @@ export default function modelsExtension(pi: ExtensionAPI) {
 	});
 }
 
-async function completeArguments(prefix: string) {
+const SUBCOMMAND_DESCRIPTIONS: Record<(typeof SUBCOMMANDS)[number], string> = {
+	add: "Create a provider",
+	list: "Browse providers",
+	edit: "Edit a provider",
+	remove: "Remove a provider",
+	reload: "Reload models.json",
+	probe: "Fetch remote models",
+};
+
+async function completeArguments(prefix: string): Promise<AutocompleteItem[] | null> {
 	const match = prefix.match(/^(\S*)(?:\s+(.*))?$/);
 	const first = (match?.[1] ?? "").toLowerCase();
 	const rest = match?.[2];
 	if (rest === undefined) {
-		const matches = SUBCOMMANDS.filter((subcommand) => subcommand.startsWith(first));
-		return matches.length > 0 ? matches.map((value) => ({ value, label: value })) : null;
+		const commands = SUBCOMMANDS.filter((subcommand) => subcommand.startsWith(first)).map((value) => ({
+			value,
+			label: value,
+			description: SUBCOMMAND_DESCRIPTIONS[value],
+		}));
+		try {
+			const providers = fuzzyFilter(await listProviders(), first, providerSearchText).map(({ id, entry }) => ({
+				value: id,
+				label: id,
+				description: formatProviderCompletionDescription(id, entry),
+			}));
+			const completions = [...commands, ...providers];
+			return completions.length > 0 ? completions : null;
+		} catch {
+			return commands.length > 0 ? commands : null;
+		}
 	}
 	if (first !== "edit" && first !== "remove" && first !== "probe") return null;
 	try {
-		const ids = (await listProviderIds()).filter((id) => id.startsWith(rest));
-		return ids.length > 0 ? ids.map((id) => ({ value: `${first} ${id}`, label: id })) : null;
+		const providers = fuzzyFilter(await listProviders(), rest, providerSearchText);
+		return providers.length > 0
+			? providers.map(({ id, entry }) => ({
+					value: `${first} ${id}`,
+					label: id,
+					description: formatProviderCompletionDescription(id, entry),
+				}))
+			: null;
 	} catch {
 		return null;
 	}
@@ -66,8 +96,8 @@ async function completeArguments(prefix: string) {
 
 async function dispatch(args: string, ctx: ExtensionCommandContext): Promise<void> {
 	const parsed = parseArgs(args);
-	if (parsed.invalidSubcommand) {
-		ctx.ui.notify(`Unknown /models subcommand: ${parsed.invalidSubcommand}.`, "warning");
+	if (parsed.providerRef) {
+		await openProviderReference(parsed.providerRef, ctx);
 		return;
 	}
 	if (!parsed.subcommand || parsed.subcommand === "list") {
@@ -91,29 +121,62 @@ async function dispatch(args: string, ctx: ExtensionCommandContext): Promise<voi
 	if (parsed.subcommand === "probe") await probeFlow(parsed.target, ctx);
 }
 
-async function openProvidersMenu(ctx: ExtensionCommandContext): Promise<void> {
+async function openProviderReference(providerRef: string, ctx: ExtensionCommandContext): Promise<void> {
+	const normalized = providerRef.trim().toLowerCase();
+	const exact = (await listProviders()).filter(
+		({ id, entry }) =>
+			id.toLowerCase() === normalized ||
+			(typeof entry.name === "string" && entry.name.trim().toLowerCase() === normalized),
+	);
+	if (exact.length === 1) {
+		await openProviderActions(exact[0]!.id, ctx);
+		return;
+	}
+	await openProvidersMenu(ctx, providerRef);
+}
+
+async function openProvidersMenu(ctx: ExtensionCommandContext, initialQuery?: string): Promise<void> {
+	let query = initialQuery;
 	while (true) {
 		const providers = await listProviders();
-		const menu = [
-			...providers.map((provider) => ({
-				kind: "provider" as const,
-				label: formatProviderLine(provider.id, provider.entry),
-				providerId: provider.id,
+		const items = [
+			...providers.map(({ id, entry }) => ({
+				value: `provider:${id}`,
+				label: providerDisplayName(id, entry),
+				description: formatProviderDescription(id, entry),
+				searchText: providerSearchText({ id, entry }),
 			})),
-			{ kind: "add" as const, label: "+ Add provider" },
-			{ kind: "reload" as const, label: "Reload models.json" },
-			{ kind: "close" as const, label: "Close" },
+			{
+				value: "action:add",
+				label: "+ Add provider",
+				description: "Create a new models.json provider",
+				searchText: "add create new provider",
+			},
+			{
+				value: "action:reload",
+				label: "Reload models.json",
+				description: "Refresh Pi's model registry",
+				searchText: "reload refresh models json registry",
+			},
 		];
-		const selected = await ctx.ui.select(
-			"Model providers · ~/.pi/agent/models.json",
-			menu.map((item) => item.label),
-		);
+		const filteredItems = query ? fuzzyFilter(items, query, (item) => item.searchText) : items;
+		const visibleItems = filteredItems.length > 0 ? filteredItems : items;
+		const selected =
+			ctx.mode === "tui"
+				? await ctx.ui.custom(
+						createSearchableSelector({
+							title: "Select model provider:",
+							items,
+							initialQuery: query,
+							emptyMessage: "No matching providers or actions",
+						}),
+					)
+				: await selectNativeItem(ctx, "Select model provider:", visibleItems);
+		query = undefined;
 		if (selected === undefined) return;
-		const item = menu.find((candidate) => candidate.label === selected);
-		if (!item || item.kind === "close") return;
-		if (item.kind === "add") await addProvider(ctx);
-		if (item.kind === "reload") await reloadModels(ctx);
-		if (item.kind === "provider") await openProviderActions(item.providerId, ctx);
+		if (selected === "action:add") await addProvider(ctx);
+		else if (selected === "action:reload") await reloadModels(ctx);
+		else if (selected.startsWith("provider:")) await openProviderActions(selected.slice("provider:".length), ctx);
 	}
 }
 
@@ -253,15 +316,26 @@ async function probeFlow(providerId: string, ctx: ExtensionCommandContext): Prom
 	}
 	if (result.truncated) ctx.ui.notify("The remote catalog exceeded the 2,000-model limit and was truncated.", "warning");
 
-	const choice = await ctx.ui.custom(createProbeChecklist(providerId, available));
-	if (choice.kind === "cancel" || choice.selectedIds.length === 0) return;
+	let selectedIds: string[];
+	if (ctx.mode === "tui") {
+		const choice = await ctx.ui.custom(createProbeChecklist(providerId, available));
+		selectedIds = choice.kind === "save" ? choice.selectedIds : [];
+	} else {
+		selectedIds = (await ctx.ui.confirm(
+			`Add ${available.length} fetched model${available.length === 1 ? "" : "s"}?`,
+			"Terminal UI supports searching and selecting individual models; this mode can add the complete fetched set.",
+		))
+			? available.map((model) => model.id)
+			: [];
+	}
+	if (selectedIds.length === 0) return;
 	const latest = await getProvider(providerId);
 	if (!latest || (latest.models !== undefined && !Array.isArray(latest.models))) {
 		ctx.ui.notify("Provider models changed while the catalog was open; reopen the provider and try again.", "error");
 		return;
 	}
 	const latestIds = new Set((latest.models ?? []).map((model) => model.id));
-	const selected = new Set(choice.selectedIds);
+	const selected = new Set(selectedIds);
 	const additions = available
 		.filter((model) => selected.has(model.id) && !latestIds.has(model.id))
 		.map((model) => (model.name && model.name !== model.id ? { id: model.id, name: model.name } : { id: model.id }));
@@ -303,11 +377,42 @@ async function commitModelsChange(
 	}
 }
 
-function formatProviderLine(id: string, entry: ProviderEntry): string {
+function providerDisplayName(id: string, entry: ProviderEntry): string {
+	const name = typeof entry.name === "string" ? entry.name.trim() : "";
+	return name || id;
+}
+
+function formatProviderDescription(id: string, entry: ProviderEntry): string {
 	const models = Array.isArray(entry.models) ? entry.models.length : 0;
 	const api = typeof entry.api === "string" ? entry.api : "inherit";
 	const url = typeof entry.baseUrl === "string" ? truncate(entry.baseUrl, 48) : "built-in/default URL";
-	return `${id} — ${api} · ${models} model${models === 1 ? "" : "s"} · ${url}`;
+	const idLabel = providerDisplayName(id, entry) === id ? "" : `${id} · `;
+	return `${idLabel}${api} · ${models} model${models === 1 ? "" : "s"} · ${url}`;
+}
+
+function formatProviderCompletionDescription(id: string, entry: ProviderEntry): string {
+	const name = providerDisplayName(id, entry);
+	const models = Array.isArray(entry.models) ? entry.models.length : 0;
+	const prefix = name === id ? "" : `${name} · `;
+	return `${prefix}${models} model${models === 1 ? "" : "s"}`;
+}
+
+function providerSearchText(provider: { id: string; entry: ProviderEntry }): string {
+	const { id, entry } = provider;
+	return `${id} ${providerDisplayName(id, entry)} ${typeof entry.api === "string" ? entry.api : ""} ${
+		typeof entry.baseUrl === "string" ? entry.baseUrl : ""
+	}`;
+}
+
+async function selectNativeItem<T extends string>(
+	ctx: ExtensionCommandContext,
+	title: string,
+	items: ReadonlyArray<{ value: T; label: string; description?: string }>,
+): Promise<T | undefined> {
+	const labels = items.map((item) => (item.description ? `${item.label} — ${item.description}` : item.label));
+	const selected = await ctx.ui.select(title, labels);
+	if (selected === undefined) return undefined;
+	return items[labels.indexOf(selected)]?.value;
 }
 
 function literalConfigValue(value: unknown): string | undefined {

@@ -1,5 +1,5 @@
 export const COMMAND_NAME = "models";
-export const COMMAND_DESCRIPTION = "Edit and reload ~/.pi/agent/models.json";
+export const COMMAND_DESCRIPTION = "Manage custom model providers and models";
 
 export const SUBCOMMANDS = ["add", "list", "edit", "remove", "reload", "probe"] as const;
 export type Subcommand = (typeof SUBCOMMANDS)[number];
@@ -7,7 +7,7 @@ export type Subcommand = (typeof SUBCOMMANDS)[number];
 export interface ParsedArgs {
 	subcommand?: Subcommand;
 	target?: string;
-	invalidSubcommand?: string;
+	providerRef?: string;
 }
 
 export function parseArgs(args: string): ParsedArgs {
@@ -16,7 +16,7 @@ export function parseArgs(args: string): ParsedArgs {
 	const [rawSubcommand = "", ...rest] = trimmed.split(/\s+/);
 	const normalized = rawSubcommand.toLowerCase();
 	if (!(SUBCOMMANDS as readonly string[]).includes(normalized)) {
-		return { invalidSubcommand: rawSubcommand };
+		return { providerRef: trimmed };
 	}
 	return {
 		subcommand: normalized as Subcommand,
