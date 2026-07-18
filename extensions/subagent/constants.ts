@@ -2,10 +2,10 @@
 
 export const SUBAGENT_TOOL_NAME = "subagent";
 export const SUBAGENT_TOOL_LABEL = "Subagent";
-export const SUBAGENT_SETTINGS_COMMAND_NAME = "subagent";
+/** Named -settings (not /subagent) so it cannot be confused with /subagents. */
+export const SUBAGENT_SETTINGS_COMMAND_NAME = "subagent-settings";
 export const SUBAGENTS_COMMAND_NAME = "subagents";
-export const SUBAGENTS_SHORTCUT = "ctrl+alt+a" as const;
-/** Jump straight into the most relevant worker's transcript from the main session. */
+/** The single global shortcut: jump into the most relevant worker's transcript. */
 export const SUBAGENT_VIEW_SHORTCUT = "alt+o" as const;
 
 export const SUBAGENT_STATUS_KEY = "subagent";

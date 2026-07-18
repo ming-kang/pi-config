@@ -4,6 +4,7 @@ import {
 	type Component,
 	Input,
 	matchesKey,
+	type OverlayOptions,
 	type TUI,
 	truncateToWidth,
 	visibleWidth,
@@ -14,6 +15,7 @@ import {
 	formatStats,
 	formatTokens,
 	isActiveStatus,
+	sortSnapshots,
 	SPINNER_INTERVAL_MS,
 	spinnerFrame,
 	STATUS_COLOR,
@@ -22,21 +24,29 @@ import {
 import type {
 	SubagentPanelHost,
 	SubagentSnapshot,
-	SubagentStatus,
 	TimelineItem,
 	TimelineKind,
 } from "./types.ts";
 
-const STATUS_ORDER: Record<SubagentStatus, number> = {
-	running: 0,
-	starting: 1,
-	queued: 2,
-	failed: 3,
-	completed: 4,
-	stopped: 5,
-};
-
-type SendMode = "steer" | "followUp";
+/**
+ * Overlay geometry tiers, chosen once when the panel opens: near-full width on
+ * narrow terminals (a split view would cramp both halves), proportional on
+ * normal ones, and an absolute cap on very wide ones so transcript lines stay
+ * readable. Percent values keep tracking live resizes; reopening re-tiers.
+ */
+export function panelOverlayOptions(
+	columns: number,
+	rows: number,
+): OverlayOptions {
+	const base = {
+		anchor: "top-right" as const,
+		maxHeight: (rows < 30 ? "85%" : "72%") as `${number}%`,
+		margin: { top: 1, right: 1 },
+	};
+	if (columns < 100) return { ...base, width: "96%", minWidth: 40 };
+	if (columns <= 170) return { ...base, width: "62%", minWidth: 56 };
+	return { ...base, width: 104 };
+}
 
 function wrapPlainLine(text: string, width: number): string[] {
 	const maxWidth = Math.max(1, width);
@@ -85,14 +95,6 @@ function timelinePrefix(kind: TimelineKind): string {
 	return "  ";
 }
 
-function sortSnapshots(snapshots: SubagentSnapshot[]): SubagentSnapshot[] {
-	return [...snapshots].sort((first, second) => {
-		const statusDelta =
-			STATUS_ORDER[first.status] - STATUS_ORDER[second.status];
-		return statusDelta || second.updatedAt - first.updatedAt;
-	});
-}
-
 export class SubagentPanel implements Component {
 	focused = false;
 
@@ -103,7 +105,8 @@ export class SubagentPanel implements Component {
 	private readonly input = new Input();
 	private selectedId: string | undefined;
 	private scrollFromBottom = 0;
-	private sendMode: SendMode = "steer";
+	/** True when the last render had more transcript than fits; drives the scroll hint. */
+	private scrollable = false;
 	private feedback = "";
 	private disposed = false;
 	private timer: ReturnType<typeof setInterval> | undefined;
@@ -119,7 +122,7 @@ export class SubagentPanel implements Component {
 		this.theme = options.theme;
 		this.host = options.host;
 		this.done = options.done;
-		this.input.onSubmit = () => this.submitOrRestart();
+		this.input.onSubmit = () => this.submitPrimary();
 
 		const snapshots = sortSnapshots(this.host.getSnapshots());
 		const initial =
@@ -137,8 +140,16 @@ export class SubagentPanel implements Component {
 	}
 
 	handleInput(data: string): void {
-		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
+		if (matchesKey(data, "escape")) {
 			this.close();
+			return;
+		}
+		// Terminal convention: ctrl+c interrupts the running work. When nothing
+		// is running it falls back to "get me out" and closes like Esc.
+		if (matchesKey(data, "ctrl+c")) {
+			const selected = this.selectedSnapshot();
+			if (selected && isActiveStatus(selected.status)) this.stopSelected();
+			else this.close();
 			return;
 		}
 		if (matchesKey(data, "tab") || matchesKey(data, "shift+tab")) {
@@ -168,23 +179,17 @@ export class SubagentPanel implements Component {
 			this.requestRender();
 			return;
 		}
-		if (matchesKey(data, "ctrl+t")) {
-			this.sendMode = this.sendMode === "steer" ? "followUp" : "steer";
+		if (matchesKey(data, "home")) {
+			this.scrollFromBottom = Number.MAX_SAFE_INTEGER; // render clamps to top
 			this.requestRender();
 			return;
 		}
-		if (matchesKey(data, "ctrl+enter")) {
-			this.submitInstruction("followUp");
+		if (matchesKey(data, "end")) {
+			this.scrollFromBottom = 0;
+			this.requestRender();
 			return;
 		}
-		if (matchesKey(data, "ctrl+r")) {
-			this.restartSelected();
-			return;
-		}
-		if (matchesKey(data, "ctrl+x")) {
-			this.stopSelected();
-			return;
-		}
+		this.feedback = ""; // typing resumes the contextual hint
 		this.input.handleInput(data);
 		this.requestRender();
 	}
@@ -242,13 +247,26 @@ export class SubagentPanel implements Component {
 	}
 
 	private halfPage(): number {
-		return Math.max(4, Math.floor(this.bodyRows() / 2));
+		return Math.max(4, Math.floor(this.heightBudget() / 2));
 	}
 
-	private bodyRows(): number {
+	/** Height must mirror panelOverlayOptions' maxHeight fraction so the frame never clips. */
+	private heightFraction(): number {
+		return this.tui.terminal.rows < 30 ? 0.85 : 0.72;
+	}
+
+	private showMetaLine(): boolean {
+		return this.tui.terminal.rows >= 22;
+	}
+
+	private heightBudget(): number {
+		const rows = this.tui.terminal.rows;
+		// Worst-case chrome: borders 2, header 1 (+meta), dividers 2, scroll
+		// banner 1, live/error line 1, input 1, hint 1.
+		const chrome = this.showMetaLine() ? 10 : 9;
 		return Math.max(
-			5,
-			Math.min(20, Math.floor(this.tui.terminal.rows * 0.72) - 8),
+			3,
+			Math.min(30, Math.floor(rows * this.heightFraction()) - chrome),
 		);
 	}
 
@@ -268,25 +286,26 @@ export class SubagentPanel implements Component {
 			});
 	}
 
-	private submitOrRestart(): void {
+	/** Enter always does the one thing the mode label announces. */
+	private submitPrimary(): void {
 		const selected = this.selectedSnapshot();
 		if (!selected) return;
 		if (selected.status === "failed" || selected.status === "stopped") {
 			this.restartSelected();
 			return;
 		}
-		this.submitInstruction(this.sendMode);
-	}
-
-	private submitInstruction(delivery: SendMode): void {
-		const selected = this.selectedSnapshot();
 		const message = this.input.getValue().trim();
-		if (!selected || !message) return;
+		if (!message) {
+			this.feedback =
+				selected.status === "completed"
+					? "Type a message first — Enter continues this conversation with it."
+					: "Type a message first — Enter sends it to this worker.";
+			this.requestRender();
+			return;
+		}
 		this.input.setValue("");
 		this.scrollFromBottom = 0;
-		this.runAction(() =>
-			this.host.sendInstruction(selected.id, message, delivery),
-		);
+		this.runAction(() => this.host.sendInstruction(selected.id, message, "steer"));
 	}
 
 	private restartSelected(): void {
@@ -392,36 +411,36 @@ export class SubagentPanel implements Component {
 			snapshot.startedAt,
 			snapshot.endedAt ?? Date.now(),
 		);
-		const metaParts = [
-			snapshot.agentName,
-			snapshot.model,
-			elapsed,
-			formatStats(snapshot.usage),
-			snapshot.maxTurns
-				? `turns ${snapshot.usage.turns}/${snapshot.maxTurns}`
-				: "",
-			snapshot.usage.cost ? `$${snapshot.usage.cost.toFixed(2)}` : "",
-			snapshot.runCount > 1 ? `run ${snapshot.runCount}` : "",
-		].filter(Boolean);
-		const counter =
-			snapshots.length > 1
-				? this.theme.fg("dim", `  ${position + 1}/${snapshots.length} ⇥`)
-				: "";
 
 		const lines: string[] = [
-			` ${this.statusIcon(snapshot)} ${this.theme.fg("toolTitle", this.theme.bold(snapshot.label))} ${this.theme.fg("dim", snapshot.id)}  ${statusText}${counter}`,
-			` ${this.theme.fg("dim", metaParts.join(" · "))}`,
-			this.divider(width),
+			` ${this.statusIcon(snapshot)} ${this.theme.fg("toolTitle", this.theme.bold(snapshot.label))} ${this.theme.fg("dim", snapshot.id)}  ${statusText}`,
 		];
+		if (this.showMetaLine()) {
+			// Ordered by importance so narrow-width truncation drops the tail first.
+			const metaParts = [
+				snapshot.agentName,
+				snapshot.model,
+				elapsed,
+				formatStats(snapshot.usage),
+				snapshot.maxTurns
+					? `turns ${snapshot.usage.turns}/${snapshot.maxTurns}`
+					: "",
+				snapshot.usage.cost ? `$${snapshot.usage.cost.toFixed(2)}` : "",
+				snapshot.runCount > 1 ? `run ${snapshot.runCount}` : "",
+			].filter(Boolean);
+			lines.push(` ${this.theme.fg("dim", metaParts.join(" · "))}`);
+		}
+		lines.push(this.divider(width));
 
 		const transcript = this.renderTranscript(
 			snapshot,
 			Math.max(8, innerWidth - 2),
 		);
 		const bodyRows = Math.min(
-			this.bodyRows(),
+			this.heightBudget(),
 			Math.max(transcript.length, 3),
 		);
+		this.scrollable = transcript.length > bodyRows;
 		const maxOffset = Math.max(0, transcript.length - bodyRows);
 		this.scrollFromBottom = Math.min(this.scrollFromBottom, maxOffset);
 		const end = Math.max(0, transcript.length - this.scrollFromBottom);
@@ -430,8 +449,9 @@ export class SubagentPanel implements Component {
 		while (visible.length < bodyRows) visible.unshift("");
 		for (const line of visible) lines.push(` ${line}`);
 		if (this.scrollFromBottom > 0) {
+			const noun = this.scrollFromBottom === 1 ? "newer line" : "newer lines";
 			lines.push(
-				` ${this.theme.fg("warning", `▾ ${this.scrollFromBottom} newer lines · ↓/PgDn to follow`)}`,
+				` ${this.theme.fg("warning", `▾ ${this.scrollFromBottom} ${noun} · End to follow`)}`,
 			);
 		}
 
@@ -455,7 +475,7 @@ export class SubagentPanel implements Component {
 			);
 		}
 
-		const mode = this.inputModeLabel(snapshot);
+		const mode = this.inputModeLabel(snapshot, position, snapshots.length);
 		this.input.focused = this.focused;
 		const modeWidth = visibleWidth(mode.label) + 3;
 		const [inputLine = ""] = this.input.render(
@@ -475,36 +495,43 @@ export class SubagentPanel implements Component {
 		return this.frame(lines, width);
 	}
 
-	private inputModeLabel(snapshot: SubagentSnapshot): {
+	/**
+	 * The label names what Enter does; the hint lists only currently-usable
+	 * keys so guidance appears exactly when an action becomes available.
+	 */
+	private inputModeLabel(
+		snapshot: SubagentSnapshot,
+		position: number,
+		total: number,
+	): {
 		label: string;
 		hint: string;
 	} {
+		let label: string;
+		let action: string;
 		if (snapshot.status === "running") {
-			const label =
-				this.sendMode === "steer"
-					? this.theme.fg("accent", "[steer]")
-					: this.theme.fg("warning", "[follow-up]");
-			return {
-				label,
-				hint: "Enter send · ^T mode · ↑↓ scroll · Tab agent · ^X stop · Esc",
-			};
+			label = this.theme.fg("accent", "[send]");
+			action = "Enter send";
+		} else if (
+			snapshot.status === "starting" ||
+			snapshot.status === "queued"
+		) {
+			label = this.theme.fg("dim", "[on start]");
+			action = "Enter attach";
+		} else if (snapshot.status === "completed") {
+			label = this.theme.fg("success", "[continue]");
+			action = "Enter continue";
+		} else {
+			label = this.theme.fg("warning", "[rerun]");
+			action = "Enter rerun (typed text = new task)";
 		}
-		if (snapshot.status === "starting" || snapshot.status === "queued") {
-			return {
-				label: this.theme.fg("dim", "[on start]"),
-				hint: "Enter queue · ↑↓ scroll · Tab agent · ^X stop · Esc",
-			};
-		}
-		if (snapshot.status === "completed") {
-			return {
-				label: this.theme.fg("success", "[continue]"),
-				hint: "Enter continue · ↑↓ scroll · Tab agent · Esc",
-			};
-		}
-		return {
-			label: this.theme.fg("muted", "[restart]"),
-			hint: "Enter restart (input = new task) · ↑↓ scroll · Tab agent · Esc",
-		};
+
+		const parts = [action];
+		if (this.scrollable) parts.push("↑↓ scroll");
+		if (total > 1) parts.push(`Tab next (${position + 1}/${total})`);
+		if (isActiveStatus(snapshot.status)) parts.push("^C stop");
+		parts.push("Esc close");
+		return { label, hint: parts.join(" · ") };
 	}
 
 	private renderTranscript(

@@ -25,19 +25,20 @@ The built-in profiles are:
 Model and thinking resolution is deterministic:
 
 1. Explicit values on the individual `spawn` task.
-2. Saved profile overrides configured through `/subagent`.
+2. Saved profile overrides configured through `/subagent-settings`.
 3. `model` / `thinkingLevel` in a Markdown agent definition.
 4. `inherit`: the parent session's current model and thinking level at spawn
    time.
 
 Built-in profiles have no fixed model or thinking level, so their untouched
-default is `inherit`. Explicitly selecting `inherit` in `/subagent` also
-overrides a Markdown agent's fixed setting.
+default is `inherit`. Explicitly selecting `inherit` in `/subagent-settings`
+also overrides a Markdown agent's fixed setting.
 
-`/subagent [profile]` opens the settings menu. It can save an explicit model,
-an explicit thinking level, force either field to `inherit`, or clear the saved
-override and return to the agent definition. Settings are stored outside the
-repo at `~/.pi/agent/pi-config/subagent.json`; no credentials are written.
+`/subagent-settings [profile]` opens the settings menu. It can save an
+explicit model, an explicit thinking level, force either field to `inherit`,
+or clear the saved override and return to the agent definition. Settings are
+stored outside the repo at `~/.pi/agent/pi-config/subagent.json`; no
+credentials are written.
 
 ## Background control tool
 
@@ -66,17 +67,26 @@ Excess tasks remain queued and start automatically when a slot opens.
 ## TUI
 
 Two surfaces, no redundancy: the footer widget is the passive live list, and
-one focused transcript overlay is where all interaction happens.
+one focused transcript overlay is where all interaction happens. The design
+goal is a minimal key set — inside the overlay only universal keys apply
+(Enter, Esc, Tab, arrows, ctrl+c), and the hint line teaches exactly the keys
+that are currently usable.
 
 ### Footer widget (always visible while workers exist)
 
 A below-editor widget appears automatically on the first spawn and disappears
-when the last record is cleared. Each row shows a pulse spinner (running),
+when the last record is cleared. Rows keep a stable order — pending/active
+workers first, finished ones sink below, spawn order within each group — so a
+row moves at most once, when it finishes, and never trades places because a
+neighbor produced output more recently. The panel's Tab cycle uses the same
+order. Each row shows a pulse spinner (running),
 status icon, id, label, agent profile, the current tool activity (wide
 terminals), and right-aligned `elapsed · ↓ tokens`. Completed-but-unviewed
 workers carry a `*` mark. The spinner and elapsed times animate only while a
 worker is active. At most 5 rows are shown, with a `… +N more (alt+o)`
-overflow line.
+overflow line. Until the panel is opened for the first time in a session, a
+one-time `alt+o to view` onboarding line is appended; it disappears the
+moment the panel is first opened.
 
 `ctx.ui.setStatus()` still publishes a compact `N running · M queued · K done`
 summary so the bundled `statusline` extension shows counts without a
@@ -85,35 +95,44 @@ cross-extension import.
 ### Transcript overlay
 
 - `alt+o` opens the most relevant worker (unread first, then running, then
-  most recently updated). `/subagents [id]` and `ctrl+alt+a` do the same,
-  optionally targeting an id. The collapsed spawn result in the main
-  transcript also names `alt+o`.
-- `Tab` / `shift+Tab` cycle between workers; the header shows `n/total ⇥`.
-- `↑`/`↓` scroll by line, `PgUp`/`PgDn` by half page. The view follows the
-  tail until scrolled, then shows `▾ N newer lines · ↓/PgDn to follow`.
-  Mouse wheel scrolling cannot work here: Pi renders into the normal
-  terminal screen without mouse tracking, so the wheel always scrolls the
-  terminal's own scrollback.
-- The header is two lines: status icon/spinner, label, id, status, position;
-  then agent profile, model, elapsed, tool uses, tokens, cost. While running,
-  a live status line above the input shows the current tool activity.
-- `Esc` or `ctrl+c` closes the overlay.
+  most recently updated). `/subagents [id]` does the same, optionally
+  targeting an id. The collapsed spawn result in the main transcript also
+  names `alt+o`.
+- `Tab` cycles between workers (`shift+Tab` reverses); the hint line shows
+  `Tab next (n/total)` whenever more than one worker exists.
+- `↑`/`↓` scroll by line, `PgUp`/`PgDn` by half page, `Home`/`End` jump to
+  top/tail. The view follows the tail until scrolled, then shows
+  `▾ N newer lines · End to follow`. Mouse wheel scrolling cannot work here:
+  Pi renders into the normal terminal screen without mouse tracking, so the
+  wheel always scrolls the terminal's own scrollback.
+- The header is one line (status, label, id, state) plus a metadata line
+  (profile, model, elapsed, tool uses, tokens, cost) that is dropped on short
+  terminals. While running, a live status line above the input shows the
+  current tool activity.
+- `ctrl+c` follows terminal convention: it stops the worker being viewed if
+  it is active, and closes the overlay otherwise. `Esc` always closes.
+
+The overlay picks its geometry from the terminal size at open time: near-full
+width below 100 columns, 62% up to 170 columns, and a fixed 104 columns on
+wider terminals so transcript lines stay readable; percent-based sizes keep
+tracking live resizes.
 
 ### Instruction input
 
-The input line is always focused and its mode follows the worker state:
+The input line is always focused, and Enter always performs the single action
+the mode label announces:
 
 | State | Mode label | Enter behavior |
 |---|---|---|
-| running | `[steer]` / `[follow-up]` (toggle with `ctrl+t`) | steer delivers after the current tool batch; follow-up waits until work settles |
+| running | `[send]` | delivered to the worker after its current tool call |
 | queued/starting | `[on start]` | attaches the message before the run starts |
 | completed | `[continue]` | continues the existing conversation |
-| failed/stopped | `[restart]` | restarts fresh; the input becomes the new task |
+| failed/stopped | `[rerun]` | reruns fresh — empty input repeats the task, typed text replaces it |
 
-`ctrl+enter` is a shortcut for an immediate follow-up on terminals that can
-distinguish it; `ctrl+t` works everywhere. `ctrl+r` restarts and `ctrl+x`
-stops the worker being viewed. Clearing finished records is a model-side
-action (`subagent` action `clear`).
+Pressing Enter with an empty input (outside `[rerun]`) shows a short
+explanation instead of doing nothing. Steer-vs-follow-up delivery is a
+model-side concept only (`send` action `delivery`); the human UI always
+steers. Clearing finished records is likewise a model-side action (`clear`).
 
 ### Main-transcript rendering
 

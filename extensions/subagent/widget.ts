@@ -11,31 +11,15 @@ import {
 	formatDuration,
 	formatTokens,
 	isActiveStatus,
+	sortSnapshots,
 	SPINNER_INTERVAL_MS,
 	spinnerFrame,
 	STATUS_COLOR,
 	STATUS_ICON,
 } from "./format.ts";
-import type { SubagentSnapshot, SubagentStatus } from "./types.ts";
+import type { SubagentSnapshot } from "./types.ts";
 
 const MAX_ROWS = 5;
-
-const WIDGET_STATUS_ORDER: Record<SubagentStatus, number> = {
-	running: 0,
-	starting: 1,
-	queued: 2,
-	failed: 3,
-	completed: 4,
-	stopped: 5,
-};
-
-function sortForWidget(snapshots: SubagentSnapshot[]): SubagentSnapshot[] {
-	return [...snapshots].sort((first, second) => {
-		const statusDelta =
-			WIDGET_STATUS_ORDER[first.status] - WIDGET_STATUS_ORDER[second.status];
-		return statusDelta || second.updatedAt - first.updatedAt;
-	});
-}
 
 export class SubagentFooterWidget implements Component {
 	private timer: ReturnType<typeof setInterval> | undefined;
@@ -44,6 +28,8 @@ export class SubagentFooterWidget implements Component {
 		private readonly tui: TUI,
 		private readonly theme: Theme,
 		private readonly getSnapshots: () => SubagentSnapshot[],
+		/** True until the transcript panel has been opened this session. */
+		private readonly showOpenHint: () => boolean,
 	) {}
 
 	dispose(): void {
@@ -63,7 +49,7 @@ export class SubagentFooterWidget implements Component {
 	}
 
 	render(width: number): string[] {
-		const snapshots = sortForWidget(this.getSnapshots());
+		const snapshots = sortSnapshots(this.getSnapshots());
 		this.syncTimer(snapshots);
 		if (!snapshots.length) return [];
 
@@ -76,6 +62,9 @@ export class SubagentFooterWidget implements Component {
 			lines.push(
 				` ${this.theme.fg("dim", `… +${snapshots.length - MAX_ROWS} more (alt+o)`)}`,
 			);
+		} else if (this.showOpenHint()) {
+			// One-time onboarding: gone the moment the panel is first opened.
+			lines.push(` ${this.theme.fg("dim", "alt+o to view")}`);
 		}
 		return lines;
 	}

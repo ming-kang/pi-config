@@ -2,12 +2,14 @@
  * subagent — isolated background AgentSession workers with parent feedback.
  *
  * Interaction model (closest Pi-native approximation of Claude Code's
- * background-agent UX, kept deliberately minimal): a persistent below-editor
- * widget lists workers with a live pulse spinner, elapsed time, and output
- * tokens; `alt+o` / `ctrl+alt+a` / `/subagents` open one focused transcript
- * overlay (no separate list view — the widget is the list); inside it Tab
- * cycles workers, ↑↓ scroll, and the inline input steers, follows up,
- * continues, or restarts depending on worker state.
+ * background-agent UX, deliberately minimal in keys and concepts): a
+ * persistent below-editor widget lists workers with a live pulse spinner,
+ * elapsed time, and output tokens; `alt+o` (or `/subagents`) opens one focused
+ * transcript overlay — the widget is the list, the overlay is the interaction.
+ * Inside it only universal keys apply: Enter does the one state-appropriate
+ * action, Tab cycles workers, arrows/PgUp/PgDn/Home/End scroll, ctrl+c stops
+ * the running worker (or closes when idle), Esc closes. The hint line shows
+ * only currently-usable keys.
  *
  * Pi's public TUI API supports focused keyboard overlays plus passive widgets
  * but no footer hit-testing or mouse events; Pi renders into the normal
@@ -33,7 +35,6 @@ import {
 	SUBAGENT_TOOL_NAME,
 	SUBAGENT_VIEW_SHORTCUT,
 	SUBAGENTS_COMMAND_NAME,
-	SUBAGENTS_SHORTCUT,
 } from "./constants.ts";
 import { SubagentController } from "./controller.ts";
 import { renderSubagentCall, renderSubagentResult } from "./render.ts";
@@ -104,7 +105,7 @@ export default function subagent(pi: ExtensionAPI): void {
 
 	pi.registerCommand(SUBAGENTS_COMMAND_NAME, {
 		description:
-			"Open the background subagent manager (optionally pass an agent id)",
+			"View background subagents (same as alt+o; optionally pass an agent id)",
 		handler: async (args, ctx) => {
 			if (ctx.mode !== "tui") {
 				ctx.ui.notify("/subagents requires the Pi TUI.", "warning");
@@ -119,23 +120,18 @@ export default function subagent(pi: ExtensionAPI): void {
 			"Configure inherited or explicit model/thinking settings for subagent profiles",
 		handler: async (args, ctx) => {
 			if (!ctx.hasUI) {
-				ctx.ui.notify("/subagent requires an interactive UI.", "warning");
+				ctx.ui.notify(
+					`/${SUBAGENT_SETTINGS_COMMAND_NAME} requires an interactive UI.`,
+					"warning",
+				);
 				return;
 			}
 			await controller.openSettingsMenu(ctx, args.trim() || undefined);
 		},
 	});
 
-	pi.registerShortcut(SUBAGENTS_SHORTCUT, {
-		description: "Open background subagents",
-		handler: async (ctx) => {
-			if (ctx.mode !== "tui") return;
-			await controller.openPanel(ctx);
-		},
-	});
-
 	pi.registerShortcut(SUBAGENT_VIEW_SHORTCUT, {
-		description: "Open the most relevant subagent transcript",
+		description: "View background subagents",
 		handler: async (ctx) => {
 			if (ctx.mode !== "tui") return;
 			const id = controller.mostRelevantId();

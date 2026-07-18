@@ -14,6 +14,7 @@ import {
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import type { TUI } from "@earendil-works/pi-tui";
 
 import { discoverAgents } from "./agents.ts";
 import {
@@ -36,7 +37,7 @@ import {
 	TIMELINE_MAX_CHARS,
 	TIMELINE_MAX_ITEMS,
 } from "./constants.ts";
-import { SubagentPanel } from "./panel.ts";
+import { panelOverlayOptions, SubagentPanel } from "./panel.ts";
 import type {
 	AgentScope,
 	DeliveryMode,
@@ -232,6 +233,8 @@ export class SubagentController implements SubagentPanelHost {
 	private pumping = false;
 	private disposed = false;
 	private panelOpen = false;
+	/** Once true, the widget's one-time "alt+o to view" onboarding line disappears. */
+	private panelOpenedThisSession = false;
 	private panel: SubagentPanel | undefined;
 	private widget: SubagentFooterWidget | undefined;
 	private widgetVisible = false;
@@ -298,7 +301,10 @@ export class SubagentController implements SubagentPanelHost {
 		requestedAgent?: string,
 	): Promise<void> {
 		if (!ctx.hasUI) {
-			ctx.ui.notify("/subagent requires an interactive UI.", "warning");
+			ctx.ui.notify(
+				"/subagent-settings requires an interactive UI.",
+				"warning",
+			);
 			return;
 		}
 		await this.loadPreferences(ctx);
@@ -426,10 +432,14 @@ export class SubagentController implements SubagentPanelHost {
 		}
 
 		this.panelOpen = true;
+		this.panelOpenedThisSession = true;
+		this.widget?.requestRender(); // drop the one-time alt+o onboarding line
 		try {
 			const startId = initialId ?? this.mostRelevantId();
+			let overlayTui: TUI | undefined;
 			await ctx.ui.custom<void>(
 				(tui, theme, _keybindings, done) => {
+					overlayTui = tui;
 					const panel = new SubagentPanel({
 						tui,
 						theme,
@@ -442,13 +452,13 @@ export class SubagentController implements SubagentPanelHost {
 				},
 				{
 					overlay: true,
-					overlayOptions: {
-						anchor: "top-right",
-						width: "55%",
-						minWidth: 42,
-						maxHeight: "72%",
-						margin: { top: 1, right: 1 },
-					},
+					// Evaluated after the factory runs, so overlayTui is set; the
+					// tier is chosen for the terminal size at open time.
+					overlayOptions: () =>
+						panelOverlayOptions(
+							overlayTui?.terminal.columns ?? process.stdout.columns ?? 80,
+							overlayTui?.terminal.rows ?? process.stdout.rows ?? 24,
+						),
 				},
 			);
 		} finally {
@@ -502,7 +512,7 @@ export class SubagentController implements SubagentPanelHost {
 			this.addTimeline(record, "user", instruction);
 			record.updatedAt = Date.now();
 			this.requestPanelRender();
-			return `Instruction attached to ${record.id} before its run starts.`;
+			return `Attached — delivered when ${record.id} starts.`;
 		}
 
 		if (record.status === "running") {
@@ -514,13 +524,13 @@ export class SubagentController implements SubagentPanelHost {
 			else await record.session.steer(instruction);
 			this.requestPanelRender();
 			return delivery === "followUp"
-				? `Follow-up queued for ${record.id}.`
-				: `Steering instruction queued for ${record.id}.`;
+				? `Queued — ${record.id} sees it when current work settles.`
+				: `Sent — ${record.id} sees it after the current tool call.`;
 		}
 
 		if (record.status === "completed") {
 			this.enqueueRun(record, { prompt: instruction, fresh: false });
-			return `${record.id} queued to continue its existing conversation.`;
+			return `Continuing — ${record.id} resumes its conversation.`;
 		}
 
 		throw new Error(
@@ -545,7 +555,7 @@ export class SubagentController implements SubagentPanelHost {
 			"Restart requested with a fresh isolated context.",
 		);
 		this.enqueueRun(record, { prompt, fresh: true });
-		return `${record.id} queued for a fresh restart.`;
+		return `Rerunning ${record.id} with a fresh context.`;
 	}
 
 	async stopAgent(id: string): Promise<string> {
@@ -1616,8 +1626,11 @@ export class SubagentController implements SubagentPanelHost {
 			ctx.ui.setWidget(
 				SUBAGENT_WIDGET_KEY,
 				(tui, theme) => {
-					const widget = new SubagentFooterWidget(tui, theme, () =>
-						this.getSnapshots(),
+					const widget = new SubagentFooterWidget(
+						tui,
+						theme,
+						() => this.getSnapshots(),
+						() => !this.panelOpenedThisSession,
 					);
 					this.widget = widget;
 					return widget;

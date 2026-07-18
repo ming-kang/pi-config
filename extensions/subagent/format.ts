@@ -1,6 +1,10 @@
 /** Shared presentation constants and formatters for the subagent TUI surfaces. */
 
-import type { SubagentStatus, SubagentUsage } from "./types.ts";
+import type {
+	SubagentSnapshot,
+	SubagentStatus,
+	SubagentUsage,
+} from "./types.ts";
 
 /** Pulse-style spinner frames; all surfaces derive the frame from wall-clock time so they animate in sync. */
 export const SPINNER_FRAMES = (() => {
@@ -39,6 +43,32 @@ export const STATUS_COLOR: Record<
 
 export function isActiveStatus(status: SubagentStatus): boolean {
 	return status === "running" || status === "starting";
+}
+
+export function isTerminalStatus(status: SubagentStatus): boolean {
+	return (
+		status === "completed" || status === "failed" || status === "stopped"
+	);
+}
+
+/**
+ * Stable list order shared by the footer widget and the panel's Tab cycle:
+ * pending/active workers first, finished ones sink below, spawn order within
+ * each group. A row moves at most once (when it finishes) and never trades
+ * places with its neighbors just because it produced output more recently.
+ */
+export function sortSnapshots(
+	snapshots: SubagentSnapshot[],
+): SubagentSnapshot[] {
+	return [...snapshots].sort((first, second) => {
+		const firstDone = isTerminalStatus(first.status) ? 1 : 0;
+		const secondDone = isTerminalStatus(second.status) ? 1 : 0;
+		return (
+			firstDone - secondDone ||
+			first.createdAt - second.createdAt ||
+			first.id.localeCompare(second.id)
+		);
+	});
 }
 
 export function formatDuration(
