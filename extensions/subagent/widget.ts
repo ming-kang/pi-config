@@ -60,11 +60,11 @@ export class SubagentFooterWidget implements Component {
 		}
 		if (snapshots.length > MAX_ROWS) {
 			lines.push(
-				` ${this.theme.fg("dim", `… +${snapshots.length - MAX_ROWS} more (alt+o)`)}`,
+				` ${this.theme.fg("dim", `… +${snapshots.length - MAX_ROWS} more (/agents)`)}`,
 			);
 		} else if (this.showOpenHint()) {
 			// One-time onboarding: gone the moment the panel is first opened.
-			lines.push(` ${this.theme.fg("dim", "alt+o to view")}`);
+			lines.push(` ${this.theme.fg("dim", "/agents to view")}`);
 		}
 		return lines;
 	}

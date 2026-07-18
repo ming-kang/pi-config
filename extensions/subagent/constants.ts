@@ -2,11 +2,8 @@
 
 export const SUBAGENT_TOOL_NAME = "subagent";
 export const SUBAGENT_TOOL_LABEL = "Subagent";
-/** Named -settings (not /subagent) so it cannot be confused with /subagents. */
-export const SUBAGENT_SETTINGS_COMMAND_NAME = "subagent-settings";
-export const SUBAGENTS_COMMAND_NAME = "subagents";
-/** The single global shortcut: jump into the most relevant worker's transcript. */
-export const SUBAGENT_VIEW_SHORTCUT = "alt+o" as const;
+/** Single command surface; no global shortcuts. `settings` is a subcommand. */
+export const AGENTS_COMMAND_NAME = "agents";
 
 export const SUBAGENT_WIDGET_KEY = "subagent";
 export const SUBAGENT_CONFIG_ENTRY_TYPE = "pi-config-subagent-config";

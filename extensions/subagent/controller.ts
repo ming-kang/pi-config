@@ -229,7 +229,7 @@ export class SubagentController implements SubagentPanelHost {
 	private pumping = false;
 	private disposed = false;
 	private panelOpen = false;
-	/** Once true, the widget's one-time "alt+o to view" onboarding line disappears. */
+	/** Once true, the widget's one-time "/agents to view" onboarding line disappears. */
 	private panelOpenedThisSession = false;
 	private panel: SubagentPanel | undefined;
 	private widget: SubagentFooterWidget | undefined;
@@ -297,7 +297,7 @@ export class SubagentController implements SubagentPanelHost {
 	): Promise<void> {
 		if (!ctx.hasUI) {
 			ctx.ui.notify(
-				"/subagent-settings requires an interactive UI.",
+				"/agents settings requires an interactive UI.",
 				"warning",
 			);
 			return;
@@ -415,10 +415,15 @@ export class SubagentController implements SubagentPanelHost {
 		this.stateChanged();
 	}
 
+	/** Whether an id maps to a retained record; gates the /agents usage hint. */
+	hasAgent(id: string): boolean {
+		return this.records.has(id);
+	}
+
 	async openPanel(ctx: ExtensionContext, initialId?: string): Promise<void> {
 		this.bindContext(ctx);
 		if (ctx.mode !== "tui") {
-			ctx.ui.notify("/subagents requires the Pi TUI.", "warning");
+			ctx.ui.notify("/agents requires the Pi TUI.", "warning");
 			return;
 		}
 		if (this.panelOpen) {
@@ -428,7 +433,7 @@ export class SubagentController implements SubagentPanelHost {
 
 		this.panelOpen = true;
 		this.panelOpenedThisSession = true;
-		this.widget?.requestRender(); // drop the one-time alt+o onboarding line
+		this.widget?.requestRender(); // drop the one-time /agents onboarding line
 		try {
 			const startId = initialId ?? this.mostRelevantId();
 			let overlayTui: TUI | undefined;

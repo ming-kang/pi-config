@@ -399,6 +399,7 @@ export class SubagentPanel implements Component {
 				[
 					` ${this.theme.fg("muted", "No background subagents yet.")}`,
 					` ${this.theme.fg("dim", "Ask the model to delegate work with the subagent tool.")}`,
+					` ${this.theme.fg("dim", "/agents settings — set profile model/thinking")}`,
 					` ${this.theme.fg("dim", "Esc close")}`,
 				],
 				width,

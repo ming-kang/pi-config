@@ -23,16 +23,16 @@ The built-in profiles are:
 Model and thinking resolution is deterministic:
 
 1. Explicit values on the individual `spawn` task.
-2. Saved profile overrides configured through `/subagent-settings`.
+2. Saved profile overrides configured through `/agents settings`.
 3. `model` / `thinkingLevel` in a Markdown agent definition.
 4. `inherit`: the parent session's current model and thinking level at spawn
    time.
 
 Built-in profiles have no fixed model or thinking level, so their untouched
-default is `inherit`. Explicitly selecting `inherit` in `/subagent-settings`
+default is `inherit`. Explicitly selecting `inherit` in `/agents settings`
 also overrides a Markdown agent's fixed setting.
 
-`/subagent-settings [profile]` opens the settings menu. It can save an
+`/agents settings [profile]` opens the settings menu. It can save an
 explicit model, an explicit thinking level, force either field to `inherit`,
 or clear the saved override and return to the agent definition. Settings are
 stored outside the repo at `~/.pi/agent/pi-config/subagent.json`; no
@@ -81,9 +81,9 @@ order. Each row shows a pulse spinner (running),
 status icon, id, label, agent profile, the current tool activity (wide
 terminals), and right-aligned `elapsed · ↓ tokens`. Completed-but-unviewed
 workers carry a `*` mark. The spinner and elapsed times animate only while a
-worker is active. At most 5 rows are shown, with a `… +N more (alt+o)`
+worker is active. At most 5 rows are shown, with a `… +N more (/agents)`
 overflow line. Until the panel is opened for the first time in a session, a
-one-time `alt+o to view` onboarding line is appended; it disappears the
+one-time `/agents to view` onboarding line is appended; it disappears the
 moment the panel is first opened.
 
 The footer widget is the single source of live status, so the extension no
@@ -93,10 +93,11 @@ future redesign.
 
 ### Transcript overlay
 
-- `alt+o` opens the most relevant worker (unread first, then running, then
-  most recently updated). `/subagents [id]` does the same, optionally
-  targeting an id. The collapsed spawn result in the main transcript also
-  names `alt+o`.
+- `/agents` opens the most relevant worker (unread first, then running, then
+  most recently updated); `/agents <id>` targets a specific worker, and an
+  unknown id shows a one-line usage hint. The extension registers no global
+  shortcuts. The collapsed spawn result in the main transcript also names
+  `/agents`.
 - `Tab` cycles between workers (`shift+Tab` reverses); the hint line shows
   `Tab next (n/total)` whenever more than one worker exists.
 - `↑`/`↓` scroll by line, `PgUp`/`PgDn` by half page, `Home`/`End` jump to
@@ -200,7 +201,7 @@ implemented.
 
 ## Files
 
-- `index.ts` — tool/command/shortcut registration and lifecycle hooks
+- `index.ts` — tool/command registration and lifecycle hooks
 - `controller.ts` — scheduling, AgentSession lifecycle, parent notifications,
   tool actions, and widget lifecycle
 - `panel.ts` — manager overlay: list view and transcript view with the
