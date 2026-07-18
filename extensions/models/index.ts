@@ -73,7 +73,7 @@ async function completeArguments(prefix: string): Promise<AutocompleteItem[] | n
 			const providers = fuzzyFilter(await listProviders(), first, providerSearchText).map(({ id, entry }) => ({
 				value: id,
 				label: id,
-				description: formatProviderCompletionDescription(id, entry),
+				description: formatProviderCompletionDescription(entry),
 			}));
 			const completions = [...commands, ...providers];
 			return completions.length > 0 ? completions : null;
@@ -88,7 +88,7 @@ async function completeArguments(prefix: string): Promise<AutocompleteItem[] | n
 			? providers.map(({ id, entry }) => ({
 					value: `${first} ${id}`,
 					label: id,
-					description: formatProviderCompletionDescription(id, entry),
+					description: formatProviderCompletionDescription(entry),
 				}))
 			: null;
 	} catch {
@@ -125,11 +125,7 @@ async function dispatch(args: string, ctx: ExtensionCommandContext): Promise<voi
 
 async function openProviderReference(providerRef: string, ctx: ExtensionCommandContext): Promise<void> {
 	const normalized = providerRef.trim().toLowerCase();
-	const exact = (await listProviders()).filter(
-		({ id, entry }) =>
-			id.toLowerCase() === normalized ||
-			(typeof entry.name === "string" && entry.name.trim().toLowerCase() === normalized),
-	);
+	const exact = (await listProviders()).filter(({ id }) => id.toLowerCase() === normalized);
 	if (exact.length === 1) {
 		await openProviderActions(exact[0]!.id, ctx);
 		return;
@@ -144,8 +140,8 @@ async function openProvidersMenu(ctx: ExtensionCommandContext, initialQuery?: st
 		const items = [
 			...providers.map(({ id, entry }) => ({
 				value: `provider:${id}`,
-				label: providerDisplayName(id, entry),
-				description: formatProviderDescription(id, entry),
+				label: id,
+				description: formatProviderDescription(entry),
 				searchText: providerSearchText({ id, entry }),
 			})),
 			{
@@ -193,7 +189,6 @@ async function openProviderActions(providerId: string, ctx: ExtensionCommandCont
 		}
 		const action = await ctx.ui.select(providerId, [
 			"Open workspace · models, connection, and advanced settings",
-			"Discover models from this provider",
 			"Remove provider",
 			"Back",
 		]);
@@ -202,7 +197,6 @@ async function openProviderActions(providerId: string, ctx: ExtensionCommandCont
 			const savedId = await editExistingProvider(providerId, ctx);
 			if (savedId && savedId !== providerId) return;
 		}
-		if (action === "Discover models from this provider") await probeFlow(providerId, ctx);
 		if (action === "Remove provider" && (await confirmAndRemove(providerId, ctx))) return;
 	}
 }
@@ -222,6 +216,10 @@ async function addProvider(ctx: ExtensionCommandContext): Promise<string | undef
 				`Saved provider "${id}" and reloaded the model registry.`,
 			),
 	});
+	if (result.kind === "discover") {
+		await probeFlow(result.id, ctx);
+		return result.id;
+	}
 	return result.kind === "saved" ? result.id : undefined;
 }
 
@@ -246,6 +244,10 @@ async function editExistingProvider(
 				`Saved provider "${id}" and reloaded the model registry.`,
 			),
 	});
+	if (result.kind === "discover") {
+		await probeFlow(result.id, ctx);
+		return result.id;
+	}
 	return result.kind === "saved" ? result.id : undefined;
 }
 
@@ -383,29 +385,21 @@ async function commitModelsChange(
 	}
 }
 
-function providerDisplayName(id: string, entry: ProviderEntry): string {
-	const name = typeof entry.name === "string" ? entry.name.trim() : "";
-	return name || id;
-}
-
-function formatProviderDescription(id: string, entry: ProviderEntry): string {
+function formatProviderDescription(entry: ProviderEntry): string {
 	const models = Array.isArray(entry.models) ? entry.models.length : 0;
 	const api = typeof entry.api === "string" ? entry.api : "inherit";
 	const url = typeof entry.baseUrl === "string" ? truncate(entry.baseUrl, 48) : "built-in/default URL";
-	const idLabel = providerDisplayName(id, entry) === id ? "" : `${id} · `;
-	return `${idLabel}${api} · ${models} model${models === 1 ? "" : "s"} · ${url}`;
+	return `${api} · ${models} model${models === 1 ? "" : "s"} · ${url}`;
 }
 
-function formatProviderCompletionDescription(id: string, entry: ProviderEntry): string {
-	const name = providerDisplayName(id, entry);
+function formatProviderCompletionDescription(entry: ProviderEntry): string {
 	const models = Array.isArray(entry.models) ? entry.models.length : 0;
-	const prefix = name === id ? "" : `${name} · `;
-	return `${prefix}${models} model${models === 1 ? "" : "s"}`;
+	return `${models} model${models === 1 ? "" : "s"}`;
 }
 
 function providerSearchText(provider: { id: string; entry: ProviderEntry }): string {
 	const { id, entry } = provider;
-	return `${id} ${providerDisplayName(id, entry)} ${typeof entry.api === "string" ? entry.api : ""} ${
+	return `${id} ${typeof entry.api === "string" ? entry.api : ""} ${
 		typeof entry.baseUrl === "string" ? entry.baseUrl : ""
 	}`;
 }

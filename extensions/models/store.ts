@@ -61,7 +61,6 @@ export interface ModelOverride {
 }
 
 export interface ProviderEntry {
-	name?: string;
 	baseUrl?: string;
 	api?: string;
 	apiKey?: string;

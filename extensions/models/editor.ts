@@ -58,7 +58,10 @@ export interface ProviderEditorOptions {
 	onSave: (id: string, entry: ProviderEntry) => Promise<SaveAttempt>;
 }
 
-export type ProviderEditorResult = { kind: "saved"; id: string } | { kind: "cancel" };
+export type ProviderEditorResult =
+	| { kind: "saved"; id: string }
+	| { kind: "discover"; id: string }
+	| { kind: "cancel" };
 
 interface MenuOption<T extends string> {
 	key: T;
@@ -68,6 +71,10 @@ interface MenuOption<T extends string> {
 interface EditResult<T> {
 	changed: boolean;
 	value?: T;
+}
+
+interface ModelsEditResult extends EditResult<ModelEntry[]> {
+	discover?: boolean;
 }
 
 const REMOVE_MODEL = Symbol("remove-model");
@@ -123,7 +130,7 @@ export async function editProvider(
 		};
 		const workspaceOptions: MenuOption<string>[] = [
 			...(id ? [modelsOption] : []),
-			{ key: "identity", label: `Identity · ${id || "provider ID required"}${entry.name ? ` · ${entry.name}` : ""}` },
+			{ key: "id", label: `Provider ID · ${id || "required"}` },
 			{ key: "connection", label: `Connection · ${summarizeConnection(entry)}` },
 			...(!id ? [modelsOption] : []),
 			{ key: "advanced", label: `Advanced · ${summarizeProviderAdvanced(entry)}` },
@@ -147,11 +154,38 @@ export async function editProvider(
 				}
 				const value = await editModels(ctx, entry.models);
 				if (value.changed) setOptionalArray(entry, "models", value.value);
+				if (value.discover) {
+					if (
+						!(await ctx.ui.confirm(
+							"Save and discover models?",
+							"Current workspace changes will be saved before fetching the provider catalog.",
+						))
+					)
+						break;
+					const errors = validateProvider(id, entry, opts.existingIds, opts.initialId);
+					if (errors.length > 0) {
+						ctx.ui.notify(errors.join("\n"), "error");
+						break;
+					}
+					const result = await opts.onSave(id, structuredClone(entry));
+					if (!result.ok) {
+						ctx.ui.notify(result.error ?? "Provider could not be saved.", "error");
+						break;
+					}
+					return { kind: "discover", id };
+				}
 				break;
 			}
-			case "identity":
-				id = await editProviderIdentity(ctx, id, entry, opts.existingIds, opts.initialId);
+			case "id": {
+				const value = await promptText(ctx, "Provider ID", id, "my-provider", (candidate) => {
+					const trimmed = candidate.trim();
+					if (!isValidProviderId(trimmed)) return "Use 1–64 letters, digits, _ or -.";
+					if (trimmed !== opts.initialId && opts.existingIds.includes(trimmed)) return "That provider ID already exists.";
+					return undefined;
+				});
+				if (value !== undefined) id = value.trim();
 				break;
+			}
 			case "connection":
 				await editProviderConnection(ctx, entry);
 				break;
@@ -171,37 +205,6 @@ export async function editProvider(
 				}
 				return { kind: "saved", id };
 			}
-		}
-	}
-}
-
-async function editProviderIdentity(
-	ctx: ExtensionCommandContext,
-	initialId: string,
-	entry: ProviderEntry,
-	existingIds: readonly string[],
-	originalId: string,
-): Promise<string> {
-	let id = initialId;
-	while (true) {
-		const choice = await selectKey(ctx, "Provider identity", [
-			{ key: "id", label: `Provider ID · ${id || "required"}` },
-			{ key: "name", label: `Display name · ${entry.name ?? "default = provider ID"}` },
-			{ key: "back", label: "Back" },
-		]);
-		if (choice === undefined || choice === "back") return id;
-		if (choice === "id") {
-			const value = await promptText(ctx, "Provider ID", id, "my-provider", (candidate) => {
-				const trimmed = candidate.trim();
-				if (!isValidProviderId(trimmed)) return "Use 1–64 letters, digits, _ or -.";
-				if (trimmed !== originalId && existingIds.includes(trimmed)) return "That provider ID already exists.";
-				return undefined;
-			});
-			if (value !== undefined) id = value.trim();
-		}
-		if (choice === "name") {
-			const value = await promptOptionalText(ctx, "Provider display name", entry.name);
-			if (value.changed) setOptional(entry, "name", value.value);
 		}
 	}
 }
@@ -282,7 +285,7 @@ async function editProviderAdvanced(ctx: ExtensionCommandContext, entry: Provide
 async function editModels(
 	ctx: ExtensionCommandContext,
 	initial: ModelEntry[] | undefined,
-): Promise<EditResult<ModelEntry[]>> {
+): Promise<ModelsEditResult> {
 	const original = structuredClone(initial ?? []);
 	const working = structuredClone(original);
 
@@ -293,6 +296,7 @@ async function editModels(
 		}));
 		options.push(
 			{ key: "add", label: "+ Add model IDs · paste one or many" },
+			{ key: "discover", label: "Discover remote models · save workspace first" },
 			{ key: "bulk", label: "Bulk edit models · capabilities and limits" },
 			{ key: "done", label: "Done" },
 			{ key: "cancel", label: "Cancel model changes" },
@@ -308,6 +312,9 @@ async function editModels(
 		if (choice === "add") {
 			await addModelIds(ctx, working);
 			continue;
+		}
+		if (choice === "discover") {
+			return { changed: !jsonEqual(original, working), value: working, discover: true };
 		}
 		if (choice === "bulk") {
 			await bulkEditModels(ctx, working);

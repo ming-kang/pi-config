@@ -4,7 +4,7 @@
 Users never need to edit the complete JSON document inside Pi.
 
 The entry experience is browse-first: short lists use Pi's native menu, while
-larger lists support fuzzy filtering by ID, display name, API, or URL. A search
+larger lists support fuzzy filtering by ID, API, or URL. A search
 input only appears after the user types (or opens `/models <query>`), so a
 normal menu never looks like an accidental form.
 
@@ -23,12 +23,12 @@ The supported fields follow Pi's upstream
       ├─ Workspace
       │  ├─ Models (primary)
       │  │  ├─ + Add model IDs (comma-separated paste)
+      │  │  ├─ Discover remote models (save workspace first)
       │  │  ├─ Bulk edit selected models
       │  │  └─ <model> → essentials / capabilities / limits / advanced
-      │  ├─ Identity (provider ID and optional display name)
+      │  ├─ Provider ID
       │  ├─ Connection (API, base URL, authentication)
       │  └─ Advanced (headers, compatibility, built-in model overrides)
-      ├─ Discover models from this provider
       └─ Remove provider
 ```
 
@@ -39,10 +39,10 @@ rejects the result.
 ## Deliberate field hierarchy
 
 Most custom providers only need a provider ID, API, base URL, and one or more
-model IDs. The workspace therefore keeps model management, connection, and
-identity visible, and moves rarely needed protocol controls behind **Advanced**.
-No supported field is silently removed: it remains available when it is needed,
-but does not make every ordinary model edit look like a full schema editor.
+model IDs. The workspace therefore keeps model management, connection, and the
+provider ID visible, and moves rarely needed protocol controls behind
+**Advanced**. No documented provider or model field is silently removed; other
+existing JSON fields are preserved untouched rather than promoted into the UI.
 
 The new-provider starters prefill common transport choices. They never invent
 user secrets or model metadata (the Ollama starter uses Pi's documented
@@ -53,7 +53,7 @@ model IDs.
 
 The provider editor exposes:
 
-- provider ID and display name;
+- provider ID;
 - default API and base URL;
 - API-key configuration (`literal`, `$ENV_VAR`, interpolation, or `!command`);
 - Radius OAuth and `authHeader`;
@@ -94,8 +94,9 @@ extension-registered models. Unknown model and override fields are preserved.
 
 ## Fetching model lists
 
-**Fetch remote model list** resolves the provider's effective URL, API key, and
-headers through Pi, then supports:
+**Discover remote models**, inside the Models workspace, first saves the
+provider draft and then resolves its effective URL, API key, and headers
+through Pi. It supports:
 
 - OpenAI Chat Completions / Responses: `<baseUrl>/models`;
 - Ollama fallback for `/v1` base paths: `<origin>/api/tags`;
@@ -120,7 +121,7 @@ The `/models` menu is the primary interface. Thin shortcuts are also available:
 | Command | Behavior |
 |---|---|
 | `/models` | Open the provider list. |
-| `/models <provider-id-or-name>` | Open one exact provider, or seed the provider search. |
+| `/models <provider-id>` | Open one exact provider, or seed the provider search. |
 | `/models list` | Same as `/models`. |
 | `/models add` | Choose a provider starter, then open its workspace draft. |
 | `/models edit <provider-id>` | Open the provider workspace. |
@@ -128,8 +129,8 @@ The `/models` menu is the primary interface. Thin shortcuts are also available:
 | `/models probe <provider-id>` | Fetch and select remote models. |
 | `/models reload` | Reload `models.json`. |
 
-Completion offers provider IDs and display-name/model-count descriptions both
-directly and after `edit`, `remove`, and `probe`.
+Completion offers provider IDs and model-count descriptions both directly and
+after `edit`, `remove`, and `probe`.
 
 ## Persistence and recovery
 
