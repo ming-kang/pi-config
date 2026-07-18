@@ -11,21 +11,22 @@ Provider display name.
 
 ```text
 /models
-└─ Provider list
+└─ Provider browser
    ├─ + Add provider
-   │  ├─ Provider ID, Base URL, API key, API protocol
-   │  ├─ Create provider and fetch its model catalog
+   │  ├─ Guided setup: ID → Base URL → API → authentication
+   │  ├─ Review and create
+   │  ├─ Fetch the remote catalog
    │  └─ Models workspace
-   ├─ Reload models.json
-   └─ <Provider ID>
-      ├─ Models
-      ├─ Connection
-      ├─ Advanced
-      ├─ Save changes
-      └─ Remove provider
+   ├─ <Provider ID> → Provider workspace
+   └─ Reload registry
 ```
 
-The new-provider screen does not ask users to select a server template. API
+Selecting a Provider opens its workspace directly; there is no intermediate
+action menu. The workspace keeps common connection fields, model management,
+and advanced collections in one flat screen, with current values visible on
+each row.
+
+The new-provider wizard does not ask users to select a server template. API
 protocol is a direct four-choice setting:
 
 - `openai-completions`
@@ -33,41 +34,42 @@ protocol is a direct four-choice setting:
 - `anthropic-messages`
 - `google-generative-ai`
 
-`apiKey` accepts a literal, `$ENV_VAR`, interpolation, or `!command`. It may
-be left empty for keyless local servers or a later `/login <provider-id>`.
+Authentication setup offers the common `$ENV_VAR` path first, while still
+accepting a literal, interpolation, or `!command`. It can be deferred for a
+keyless local server or a later `/login <provider-id>`. A final review screen
+lets every value be corrected before the first write.
 
 ## Provider and model workspaces
 
-Provider edits share one in-memory draft. Child screens update that draft;
-Ctrl+S or **Save changes** writes it atomically and reloads Pi's model registry.
-Leaving a dirty Provider offers save, discard, or continue editing.
+Provider edits share one in-memory draft. Ctrl+S or **Save changes** writes it
+atomically and reloads Pi's model registry. A clean Ctrl+S is a no-op. Leaving
+a dirty Provider offers save, discard, or continue editing.
 
-The Models workspace is list-first:
+The Models workspace is list-first and teaches its actions in two short hint
+lines instead of hiding them behind nested menus:
 
-- Enter edits the current model.
-- Space selects models for bulk actions.
-- Tab opens fetch, manual-add, bulk-edit, and remove actions.
-- Ctrl+A/Ctrl+X select or clear all (or the current filter).
+- Enter edits the current model; Space selects models for bulk work.
+- `a` adds model IDs and `f` fetches the remote catalog.
+- With a selection, `e` bulk-edits and `d` removes.
+- `/` enters filter mode; Esc clears the query, closes filter mode, then goes back.
+- Tab keeps the complete action menu available.
+- Ctrl+A/Ctrl+X select or clear all (or all matching the filter).
 - Ctrl+S saves the Provider draft.
-- Typing reveals a fuzzy filter; Esc clears the active filter before returning.
 
-Model IDs can be pasted as comma- or newline-separated values. A model detail
-screen exposes the documented common fields first:
-
-- Model ID and optional `name`;
-- reasoning support and text/image input;
-- context window and maximum output tokens;
-- thinking-level mapping;
-- Advanced: model API override, cost, and compatibility.
+The empty Models workspace shows the add/fetch actions inline. Model IDs can
+be pasted as comma- or newline-separated values. A model detail screen is flat
+rather than split across Capabilities, Limits, and Advanced submenus. It shows
+ID, name, reasoning, input, context, max output, thinking map, API override,
+cost, and compatibility in one place.
 
 Bulk editing applies reasoning, input, context, max output, and thinking maps
 to the selected models. Clearing a field is distinct from leaving it unchanged.
 
 The manager does not promote undocumented model-level `baseUrl` or `headers`.
-Existing unknown fields remain untouched. Provider Advanced keeps documented
-headers, `authHeader`, Radius OAuth, compatibility, and built-in model
-overrides; compatibility menus list only documented keys and preserve unknown
-existing keys unchanged.
+Existing unknown fields remain untouched. The Provider workspace keeps
+documented headers, `authHeader`, Radius OAuth, compatibility, and built-in
+model overrides; compatibility menus list only documented keys and preserve
+unknown existing keys unchanged.
 
 ## Thinking-level mapping
 
@@ -100,10 +102,12 @@ workspace can fetch again after applying any dirty connection changes.
 - Anthropic Messages: no public catalog endpoint, so it goes directly to
   manual model-ID entry.
 
-Catalog rows start unselected. Results are deduplicated, sorted, bounded to
-2,000 IDs / 4 MiB / 10 seconds, and import only returned `id` plus a returned
-`name` when present. A failed fetch offers retry, connection editing, or manual
-entry instead of ending the workflow.
+Fetching uses a cancellable bordered loader. Catalog rows start unselected:
+Enter/Space toggles a row, `/` filters, and Ctrl+S imports the selection.
+Results are deduplicated, sorted, bounded to 2,000 IDs / 4 MiB / 10 seconds,
+and import only returned `id` plus a returned `name` when present. A failed
+fetch offers retry, provider editing, or manual entry instead of ending the
+workflow.
 
 ## Commands and persistence
 

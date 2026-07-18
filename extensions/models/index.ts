@@ -6,7 +6,7 @@
  * resulting registry configuration.
  */
 
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { BorderedLoader, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { fuzzyFilter, type AutocompleteItem } from "@earendil-works/pi-tui";
 import {
 	COMMAND_DESCRIPTION,
@@ -56,8 +56,6 @@ const SUBCOMMAND_DESCRIPTIONS: Record<(typeof SUBCOMMANDS)[number], string> = {
 	reload: "Reload models.json",
 	probe: "Fetch remote models",
 };
-
-const PROVIDER_SELECTOR_SEARCH_THRESHOLD = 12;
 
 async function completeArguments(prefix: string): Promise<AutocompleteItem[] | null> {
 	const match = prefix.match(/^(\S*)(?:\s+(.*))?$/);
@@ -130,7 +128,7 @@ async function openProviderReference(providerRef: string, ctx: ExtensionCommandC
 	const normalized = providerRef.trim().toLowerCase();
 	const exact = (await listProviders()).filter(({ id }) => id.toLowerCase() === normalized);
 	if (exact.length === 1) {
-		await openProviderActions(exact[0]!.id, ctx);
+		await editExistingProvider(exact[0]!.id, ctx);
 		return;
 	}
 	await openProvidersMenu(ctx, providerRef);
@@ -141,6 +139,12 @@ async function openProvidersMenu(ctx: ExtensionCommandContext, initialQuery?: st
 	while (true) {
 		const providers = await listProviders();
 		const items = [
+			{
+				value: "action:add",
+				label: "+ Add provider",
+				description: "Guided connection setup, then model discovery",
+				searchText: "add create new provider connection",
+			},
 			...providers.map(({ id, entry }) => ({
 				value: `provider:${id}`,
 				label: id,
@@ -148,59 +152,35 @@ async function openProvidersMenu(ctx: ExtensionCommandContext, initialQuery?: st
 				searchText: providerSearchText({ id, entry }),
 			})),
 			{
-				value: "action:add",
-				label: "+ Add provider",
-				description: "Create a new models.json provider",
-				searchText: "add create new provider",
-			},
-			{
 				value: "action:reload",
-				label: "Reload models.json",
-				description: "Refresh Pi's model registry",
+				label: "Reload registry",
+				description: "Re-read ~/.pi/agent/models.json",
 				searchText: "reload refresh models json registry",
 			},
 		];
 		const filteredItems = query ? fuzzyFilter(items, query, (item) => item.searchText) : items;
 		const visibleItems = filteredItems.length > 0 ? filteredItems : items;
-		const shouldUseSearch =
-			ctx.mode === "tui" && (query !== undefined || items.length > PROVIDER_SELECTOR_SEARCH_THRESHOLD);
 		const selected =
-			shouldUseSearch
+			ctx.mode === "tui"
 				? await ctx.ui.custom(
 						createSearchableSelector({
-							title: "Select model provider:",
+							title: "Custom model providers",
+							subtitle:
+								providers.length === 0
+									? "No providers configured yet. Start with Add provider."
+									: `${providers.length} provider${providers.length === 1 ? "" : "s"} · Enter opens settings`,
 							items,
 							initialQuery: query,
+							maxVisible: 11,
 							emptyMessage: "No matching providers or actions",
 						}),
 					)
-				: await selectNativeItem(ctx, "Select model provider:", visibleItems);
+				: await selectNativeItem(ctx, "Custom model providers", visibleItems);
 		query = undefined;
 		if (selected === undefined) return;
 		if (selected === "action:add") await addProvider(ctx);
 		else if (selected === "action:reload") await reloadModels(ctx);
-		else if (selected.startsWith("provider:")) await openProviderActions(selected.slice("provider:".length), ctx);
-	}
-}
-
-async function openProviderActions(providerId: string, ctx: ExtensionCommandContext): Promise<void> {
-	while (true) {
-		const entry = await getProvider(providerId);
-		if (!entry) {
-			ctx.ui.notify(`Provider "${providerId}" no longer exists.`, "warning");
-			return;
-		}
-		const action = await ctx.ui.select(providerId, [
-			"Open workspace · models, connection, and advanced settings",
-			"Remove provider",
-			"Back",
-		]);
-		if (action === undefined || action === "Back") return;
-		if (action === "Open workspace · models, connection, and advanced settings") {
-			const savedId = await editExistingProvider(providerId, ctx);
-			if (savedId && savedId !== providerId) return;
-		}
-		if (action === "Remove provider" && (await confirmAndRemove(providerId, ctx))) return;
+		else if (selected.startsWith("provider:")) await editExistingProvider(selected.slice("provider:".length), ctx);
 	}
 }
 
@@ -210,7 +190,7 @@ async function addProvider(ctx: ExtensionCommandContext): Promise<string | undef
 	const saved = await commitModelsChange(
 		ctx,
 		() => saveProvider(undefined, draft.id, draft.entry),
-		`Created provider "${draft.id}". Finding available models…`,
+		`Created provider "${draft.id}".`,
 	);
 	if (!saved.ok) {
 		ctx.ui.notify(saved.error ?? "Provider could not be created.", "error");
@@ -246,15 +226,27 @@ async function editExistingProvider(
 		await probeFlow(result.id, ctx);
 		return (await editExistingProvider(result.id, ctx, "models")) ?? result.id;
 	}
+	if (result.kind === "remove") {
+		await confirmAndRemove(result.id, ctx, true);
+		return undefined;
+	}
 	return result.id;
 }
 
-async function confirmAndRemove(providerId: string, ctx: ExtensionCommandContext): Promise<boolean> {
+async function confirmAndRemove(
+	providerId: string,
+	ctx: ExtensionCommandContext,
+	confirmationAlreadyGiven = false,
+): Promise<boolean> {
 	if (!(await getProvider(providerId))) {
 		ctx.ui.notify(`Provider "${providerId}" was not found in models.json.`, "warning");
 		return false;
 	}
-	if (!(await ctx.ui.confirm(`Remove "${providerId}"?`, "This removes its models.json entry."))) return false;
+	if (
+		!confirmationAlreadyGiven &&
+		!(await ctx.ui.confirm(`Remove "${providerId}"?`, "This removes its models.json entry."))
+	)
+		return false;
 	const result = await commitModelsChange(
 		ctx,
 		async () => {
@@ -302,7 +294,7 @@ async function probeFlow(providerId: string, ctx: ExtensionCommandContext): Prom
 		try {
 			if (inheritedModel) {
 				const auth = await ctx.modelRegistry.getApiKeyAndHeaders(inheritedModel);
-				if (!auth.ok) throw new Error(auth.error);
+				if (auth.ok === false) throw new Error(auth.error);
 				apiKey = auth.apiKey;
 				resolvedHeaders = auth.headers;
 			} else {
@@ -316,14 +308,32 @@ async function probeFlow(providerId: string, ctx: ExtensionCommandContext): Prom
 			return;
 		}
 
-		ctx.ui.notify(`Fetching models from ${baseUrl} …`, "info");
-		const result = await probeModels({
+		const probeOptions = {
 			baseUrl,
 			api: String(api),
 			apiKey: apiKey ?? literalConfigValue(entry.apiKey),
 			headers: { ...literalHeaders(entry.headers), ...resolvedHeaders },
-		});
-		if (!result.ok) {
+		};
+		const result =
+			ctx.mode === "tui"
+				? await ctx.ui.custom<Awaited<ReturnType<typeof probeModels>> | undefined>((tui, theme, _keybindings, done) => {
+						const loader = new BorderedLoader(tui, theme, `Fetching models from ${baseUrl}`, { cancellable: true });
+						let settled = false;
+						const finish = (value: Awaited<ReturnType<typeof probeModels>> | undefined) => {
+							if (settled) return;
+							settled = true;
+							loader.dispose();
+							done(value);
+						};
+						loader.onAbort = () => finish(undefined);
+						void probeModels({ ...probeOptions, signal: loader.signal })
+							.then(finish)
+							.catch((error) => finish({ ok: false, error: formatError(error) }));
+						return loader;
+					})
+				: (ctx.ui.notify(`Fetching models from ${baseUrl} …`, "info"), await probeModels(probeOptions));
+		if (result === undefined) return;
+		if (result.ok === false) {
 			const action = await selectProbeFailureAction(ctx, `Model fetch failed: ${result.error}`);
 			if (action === "edit") await editExistingProvider(providerId, ctx);
 			if (action === "manual") await addManualModels(providerId, ctx);
@@ -362,7 +372,7 @@ async function selectProbeFailureAction(
 ): Promise<"retry" | "edit" | "manual" | "back" | undefined> {
 	return selectNativeItem(ctx, message, [
 		{ value: "retry", label: "Retry" },
-		{ value: "edit", label: "Edit provider connection" },
+		{ value: "edit", label: "Edit provider settings" },
 		{ value: "manual", label: "Add model IDs manually" },
 		{ value: "back", label: "Back" },
 	]);
