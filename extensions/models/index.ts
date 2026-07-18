@@ -54,7 +54,7 @@ const SUBCOMMAND_DESCRIPTIONS: Record<(typeof SUBCOMMANDS)[number], string> = {
 	edit: "Edit a provider",
 	remove: "Remove a provider",
 	reload: "Reload providers",
-	probe: "Fetch models",
+	fetch: "Fetch models from a provider",
 };
 
 async function completeArguments(prefix: string): Promise<AutocompleteItem[] | null> {
@@ -79,7 +79,8 @@ async function completeArguments(prefix: string): Promise<AutocompleteItem[] | n
 			return commands.length > 0 ? commands : null;
 		}
 	}
-	if (first !== "edit" && first !== "remove" && first !== "probe") return null;
+	const providerCommand = first === "probe" ? "fetch" : first;
+	if (providerCommand !== "edit" && providerCommand !== "remove" && providerCommand !== "fetch") return null;
 	try {
 		const providers = fuzzyFilter(await listProviders(), rest, providerSearchText);
 		return providers.length > 0
@@ -118,7 +119,7 @@ async function dispatch(args: string, ctx: ExtensionCommandContext): Promise<voi
 	if (!parsed.target) return notifyUsage(ctx, parsed.subcommand);
 	if (parsed.subcommand === "edit") await editExistingProvider(parsed.target, ctx);
 	if (parsed.subcommand === "remove") await confirmAndRemove(parsed.target, ctx);
-	if (parsed.subcommand === "probe") {
+	if (parsed.subcommand === "fetch") {
 		await probeFlow(parsed.target, ctx);
 		await editExistingProvider(parsed.target, ctx, "models");
 	}
@@ -540,7 +541,7 @@ function literalHeaders(value: unknown): Record<string, string> {
 }
 
 function notifyUsage(ctx: ExtensionCommandContext, subcommand: string): void {
-	const target = subcommand === "edit" || subcommand === "remove" || subcommand === "probe" ? " <provider-id>" : "";
+	const target = subcommand === "edit" || subcommand === "remove" || subcommand === "fetch" ? " <provider-id>" : "";
 	ctx.ui.notify(`Usage: /${COMMAND_NAME} ${subcommand}${target}`, "warning");
 }
 

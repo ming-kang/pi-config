@@ -11,9 +11,11 @@ import {
 	Text,
 	TruncatedText,
 	truncateToWidth,
+	visibleWidth,
 	type TUI,
 } from "@earendil-works/pi-tui";
-import { truncate } from "./constants.ts";
+import { DEFAULTS, truncate } from "./constants.ts";
+import type { ModelsDevReference } from "./models-dev.ts";
 
 export interface TextInputOptions {
 	title: string;
@@ -67,6 +69,220 @@ export function createTextInput(
 		};
 		return container;
 	};
+}
+
+export interface LimitsEditorOptions {
+	title: string;
+	providerId?: string;
+	contextWindow?: number;
+	maxTokens?: number;
+	/** An optional public-catalog lookup. It is display-only and never mutates inputs. */
+	reference?: Promise<ModelsDevReference | undefined>;
+}
+
+export interface LimitsEditorResult {
+	contextWindow?: number;
+	maxTokens?: number;
+}
+
+/**
+ * Two related limits deserve one editing surface. On wide terminals, the
+ * public-catalog reference sits beside the inputs; on narrow ones it falls
+ * below them. The reference intentionally has no "apply" action.
+ */
+export function createLimitsEditor(
+	opts: LimitsEditorOptions,
+): (
+	tui: TUI,
+	theme: Theme,
+	keybindings: KeybindingsManager,
+	done: (result: LimitsEditorResult | undefined) => void,
+) => Container {
+	return (tui, theme, keybindings, done) => {
+		const contextInput = new Input();
+		const outputInput = new Input();
+		contextInput.setValue(formatTokenLimit(opts.contextWindow));
+		outputInput.setValue(formatTokenLimit(opts.maxTokens));
+		let active: "context" | "output" = "context";
+		let focused = false;
+		let closed = false;
+		let error: string | undefined;
+		let reference: ModelsDevReference | undefined;
+		let referenceState: "loading" | "ready" | "unavailable" = opts.reference ? "loading" : "ready";
+		const topBorder = new DynamicBorder((text) => theme.fg("border", text));
+		const bottomBorder = new DynamicBorder((text) => theme.fg("border", text));
+		const container = new Container() as Container & {
+			render: (width: number) => string[];
+			handleInput: (data: string) => void;
+			focused: boolean;
+		};
+
+		const syncFocus = () => {
+			contextInput.focused = focused && active === "context";
+			outputInput.focused = focused && active === "output";
+		};
+		const refresh = () => {
+			container.invalidate();
+			tui.requestRender();
+		};
+		const finish = (result: LimitsEditorResult | undefined) => {
+			if (closed) return;
+			closed = true;
+			done(result);
+		};
+		const apply = () => {
+			const context = parseTokenLimit(contextInput.getValue());
+			const output = parseTokenLimit(outputInput.getValue());
+			if (context.error || output.error) {
+				error = context.error ? `Context window: ${context.error}` : `Maximum output tokens: ${output.error}`;
+				refresh();
+				return;
+			}
+			finish({ contextWindow: context.value, maxTokens: output.value });
+		};
+		const setActive = (field: "context" | "output") => {
+			active = field;
+			error = undefined;
+			syncFocus();
+			refresh();
+		};
+
+		contextInput.onSubmit = apply;
+		outputInput.onSubmit = apply;
+		if (opts.reference) {
+			void opts.reference.then(
+				(value) => {
+					if (closed) return;
+					reference = value;
+					referenceState = "ready";
+					refresh();
+				},
+				() => {
+					if (closed) return;
+					referenceState = "unavailable";
+					refresh();
+				},
+			);
+		}
+
+		const inputLines = (width: number): string[] => {
+			const inputWidth = Math.max(12, width - 4);
+			const field = (label: string, input: Input, selected: boolean, fallback: number): string[] => [
+				theme.fg(selected ? "accent" : "text", `  ${label}`),
+				`  ${selected ? theme.fg("accent", "›") : " "} ${truncateToWidth(input.render(inputWidth)[0] ?? "", inputWidth)}`,
+				theme.fg("dim", `    Empty uses Pi fallback · ${formatTokenLimit(fallback)}`),
+			];
+			const lines = [
+				...field("Context window", contextInput, active === "context", DEFAULTS.contextWindow),
+				"",
+				...field("Maximum output tokens", outputInput, active === "output", DEFAULTS.maxTokens),
+			];
+			if (error) lines.push("", theme.fg("error", `  ${error}`));
+			return lines.map((line) => truncateToWidth(line, width));
+		};
+		const referenceLines = (width: number): string[] => {
+			const lines: string[] = [theme.fg("muted", "  models.dev · Reference only"), ""];
+			if (referenceState === "loading") {
+				lines.push(theme.fg("dim", "  Looking up a reference…"));
+			} else if (referenceState === "unavailable") {
+				lines.push(theme.fg("muted", "  Reference unavailable."));
+				lines.push(theme.fg("dim", "  Limits still work normally."));
+			} else if (!reference) {
+				lines.push(theme.fg("muted", "  No reliable model match found."));
+				lines.push(theme.fg("dim", "  Limits depend on this Provider route."));
+			} else {
+				lines.push(theme.fg("text", `  ${reference.providerName} / ${reference.modelName}`));
+				if (reference.modelName !== reference.modelId) lines.push(theme.fg("muted", `  ${reference.modelId}`));
+				lines.push(theme.fg("muted", `  ${reference.match === "exact" ? "Exact model ID" : "Similar model ID"}`), "");
+				lines.push(
+					theme.fg("muted", `  Context      ${reference.contextWindow ? formatTokenLimit(reference.contextWindow) : "Not listed"}`),
+					theme.fg("muted", `  Max output   ${reference.maxTokens ? formatTokenLimit(reference.maxTokens) : "Not listed"}`),
+					"",
+					theme.fg("warning", "  May differ for this Provider"),
+					theme.fg("warning", "  or gateway."),
+				);
+			}
+			return lines.map((line) => truncateToWidth(line, width));
+		};
+
+		container.render = (width: number): string[] => {
+			const lines = [...topBorder.render(width), "", truncateToWidth(theme.fg("accent", theme.bold(opts.title)), width)];
+			if (opts.providerId) lines.push(truncateToWidth(theme.fg("muted", `  Provider · ${opts.providerId}`), width));
+			lines.push("");
+
+			if (width >= 96) {
+				const divider = theme.fg("border", " │ ");
+				const leftWidth = Math.max(38, Math.floor((width - 3) * 0.58));
+				const rightWidth = Math.max(24, width - leftWidth - 3);
+				const left = inputLines(leftWidth);
+				const right = referenceLines(rightWidth);
+				const rowCount = Math.max(left.length, right.length);
+				for (let index = 0; index < rowCount; index++) {
+					lines.push(`${padToWidth(left[index] ?? "", leftWidth)}${divider}${padToWidth(right[index] ?? "", rightWidth)}`);
+				}
+			} else {
+				lines.push(...inputLines(width), "", ...referenceLines(width));
+			}
+
+			lines.push(
+				"",
+				truncateToWidth(
+					theme.fg(
+						"dim",
+						`  ${keyHint("tui.input.tab", "next field")} · ${keyHint("tui.input.submit", "apply")} · ${keyHint("tui.select.cancel", "cancel")}`,
+					),
+					width,
+				),
+				"",
+				...bottomBorder.render(width),
+			);
+			return lines;
+		};
+		container.handleInput = (data: string) => {
+			if (keybindings.matches(data, "tui.input.tab")) {
+				setActive(active === "context" ? "output" : "context");
+				return;
+			}
+			if (keybindings.matches(data, "tui.select.cancel")) {
+				finish(undefined);
+				return;
+			}
+			error = undefined;
+			(active === "context" ? contextInput : outputInput).handleInput(data);
+			if (!closed) refresh();
+		};
+		Object.defineProperty(container, "focused", {
+			get: () => focused,
+			set: (value: boolean) => {
+				focused = value;
+				syncFocus();
+			},
+		});
+		return container;
+	};
+}
+
+export function formatTokenLimit(value: number | undefined): string {
+	if (value === undefined) return "";
+	if (value >= 1_000_000 && value % 1_000_000 === 0) return `${value / 1_000_000}M`;
+	if (value >= 1_000 && value % 1_000 === 0) return `${value / 1_000}K`;
+	return value.toLocaleString("en-US");
+}
+
+export function parseTokenLimit(value: string): { value?: number; error?: string } {
+	const normalized = value.trim().replace(/[,_\s]/g, "");
+	if (!normalized) return {};
+	const match = /^(\d+(?:\.\d+)?)([kKmM])?$/.exec(normalized);
+	if (!match) return { error: "Use a positive number such as 272K or 128000." };
+	const multiplier = match[2]?.toLowerCase() === "m" ? 1_000_000 : match[2]?.toLowerCase() === "k" ? 1_000 : 1;
+	const parsed = Number(match[1]) * multiplier;
+	if (!Number.isSafeInteger(parsed) || parsed <= 0) return { error: "Use a positive whole number of tokens." };
+	return { value: parsed };
+}
+
+function padToWidth(value: string, width: number): string {
+	const truncated = truncateToWidth(value, width);
+	return `${truncated}${" ".repeat(Math.max(0, width - visibleWidth(truncated)))}`;
 }
 
 export interface SearchableSelectorItem<T extends string> {

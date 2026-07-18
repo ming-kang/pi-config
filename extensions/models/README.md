@@ -65,29 +65,42 @@ lines instead of hiding them behind nested menus:
 The empty Models workspace shows the add/fetch actions inline. Model IDs can
 be pasted as comma- or newline-separated values. A model detail screen is flat
 rather than split across Capabilities, Limits, and Advanced submenus. It shows
-ID, name, reasoning, input, context, max output, thinking map, API override,
+ID, name, reasoning, input, one **Limits** row, thinking map, API override,
 cost, and compatibility in one place.
 
-Bulk editing applies reasoning, input, context, max output, and thinking maps
-to the selected models. Clearing a field is distinct from leaving it unchanged.
+Bulk editing applies reasoning, input, limits, and thinking maps to the
+selected models. Clearing a field is distinct from leaving it unchanged.
 
 ## Model limits
 
-Leaving `contextWindow` or `maxTokens` unset still uses Pi's documented
-fallbacks: 128,000 context and 16,384 output. The manager does not silently
-replace those fallbacks, because real limits vary by model, provider, and
-gateway. Instead, single-model and bulk editors offer explicit presets:
+`contextWindow` and `maxTokens` are edited together in a dedicated **Limits**
+screen. It accepts token shorthand such as `272K`, `128K`, or `1.05M`, while
+writing an exact integer to the Provider draft. Clearing either field restores
+Pi's documented fallback for that field: 128,000 context or 16,384 output.
+Applying the dialog updates only the in-memory draft; Ctrl+S in the Provider
+workspace is still the only persistent save.
 
-- **Modern** — 262,144 context / 128,000 output;
-- **Long context** — 1,000,000 context / 128,000 output;
-- **Large output** — 1,000,000 context / 384,000 output;
-- **Pi fallback** — clear both overrides.
+There are intentionally no global limit presets. A model's theoretical maximum
+can differ from the effective limit of its Provider, gateway, account, route,
+or pricing policy. For example, a Codex relay may correctly use 272K context
+where a direct model catalog lists a larger maximum.
 
-This choice follows a models.dev API snapshot reviewed during the redesign:
-across 5,697 catalog entries, median context was about 204,800 tokens, 62% had
-at least 200,000 context, and 128,000 was the most common single output limit.
-384,000 output exists but is not universal, so it remains an opt-in preset.
-Provider-specific limits remain authoritative.
+In a TUI, the Limits screen lazily shows one models.dev reference beside the
+inputs on wide terminals (and below them on narrow terminals). It uses the
+best thresholded model-ID match and labels it **Exact model ID**, **Similar
+model ID**, or shows no reference. The panel is explicitly read-only:
+
+- it has no apply or sync control and never writes configuration;
+- it shows only context and max-output values plus its catalog source;
+- it warns that values may differ for the current Provider or gateway;
+- a failed or unavailable lookup never prevents normal limit editing.
+
+The configured route remains authoritative. The reference is not used for
+pricing, reasoning maps, or automatic model updates.
+
+Bulk Limits uses one dedicated screen with a separate action for each field:
+**Leave unchanged**, **Set value**, or **Clear override**. It does not show a
+single models.dev value for a heterogeneous selection.
 
 The manager does not promote undocumented model-level `baseUrl` or `headers`.
 Existing unknown fields remain untouched. The Provider workspace keeps
@@ -139,11 +152,17 @@ workflow.
 |---|---|
 | `/models` | Browse providers. |
 | `/models <provider-id>` | Open an exact Provider ID or seed search. |
+| `/models list` | Browse providers. |
 | `/models add` | Create a Provider, then discover or enter models. |
 | `/models edit <provider-id>` | Open a Provider workspace. |
-| `/models probe <provider-id>` | Fetch models, then open its Models workspace. |
+| `/models fetch <provider-id>` | Fetch models, then open its Models workspace. |
 | `/models remove <provider-id>` | Confirm and remove a Provider. |
-| `/models reload` | Reload `models.json`. |
+| `/models reload` | Reload providers from local configuration. |
+
+`/models probe <provider-id>` remains a compatibility alias for `fetch` but is
+not promoted in completion. Pi's native argument completion is used throughout:
+typing `/models ` offers commands and Provider IDs, while `edit`, `remove`, and
+`fetch` complete Provider IDs after the space.
 
 Writes read the complete document first, preserve unrelated and unknown fields,
 use atomic replacement, and restore the exact prior bytes if Pi rejects the
@@ -163,6 +182,7 @@ object order.
 
 - `index.ts` — command routing, transactional saves, and catalog fetches.
 - `editor.ts` — Provider/model drafts, bulk work, and advanced field editors.
-- `dialog.ts` — browse-first selectors, checklists, and Models workspace UI.
+- `dialog.ts` — browse-first selectors, checklists, Models workspace, and Limits UI.
+- `models-dev.ts` — bounded, session-only models.dev reference lookup and matching.
 - `store.ts` — comment-aware, lossless models.json storage.
 - `probe.ts` — bounded catalog requests and response normalization.

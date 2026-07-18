@@ -1,7 +1,8 @@
 export const COMMAND_NAME = "models";
 export const COMMAND_DESCRIPTION = "Manage model providers";
 
-export const SUBCOMMANDS = ["add", "list", "edit", "remove", "reload", "probe"] as const;
+/** Canonical user-facing subcommands. `probe` remains a parse-only legacy alias for `fetch`. */
+export const SUBCOMMANDS = ["add", "list", "edit", "remove", "reload", "fetch"] as const;
 export type Subcommand = (typeof SUBCOMMANDS)[number];
 
 export interface ParsedArgs {
@@ -15,11 +16,12 @@ export function parseArgs(args: string): ParsedArgs {
 	if (!trimmed) return {};
 	const [rawSubcommand = "", ...rest] = trimmed.split(/\s+/);
 	const normalized = rawSubcommand.toLowerCase();
-	if (!(SUBCOMMANDS as readonly string[]).includes(normalized)) {
+	const canonical = normalized === "probe" ? "fetch" : normalized;
+	if (!(SUBCOMMANDS as readonly string[]).includes(canonical)) {
 		return { providerRef: trimmed };
 	}
 	return {
-		subcommand: normalized as Subcommand,
+		subcommand: canonical as Subcommand,
 		target: rest.length > 0 ? rest.join(" ") : undefined,
 	};
 }
@@ -31,29 +33,6 @@ export const DEFAULTS = {
 	probeBodyBytes: 4 * 1024 * 1024,
 	probeMaxModels: 2_000,
 } as const;
-
-export const MODEL_LIMIT_PRESETS = [
-	{
-		value: "modern",
-		label: "Modern · 256K context / 128K output",
-		contextWindow: 262_144,
-		maxTokens: 128_000,
-	},
-	{
-		value: "long-context",
-		label: "Long context · 1M context / 128K output",
-		contextWindow: 1_000_000,
-		maxTokens: 128_000,
-	},
-	{
-		value: "large-output",
-		label: "Large output · 1M context / 384K output",
-		contextWindow: 1_000_000,
-		maxTokens: 384_000,
-	},
-] as const;
-
-export type ModelLimitPreset = (typeof MODEL_LIMIT_PRESETS)[number];
 
 export const API_CHOICES = [
 	{ value: "openai-completions", label: "OpenAI Chat Completions" },

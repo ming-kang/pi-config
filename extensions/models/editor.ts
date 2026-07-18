@@ -1,8 +1,17 @@
 /** Browse-first provider workspace and focused model editors built from Pi-native dialogs. */
 
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { API_CHOICES, DEFAULTS, isValidProviderId, MODEL_LIMIT_PRESETS, truncate } from "./constants.ts";
-import { createModelWorkspace, createSearchableSelector, createTextInput, type ModelWorkspaceResult } from "./dialog.ts";
+import { API_CHOICES, isValidProviderId, truncate } from "./constants.ts";
+import {
+	createLimitsEditor,
+	createModelWorkspace,
+	createSearchableSelector,
+	createTextInput,
+	formatTokenLimit,
+	parseTokenLimit,
+	type ModelWorkspaceResult,
+} from "./dialog.ts";
+import { findModelsDevReference } from "./models-dev.ts";
 import type {
 	Cost,
 	CostTier,
@@ -225,6 +234,7 @@ export async function editProvider(
 		const discover = await editModelsWorkspace(ctx, entry, {
 			dirty: () => !jsonEqual(baseline, { id, entry }),
 			onSave: save,
+			referenceContext: { providerId: id, baseUrl: entry.baseUrl },
 		});
 		return discover && (await save());
 	};
@@ -306,7 +316,7 @@ export async function editProvider(
 				break;
 			}
 			case "overrides": {
-				const value = await editModelOverrides(ctx, entry.modelOverrides);
+				const value = await editModelOverrides(ctx, entry.modelOverrides, { providerId: id, baseUrl: entry.baseUrl });
 				if (value.changed) setOptionalRecord(entry, "modelOverrides", value.value);
 				break;
 			}
@@ -348,9 +358,15 @@ async function editProviderAuthentication(ctx: ExtensionCommandContext, entry: P
 	}
 }
 
+interface ModelReferenceContext {
+	providerId: string;
+	baseUrl?: string;
+}
+
 interface ModelWorkspaceOptions {
 	dirty: () => boolean;
 	onSave: () => Promise<boolean>;
+	referenceContext: ModelReferenceContext;
 }
 
 async function editModelsWorkspace(
@@ -390,7 +406,12 @@ async function editModelsWorkspace(
 			const current = models[index];
 			if (!current) continue;
 			const originalId = current.id;
-			const updated = await editModel(ctx, current, models.filter((_, candidate) => candidate !== index).map((model) => model.id));
+			const updated = await editModel(
+				ctx,
+				current,
+				models.filter((_, candidate) => candidate !== index).map((model) => model.id),
+				opts.referenceContext,
+			);
 			if (updated === REMOVE_MODEL) {
 				models.splice(index, 1);
 				selectedIds = selectedIds.filter((selected) => selected !== originalId);
@@ -522,9 +543,7 @@ async function bulkEditModels(ctx: ExtensionCommandContext, models: ModelEntry[]
 		const choice = await selectKey(ctx, `Bulk edit · ${selected().length} model${selected().length === 1 ? "" : "s"}`, [
 			{ key: "reasoning", label: "Reasoning support" },
 			{ key: "input", label: "Input types" },
-			{ key: "limitPreset", label: "Limit preset" },
-			{ key: "context", label: "Context window" },
-			{ key: "maxTokens", label: "Maximum output tokens" },
+			{ key: "limits", label: "Limits" },
 			{ key: "thinking", label: "Thinking level mapping" },
 			{ key: "back", label: "Done" },
 		]);
@@ -541,41 +560,74 @@ async function bulkEditModels(ctx: ExtensionCommandContext, models: ModelEntry[]
 				}
 			}
 		}
-		if (choice === "limitPreset") {
-			await applyModelLimitPreset(ctx, "Limit preset for selected models", selected());
-		}
-		if (choice === "context") {
-			const value = await promptBulkOptionalInteger(ctx, "Context window for selected models");
-			if (value.changed) for (const model of selected()) setOptional(model, "contextWindow", value.value);
-		}
-		if (choice === "maxTokens") {
-			const value = await promptBulkOptionalInteger(ctx, "Maximum output tokens for selected models");
-			if (value.changed) for (const model of selected()) setOptional(model, "maxTokens", value.value);
-		}
+		if (choice === "limits") await editBulkLimits(ctx, selected());
 		if (choice === "thinking") await editBulkThinkingMaps(ctx, selected());
 	}
 }
 
-async function applyModelLimitPreset(
-	ctx: ExtensionCommandContext,
-	title: string,
-	models: readonly ModelEntry[],
-): Promise<void> {
-	const options: MenuOption<string>[] = MODEL_LIMIT_PRESETS.map((preset) => ({
-		key: preset.value,
-		label: preset.label,
-	}));
-	options.push(
-		{ key: "clear", label: "Clear both · Pi fallback" },
-		{ key: "back", label: "Back" },
-	);
-	const selected = await selectKey(ctx, title, options);
-	if (selected === undefined || selected === "back") return;
-	const preset = MODEL_LIMIT_PRESETS.find((candidate) => candidate.value === selected);
-	for (const model of models) {
-		setOptional(model, "contextWindow", preset?.contextWindow);
-		setOptional(model, "maxTokens", preset?.maxTokens);
+type BulkLimitAction = { kind: "unchanged" } | { kind: "clear" } | { kind: "value"; value: number };
+
+async function editBulkLimits(ctx: ExtensionCommandContext, models: readonly ModelEntry[]): Promise<void> {
+	let context: BulkLimitAction = { kind: "unchanged" };
+	let output: BulkLimitAction = { kind: "unchanged" };
+	while (true) {
+		const choice = await selectKey(ctx, `Bulk limits · ${models.length} model${models.length === 1 ? "" : "s"}`, [
+			{ key: "context", label: summaryRow("Context window", formatBulkLimitAction(context)) },
+			{ key: "output", label: summaryRow("Maximum output tokens", formatBulkLimitAction(output)) },
+			{ key: "apply", label: "Apply to selected models" },
+			{ key: "discard", label: "Discard bulk limits" },
+		]);
+		if (choice === undefined || choice === "discard") return;
+		if (choice === "context") {
+			context = await chooseBulkLimitAction(ctx, "Context window", context);
+			continue;
+		}
+		if (choice === "output") {
+			output = await chooseBulkLimitAction(ctx, "Maximum output tokens", output);
+			continue;
+		}
+		if (choice === "apply") {
+			if (context.kind === "unchanged" && output.kind === "unchanged") return;
+			for (const model of models) {
+				applyBulkLimitAction(model, "contextWindow", context);
+				applyBulkLimitAction(model, "maxTokens", output);
+			}
+			return;
+		}
 	}
+}
+
+async function chooseBulkLimitAction(
+	ctx: ExtensionCommandContext,
+	label: string,
+	current: BulkLimitAction,
+): Promise<BulkLimitAction> {
+	const choice = await selectKey(ctx, `${label} for selected models`, [
+		{ key: "unchanged", label: "Leave unchanged" },
+		{ key: "value", label: "Set value" },
+		{ key: "clear", label: "Clear override" },
+		{ key: "back", label: "Back" },
+	]);
+	if (choice === undefined || choice === "back") return current;
+	if (choice === "unchanged") return { kind: "unchanged" };
+	if (choice === "clear") return { kind: "clear" };
+	const value = await promptRequiredTokenLimit(ctx, label);
+	return value === undefined ? current : { kind: "value", value };
+}
+
+function applyBulkLimitAction(
+	model: ModelEntry,
+	key: "contextWindow" | "maxTokens",
+	action: BulkLimitAction,
+): void {
+	if (action.kind === "unchanged") return;
+	setOptional(model, key, action.kind === "clear" ? undefined : action.value);
+}
+
+function formatBulkLimitAction(action: BulkLimitAction): string {
+	if (action.kind === "unchanged") return "Unchanged";
+	if (action.kind === "clear") return "Clear override";
+	return formatTokenLimit(action.value);
 }
 
 async function chooseBulkOptionalBoolean(ctx: ExtensionCommandContext, title: string): Promise<EditResult<boolean>> {
@@ -599,20 +651,11 @@ async function chooseBulkInput(ctx: ExtensionCommandContext): Promise<EditResult
 	return { changed: true, value: value ? [...value] : undefined };
 }
 
-async function promptBulkOptionalInteger(ctx: ExtensionCommandContext, title: string): Promise<EditResult<number>> {
-	const value = await promptText(ctx, `${title} · empty clears`, "", undefined, (candidate) => {
-		if (!candidate.trim()) return undefined;
-		const number = Number(candidate);
-		return Number.isSafeInteger(number) && number > 0 ? undefined : "Use a positive integer.";
-	});
-	if (value === undefined) return { changed: false };
-	return { changed: true, value: value.trim() ? Number(value) : undefined };
-}
-
 async function editModel(
 	ctx: ExtensionCommandContext,
 	model: ModelEntry,
 	otherIds: readonly string[],
+	referenceContext: ModelReferenceContext,
 ): Promise<ModelEntry | typeof REMOVE_MODEL | undefined> {
 	while (true) {
 		const choice = await selectKey(ctx, `Model · ${model.id || "new"}`, [
@@ -620,21 +663,7 @@ async function editModel(
 			{ key: "name", label: summaryRow("Model name", model.name ?? "Not set") },
 			{ key: "reasoning", label: summaryRow("Reasoning support", formatOptionalBoolean(model.reasoning)) },
 			{ key: "input", label: summaryRow("Input types", formatInput(model.input)) },
-			{ key: "limitPreset", label: summaryRow("Limit preset", summarizeModelLimitPreset(model)) },
-			{
-				key: "context",
-				label: summaryRow(
-					"Context window",
-					model.contextWindow?.toLocaleString() ?? `Pi fallback · ${DEFAULTS.contextWindow.toLocaleString()}`,
-				),
-			},
-			{
-				key: "maxTokens",
-				label: summaryRow(
-					"Maximum output tokens",
-					model.maxTokens?.toLocaleString() ?? `Pi fallback · ${DEFAULTS.maxTokens.toLocaleString()}`,
-				),
-			},
+			{ key: "limits", label: summaryRow("Limits", summarizeModelLimits(model)) },
 			{ key: "thinking", label: summaryRow("Thinking level mapping", summarizeThinkingMap(model.thinkingLevelMap)) },
 			{ key: "api", label: summaryRow("API override", formatApi(model.api)) },
 			{ key: "cost", label: summaryRow("Token cost", model.cost ? "configured" : "zero defaults") },
@@ -670,17 +699,19 @@ async function editModel(
 				if (value.changed) setOptional(model, "input", value.value);
 				break;
 			}
-			case "limitPreset":
-				await applyModelLimitPreset(ctx, "Model limit preset", [model]);
-				break;
-			case "context": {
-				const value = await promptOptionalInteger(ctx, "Context window", model.contextWindow);
-				if (value.changed) setOptional(model, "contextWindow", value.value);
-				break;
-			}
-			case "maxTokens": {
-				const value = await promptOptionalInteger(ctx, "Maximum output tokens", model.maxTokens);
-				if (value.changed) setOptional(model, "maxTokens", value.value);
+			case "limits": {
+				const value = await editPairedLimits(ctx, {
+					title: `Limits · ${model.id || "new"}`,
+					providerId: referenceContext.providerId,
+					baseUrl: referenceContext.baseUrl,
+					modelId: model.id,
+					contextWindow: model.contextWindow,
+					maxTokens: model.maxTokens,
+				});
+				if (value.changed && value.value) {
+					setOptional(model, "contextWindow", value.value.contextWindow);
+					setOptional(model, "maxTokens", value.value.maxTokens);
+				}
 				break;
 			}
 			case "thinking":
@@ -711,6 +742,7 @@ async function editModel(
 async function editModelOverrides(
 	ctx: ExtensionCommandContext,
 	initial: Record<string, ModelOverride> | undefined,
+	referenceContext: ModelReferenceContext,
 ): Promise<EditResult<Record<string, ModelOverride>>> {
 	const original = structuredClone(initial ?? {});
 	const working = structuredClone(original);
@@ -739,14 +771,14 @@ async function editModelOverrides(
 				return undefined;
 			});
 			if (id !== undefined) {
-				const updated = await editOverride(ctx, id.trim(), {}, Object.keys(working));
+				const updated = await editOverride(ctx, id.trim(), {}, Object.keys(working), referenceContext);
 				if (updated !== undefined && updated !== REMOVE_OVERRIDE) working[updated.id] = updated.override;
 			}
 			continue;
 		}
 		if (!choice.startsWith("override:")) continue;
 		const id = choice.slice("override:".length);
-		const updated = await editOverride(ctx, id, working[id]!, ids.filter((candidate) => candidate !== id));
+		const updated = await editOverride(ctx, id, working[id]!, ids.filter((candidate) => candidate !== id), referenceContext);
 		if (updated === REMOVE_OVERRIDE) delete working[id];
 		else if (updated !== undefined) {
 			if (updated.id !== id) delete working[id];
@@ -760,6 +792,7 @@ async function editOverride(
 	initialId: string,
 	initial: ModelOverride,
 	otherIds: readonly string[],
+	referenceContext: ModelReferenceContext,
 ): Promise<{ id: string; override: ModelOverride } | typeof REMOVE_OVERRIDE | undefined> {
 	const original = { id: initialId, override: structuredClone(initial) };
 	let id = initialId;
@@ -801,7 +834,7 @@ async function editOverride(
 				await editOverrideCapabilities(ctx, override);
 				break;
 			case "limits":
-				await editOverrideLimits(ctx, override);
+				await editOverrideLimits(ctx, id, override, referenceContext);
 				break;
 			case "advanced":
 				await editOverrideAdvanced(ctx, override);
@@ -839,23 +872,23 @@ async function editOverrideCapabilities(ctx: ExtensionCommandContext, override: 
 	}
 }
 
-async function editOverrideLimits(ctx: ExtensionCommandContext, override: ModelOverride): Promise<void> {
-	while (true) {
-		const choice = await selectKey(ctx, "Override limits", [
-			{ key: "context", label: `Context window · ${override.contextWindow?.toLocaleString() ?? "unchanged"}` },
-			{ key: "maxTokens", label: `Maximum output tokens · ${override.maxTokens?.toLocaleString() ?? "unchanged"}` },
-			{ key: "back", label: "Back" },
-		]);
-		if (choice === undefined || choice === "back") return;
-		if (choice === "context") {
-			const value = await promptOptionalInteger(ctx, "Override context window", override.contextWindow);
-			if (value.changed) setOptional(override, "contextWindow", value.value);
-		}
-		if (choice === "maxTokens") {
-			const value = await promptOptionalInteger(ctx, "Override max output tokens", override.maxTokens);
-			if (value.changed) setOptional(override, "maxTokens", value.value);
-		}
-	}
+async function editOverrideLimits(
+	ctx: ExtensionCommandContext,
+	modelId: string,
+	override: ModelOverride,
+	referenceContext: ModelReferenceContext,
+): Promise<void> {
+	const value = await editPairedLimits(ctx, {
+		title: `Override limits · ${modelId}`,
+		providerId: referenceContext.providerId,
+		baseUrl: referenceContext.baseUrl,
+		modelId,
+		contextWindow: override.contextWindow,
+		maxTokens: override.maxTokens,
+	});
+	if (!value.changed || !value.value) return;
+	setOptional(override, "contextWindow", value.value.contextWindow);
+	setOptional(override, "maxTokens", value.value.maxTokens);
 }
 
 async function editOverrideAdvanced(ctx: ExtensionCommandContext, override: ModelOverride): Promise<void> {
@@ -1409,19 +1442,75 @@ async function promptRequiredUrl(
 	return value === undefined ? undefined : value.trim();
 }
 
-async function promptOptionalInteger(
+interface LimitPair {
+	contextWindow?: number;
+	maxTokens?: number;
+}
+
+interface PairedLimitsOptions extends LimitPair {
+	title: string;
+	providerId?: string;
+	baseUrl?: string;
+	modelId?: string;
+}
+
+type TokenLimitPromptResult = { kind: "cancel" } | ({ kind: "value" } & { value?: number });
+
+async function editPairedLimits(ctx: ExtensionCommandContext, opts: PairedLimitsOptions): Promise<EditResult<LimitPair>> {
+	if (ctx.mode === "tui") {
+		const reference = opts.modelId?.trim()
+			? findModelsDevReference({
+					modelId: opts.modelId,
+					providerId: opts.providerId,
+					baseUrl: opts.baseUrl,
+				})
+			: undefined;
+		const value = await ctx.ui.custom(
+			createLimitsEditor({
+				title: opts.title,
+				providerId: opts.providerId,
+				contextWindow: opts.contextWindow,
+				maxTokens: opts.maxTokens,
+				reference,
+			}),
+		);
+		if (!value) return { changed: false };
+		return {
+			changed: value.contextWindow !== opts.contextWindow || value.maxTokens !== opts.maxTokens,
+			value,
+		};
+	}
+
+	const context = await promptOptionalTokenLimit(ctx, "Context window", opts.contextWindow);
+	if (context.kind === "cancel") return { changed: false };
+	const output = await promptOptionalTokenLimit(ctx, "Maximum output tokens", opts.maxTokens);
+	if (output.kind === "cancel") return { changed: false };
+	const value: LimitPair = { contextWindow: context.value, maxTokens: output.value };
+	return {
+		changed: value.contextWindow !== opts.contextWindow || value.maxTokens !== opts.maxTokens,
+		value,
+	};
+}
+
+async function promptOptionalTokenLimit(
 	ctx: ExtensionCommandContext,
 	title: string,
 	current: number | undefined,
-): Promise<EditResult<number>> {
-	const value = await promptText(ctx, `${title} · empty clears`, current?.toString() ?? "", undefined, (candidate) => {
-		if (!candidate.trim()) return undefined;
-		const number = Number(candidate);
-		return Number.isSafeInteger(number) && number > 0 ? undefined : "Use a positive integer.";
+): Promise<TokenLimitPromptResult> {
+	const value = await promptText(ctx, `${title} · empty clears`, formatTokenLimit(current), "272K", (candidate) =>
+		parseTokenLimit(candidate).error,
+	);
+	if (value === undefined) return { kind: "cancel" };
+	return { kind: "value", value: parseTokenLimit(value).value };
+}
+
+async function promptRequiredTokenLimit(ctx: ExtensionCommandContext, title: string): Promise<number | undefined> {
+	const value = await promptText(ctx, `${title} · tokens`, "", "272K", (candidate) => {
+		if (!candidate.trim()) return "Enter a token limit.";
+		return parseTokenLimit(candidate).error;
 	});
-	if (value === undefined) return { changed: false };
-	const normalized = value.trim() ? Number(value) : undefined;
-	return { changed: normalized !== current, value: normalized };
+	if (value === undefined) return undefined;
+	return parseTokenLimit(value).value;
 }
 
 async function promptOptionalNumber(
@@ -1769,11 +1858,11 @@ function countLabel(value: unknown, noun: string): string {
 	return count === 0 ? "none" : `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-function summarizeModelLimitPreset(model: Pick<ModelEntry, "contextWindow" | "maxTokens">): string {
+function summarizeModelLimits(model: Pick<ModelEntry, "contextWindow" | "maxTokens">): string {
 	if (model.contextWindow === undefined && model.maxTokens === undefined) return "Pi fallback";
-	return MODEL_LIMIT_PRESETS.find(
-		(preset) => preset.contextWindow === model.contextWindow && preset.maxTokens === model.maxTokens,
-	)?.label ?? "Custom";
+	const context = model.contextWindow === undefined ? "Pi fallback context" : `${formatTokenLimit(model.contextWindow)} context`;
+	const output = model.maxTokens === undefined ? "Pi fallback output" : `${formatTokenLimit(model.maxTokens)} output`;
+	return `${context} · ${output}`;
 }
 
 function summarizeModel(model: ModelEntry): string {
