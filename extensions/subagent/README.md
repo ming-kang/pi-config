@@ -19,8 +19,6 @@ The built-in profiles are:
 |---|---|---|
 | `general` | General implementation worker; may edit files | Pi defaults (`read`, `bash`, `edit`, `write`) |
 | `explorer` | Read-only codebase reconnaissance | `read`, `grep`, `find`, `ls` |
-| `planner` | Read-only implementation planning | `read`, `grep`, `find`, `ls` |
-| `reviewer` | Read-only correctness/regression review | `read`, `grep`, `find`, `ls` |
 
 Model and thinking resolution is deterministic:
 

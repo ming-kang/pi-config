@@ -37,22 +37,6 @@ const BUILTIN_AGENTS: AgentDefinition[] = [
 		tools: ["read", "grep", "find", "ls"],
 		source: "builtin",
 	},
-	{
-		name: "planner",
-		description: "Read-only implementation planning from repository evidence",
-		systemPrompt:
-			"Do not modify files. Inspect the relevant implementation and return a concrete, ordered plan with files, risks, and verification steps.",
-		tools: ["read", "grep", "find", "ls"],
-		source: "builtin",
-	},
-	{
-		name: "reviewer",
-		description: "Read-only code review focused on correctness and regressions",
-		systemPrompt:
-			"Do not modify files. Review the requested code or change, prioritize concrete defects and risks, and cite exact paths and symbols.",
-		tools: ["read", "grep", "find", "ls"],
-		source: "builtin",
-	},
 ];
 
 function isDirectory(candidate: string): boolean {

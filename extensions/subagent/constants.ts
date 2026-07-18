@@ -37,7 +37,7 @@ export const SUBAGENT_PROMPT_SNIPPET =
 export const SUBAGENT_PROMPT_GUIDELINES = [
 	"Use `subagent` action `spawn` for bounded work that can proceed independently; the call returns immediately with stable subagent ids.",
 	"After `subagent` action `spawn`, do not poll with `bash` sleep, `subagent` list, or `subagent` read merely to wait; finish the current turn or do other useful work because completion automatically queues a parent follow-up turn.",
-	"Choose the `subagent` profile deliberately: `general` may edit, while `explorer`, `planner`, and `reviewer` are built-in read-only profiles; omitted model/thinking settings inherit through the configured profile chain.",
+	"Choose the `subagent` profile deliberately: `general` may edit, while `explorer` is a built-in read-only reconnaissance profile; omitted model/thinking settings inherit through the configured profile chain.",
 	"Use `subagent` action `list` or `read` only when the user requests progress or the result needs inspection; use `send` to steer or queue a follow-up, and `restart` only when a fresh context is preferable.",
 	"Avoid assigning overlapping edits to multiple `subagent` workers because they share the requested working directory unless the tasks are explicitly coordinated.",
 	"Use `subagent` action `configure`, or `maxConcurrency` on `spawn`, to bound concurrent deployments; set `maxTurns` on a task to cap runaway workers (the run is reported as completed with a turn-limit note when the cap is reached).",
