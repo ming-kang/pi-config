@@ -83,7 +83,10 @@ export interface SearchableSelectorOptions<T extends string> {
 	emptyMessage?: string;
 }
 
-/** Login-style fuzzy selector for provider and model lists that can grow without bound. */
+/**
+ * A browse-first fuzzy selector. The filter is deliberately invisible until
+ * the user starts typing: ordinary menus should feel like menus, not forms.
+ */
 export function createSearchableSelector<T extends string>(
 	opts: SearchableSelectorOptions<T>,
 ): (
@@ -98,13 +101,20 @@ export function createSearchableSelector<T extends string>(
 		let selectedIndex = 0;
 		const maxVisible = Math.max(1, opts.maxVisible ?? 9);
 		const input = new Input();
+		const search = new Container();
 		const list = new Container();
+		const footer = new Text("", 1, 0);
 		const container = new Container() as Container & {
 			handleInput: (data: string) => void;
 			focused: boolean;
 		};
 
 		const refresh = () => {
+			search.clear();
+			if (input.getValue()) {
+				search.addChild(input);
+				search.addChild(new Spacer(1));
+			}
 			list.clear();
 			const start = Math.max(
 				0,
@@ -127,6 +137,15 @@ export function createSearchableSelector<T extends string>(
 					new Text(theme.fg("muted", `  (${selectedIndex + 1}/${filteredItems.length})`), 1, 0),
 				);
 			}
+			footer.setText(
+				rawKeyHint("type", "filter") +
+					"  " +
+					rawKeyHint("↑↓", "navigate") +
+					"  " +
+					keyHint("tui.select.confirm", "select") +
+					"  " +
+					keyHint("tui.select.cancel", input.getValue() ? "clear filter" : "back"),
+			);
 			container.invalidate();
 			tui.requestRender();
 		};
@@ -147,21 +166,10 @@ export function createSearchableSelector<T extends string>(
 		container.addChild(new Spacer(1));
 		container.addChild(new TruncatedText(theme.fg("accent", theme.bold(opts.title)), 1, 0));
 		container.addChild(new Spacer(1));
-		container.addChild(input);
-		container.addChild(new Spacer(1));
+		container.addChild(search);
 		container.addChild(list);
 		container.addChild(new Spacer(1));
-		container.addChild(
-			new Text(
-				rawKeyHint("↑↓", "navigate") +
-					"  " +
-					keyHint("tui.select.confirm", "select") +
-					"  " +
-					keyHint("tui.select.cancel", "back"),
-				1,
-				0,
-			),
-		);
+		container.addChild(footer);
 		container.addChild(new Spacer(1));
 		container.addChild(new DynamicBorder((text) => theme.fg("border", text)));
 
@@ -203,6 +211,11 @@ export function createSearchableSelector<T extends string>(
 				return;
 			}
 			if (keybindings.matches(data, "tui.select.cancel")) {
+				if (input.getValue()) {
+					input.setValue("");
+					applyFilter("");
+					return;
+				}
 				done(undefined);
 				return;
 			}
@@ -216,22 +229,41 @@ export function createSearchableSelector<T extends string>(
 	};
 }
 
-export type ProbeChecklistResult =
+export interface SearchableChecklistItem {
+	value: string;
+	label: string;
+	searchText?: string;
+}
+
+export interface SearchableChecklistOptions {
+	title: string;
+	items: readonly SearchableChecklistItem[];
+	initialSelected?: readonly string[];
+	confirmLabel?: string;
+	emptyMessage?: string;
+}
+
+export type SearchableChecklistResult =
 	| { kind: "save"; selectedIds: string[] }
 	| { kind: "cancel" };
 
-export function createProbeChecklist(
-	providerLabel: string,
-	models: Array<{ id: string; name?: string }>,
+/**
+ * A multi-select counterpart to the browse-first selector. It keeps the
+ * current filter out of the way until it is useful and never loses selections
+ * that happen to be filtered out.
+ */
+export function createSearchableChecklist(
+	opts: SearchableChecklistOptions,
 ): (
 	tui: TUI,
 	theme: Theme,
 	keybindings: KeybindingsManager,
-	done: (result: ProbeChecklistResult) => void,
+	done: (result: SearchableChecklistResult) => void,
 ) => Container {
 	return (tui, theme, keybindings, done) => {
-		const selected = new Set(models.map((model) => model.id));
-		let filteredModels = models;
+		const items = [...opts.items];
+		const selected = new Set(opts.initialSelected ?? []);
+		let filteredItems = items;
 		let index = 0;
 		let offset = 0;
 		const viewport = 10;
@@ -259,9 +291,9 @@ export function createProbeChecklist(
 
 		const applyFilter = () => {
 			const query = input.getValue();
-			filteredModels = query
-				? fuzzyFilter(models, query, (model) => `${model.id} ${model.name ?? ""}`)
-				: models;
+			filteredItems = query
+				? fuzzyFilter(items, query, (item) => item.searchText ?? `${item.label} ${item.value}`)
+				: items;
 			index = 0;
 			offset = 0;
 			refresh();
@@ -271,33 +303,32 @@ export function createProbeChecklist(
 			const lines = [
 				...topBorder.render(width),
 				"",
-				truncateToWidth(theme.fg("accent", theme.bold(`Select models to add · ${providerLabel}`)), width),
+				truncateToWidth(theme.fg("accent", theme.bold(opts.title)), width),
 				"",
 			];
-			lines.push(...input.render(Math.max(1, width - 2)).map((line) => ` ${line}`), "");
-			const end = Math.min(filteredModels.length, offset + viewport);
+			if (input.getValue()) lines.push(...input.render(Math.max(1, width - 2)).map((line) => ` ${line}`), "");
+			const end = Math.min(filteredItems.length, offset + viewport);
 			for (let row = offset; row < end; row++) {
-				const model = filteredModels[row]!;
+				const item = filteredItems[row]!;
 				const active = row === index;
 				const cursor = active ? theme.fg("accent", "▶") : " ";
-				const box = selected.has(model.id) ? theme.fg("success", "[x]") : theme.fg("muted", "[ ]");
-				const detail = model.name && model.name !== model.id ? ` — ${model.name}` : "";
-				const text = truncate(`${model.id}${detail}`, Math.max(12, width - 9));
+				const box = selected.has(item.value) ? theme.fg("success", "[x]") : theme.fg("muted", "[ ]");
+				const text = truncate(item.label, Math.max(12, width - 9));
 				lines.push(
 					truncateToWidth(`${cursor} ${box} ${active ? theme.fg("accent", text) : theme.fg("text", text)}`, width),
 				);
 			}
-			if (filteredModels.length === 0) {
-				lines.push(theme.fg("muted", "  No matching models"));
-			} else if (filteredModels.length > viewport) {
-				lines.push(theme.fg("dim", `  showing ${offset + 1}–${end} of ${filteredModels.length}`));
+			if (filteredItems.length === 0) {
+				lines.push(theme.fg("muted", `  ${opts.emptyMessage ?? "No matching items"}`));
+			} else if (filteredItems.length > viewport) {
+				lines.push(theme.fg("dim", `  showing ${offset + 1}–${end} of ${filteredItems.length}`));
 			}
 			lines.push("");
 			lines.push(
 				truncateToWidth(
 					theme.fg(
 						"dim",
-						`  ${selected.size}/${models.length} selected · ${filteredModels.length} shown · ↑↓ move · Space toggle · ${enableAllKey} all · ${clearAllKey} clear · Enter/${saveKey} add · Esc cancel`,
+						`  ${selected.size}/${items.length} selected · ${filteredItems.length} shown · type to filter · ↑↓ move · Space toggle · ${enableAllKey} all · ${clearAllKey} clear · Enter/${saveKey} ${opts.confirmLabel ?? "save"} · Esc ${input.getValue() ? "clear" : "cancel"}`,
 					),
 					width,
 				),
@@ -308,15 +339,15 @@ export function createProbeChecklist(
 
 		container.handleInput = (data: string) => {
 			if (keybindings.matches(data, "tui.select.up")) {
-				if (filteredModels.length === 0) return;
-				index = index === 0 ? filteredModels.length - 1 : index - 1;
+				if (filteredItems.length === 0) return;
+				index = index === 0 ? filteredItems.length - 1 : index - 1;
 				keepVisible();
 				refresh();
 				return;
 			}
 			if (keybindings.matches(data, "tui.select.down")) {
-				if (filteredModels.length === 0) return;
-				index = index === filteredModels.length - 1 ? 0 : index + 1;
+				if (filteredItems.length === 0) return;
+				index = index === filteredItems.length - 1 ? 0 : index + 1;
 				keepVisible();
 				refresh();
 				return;
@@ -328,37 +359,42 @@ export function createProbeChecklist(
 				return;
 			}
 			if (keybindings.matches(data, "tui.select.pageDown")) {
-				index = Math.min(Math.max(0, filteredModels.length - 1), index + viewport);
+				index = Math.min(Math.max(0, filteredItems.length - 1), index + viewport);
 				keepVisible();
 				refresh();
 				return;
 			}
 			if (data === " ") {
-				const model = filteredModels[index];
-				if (model) {
-					if (selected.has(model.id)) selected.delete(model.id);
-					else selected.add(model.id);
+				const item = filteredItems[index];
+				if (item) {
+					if (selected.has(item.value)) selected.delete(item.value);
+					else selected.add(item.value);
 					refresh();
 				}
 				return;
 			}
 			if (keybindings.matches(data, "app.models.enableAll")) {
-				const targets = input.getValue() ? filteredModels : models;
-				for (const model of targets) selected.add(model.id);
+				const targets = input.getValue() ? filteredItems : items;
+				for (const item of targets) selected.add(item.value);
 				refresh();
 				return;
 			}
 			if (keybindings.matches(data, "app.models.clearAll")) {
-				const targets = input.getValue() ? filteredModels : models;
-				for (const model of targets) selected.delete(model.id);
+				const targets = input.getValue() ? filteredItems : items;
+				for (const item of targets) selected.delete(item.value);
 				refresh();
 				return;
 			}
 			if (keybindings.matches(data, "tui.select.confirm") || keybindings.matches(data, "app.models.save")) {
-				done({ kind: "save", selectedIds: models.map((model) => model.id).filter((id) => selected.has(id)) });
+				done({ kind: "save", selectedIds: items.map((item) => item.value).filter((value) => selected.has(value)) });
 				return;
 			}
 			if (keybindings.matches(data, "tui.select.cancel")) {
+				if (input.getValue()) {
+					input.setValue("");
+					applyFilter();
+					return;
+				}
 				done({ kind: "cancel" });
 				return;
 			}
@@ -375,4 +411,28 @@ export function createProbeChecklist(
 
 		return container;
 	};
+}
+
+export type ProbeChecklistResult = SearchableChecklistResult;
+
+export function createProbeChecklist(
+	providerLabel: string,
+	models: Array<{ id: string; name?: string }>,
+): (
+	tui: TUI,
+	theme: Theme,
+	keybindings: KeybindingsManager,
+	done: (result: ProbeChecklistResult) => void,
+) => Container {
+	return createSearchableChecklist({
+		title: `Select models to add · ${providerLabel}`,
+		items: models.map((model) => ({
+			value: model.id,
+			label: model.name && model.name !== model.id ? `${model.id} — ${model.name}` : model.id,
+			searchText: `${model.id} ${model.name ?? ""}`,
+		})),
+		initialSelected: models.map((model) => model.id),
+		confirmLabel: "add",
+		emptyMessage: "No matching models",
+	});
 }

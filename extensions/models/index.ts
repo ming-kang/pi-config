@@ -1,9 +1,9 @@
 /**
  * models — structured provider/model management for ~/.pi/agent/models.json.
  *
- * /models is the primary interface: provider list → provider actions → field
- * editor / model discovery. Drafts are saved atomically and rolled back when
- * Pi rejects the resulting registry configuration.
+ * /models is the primary interface: provider list → focused workspace → model
+ * discovery. Drafts are saved atomically and rolled back when Pi rejects the
+ * resulting registry configuration.
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
@@ -17,7 +17,7 @@ import {
 	truncate,
 } from "./constants.ts";
 import { createProbeChecklist, createSearchableSelector } from "./dialog.ts";
-import { editProvider, type SaveAttempt } from "./editor.ts";
+import { chooseProviderStarter, editProvider, type SaveAttempt } from "./editor.ts";
 import { probeModels } from "./probe.ts";
 import {
 	captureModelsJsonSnapshot,
@@ -56,6 +56,8 @@ const SUBCOMMAND_DESCRIPTIONS: Record<(typeof SUBCOMMANDS)[number], string> = {
 	reload: "Reload models.json",
 	probe: "Fetch remote models",
 };
+
+const PROVIDER_SELECTOR_SEARCH_THRESHOLD = 12;
 
 async function completeArguments(prefix: string): Promise<AutocompleteItem[] | null> {
 	const match = prefix.match(/^(\S*)(?:\s+(.*))?$/);
@@ -161,8 +163,10 @@ async function openProvidersMenu(ctx: ExtensionCommandContext, initialQuery?: st
 		];
 		const filteredItems = query ? fuzzyFilter(items, query, (item) => item.searchText) : items;
 		const visibleItems = filteredItems.length > 0 ? filteredItems : items;
+		const shouldUseSearch =
+			ctx.mode === "tui" && (query !== undefined || items.length > PROVIDER_SELECTOR_SEARCH_THRESHOLD);
 		const selected =
-			ctx.mode === "tui"
+			shouldUseSearch
 				? await ctx.ui.custom(
 						createSearchableSelector({
 							title: "Select model provider:",
@@ -188,26 +192,28 @@ async function openProviderActions(providerId: string, ctx: ExtensionCommandCont
 			return;
 		}
 		const action = await ctx.ui.select(providerId, [
-			"Configure provider and models",
-			"Fetch remote model list",
+			"Open workspace · models, connection, and advanced settings",
+			"Discover models from this provider",
 			"Remove provider",
 			"Back",
 		]);
 		if (action === undefined || action === "Back") return;
-		if (action === "Configure provider and models") {
+		if (action === "Open workspace · models, connection, and advanced settings") {
 			const savedId = await editExistingProvider(providerId, ctx);
 			if (savedId && savedId !== providerId) return;
 		}
-		if (action === "Fetch remote model list") await probeFlow(providerId, ctx);
+		if (action === "Discover models from this provider") await probeFlow(providerId, ctx);
 		if (action === "Remove provider" && (await confirmAndRemove(providerId, ctx))) return;
 	}
 }
 
 async function addProvider(ctx: ExtensionCommandContext): Promise<string | undefined> {
+	const starter = await chooseProviderStarter(ctx);
+	if (!starter) return undefined;
 	const result = await editProvider(ctx, {
 		mode: "add",
 		initialId: "",
-		initialEntry: { api: "openai-completions", models: [] },
+		initialEntry: starter,
 		existingIds: await listProviderIds(),
 		onSave: (id, entry) =>
 			commitModelsChange(
