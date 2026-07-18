@@ -1,8 +1,62 @@
-/** Multi-select model catalog used by the probe flow. */
+/** Small private UI primitives for the models manager. */
 
-import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Container, Key, matchesKey, type TUI } from "@earendil-works/pi-tui";
+import { DynamicBorder, type Theme } from "@earendil-works/pi-coding-agent";
+import { Container, Input, Key, matchesKey, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
 import { truncate } from "./constants.ts";
+
+export interface TextInputOptions {
+	title: string;
+	initial?: string;
+	placeholder?: string;
+	validate?: (value: string) => string | undefined;
+}
+
+export function createTextInput(
+	opts: TextInputOptions,
+): (tui: TUI, theme: Theme, _kb: unknown, done: (result: string | undefined) => void) => Container {
+	return (tui, theme, _kb, done) => {
+		const input = new Input();
+		input.setValue(opts.initial ?? "");
+		const errorText = new Text("", 0, 0);
+		const container = new Container() as Container & {
+			handleInput: (data: string) => void;
+			focused: boolean;
+		};
+
+		container.addChild(new DynamicBorder());
+		container.addChild(new Text(theme.fg("accent", theme.bold(opts.title)), 1, 0));
+		if (opts.placeholder) container.addChild(new Text(theme.fg("muted", `  e.g. ${opts.placeholder}`), 0, 0));
+		container.addChild(new Spacer(1));
+		container.addChild(input);
+		container.addChild(errorText);
+		container.addChild(new Spacer(1));
+		container.addChild(new Text(theme.fg("dim", "  Enter save · Esc cancel"), 0, 0));
+		container.addChild(new DynamicBorder());
+
+		Object.defineProperty(container, "focused", {
+			get: () => input.focused,
+			set: (focused: boolean) => {
+				input.focused = focused;
+			},
+		});
+
+		input.onSubmit = (value) => {
+			const error = opts.validate?.(value);
+			if (error) {
+				errorText.setText(theme.fg("error", `  ${error}`));
+				tui.requestRender();
+				return;
+			}
+			done(value);
+		};
+		input.onEscape = () => done(undefined);
+		container.handleInput = (data: string) => {
+			errorText.setText("");
+			input.handleInput(data);
+		};
+		return container;
+	};
+}
 
 export type ProbeChecklistResult =
 	| { kind: "save"; selectedIds: string[] }

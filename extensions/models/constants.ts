@@ -1,7 +1,7 @@
 export const COMMAND_NAME = "models";
 export const COMMAND_DESCRIPTION = "Edit and reload ~/.pi/agent/models.json";
 
-export const SUBCOMMANDS = ["file", "add", "list", "edit", "remove", "reload", "probe"] as const;
+export const SUBCOMMANDS = ["add", "list", "edit", "remove", "reload", "probe"] as const;
 export type Subcommand = (typeof SUBCOMMANDS)[number];
 
 export interface ParsedArgs {
@@ -25,10 +25,19 @@ export function parseArgs(args: string): ParsedArgs {
 }
 
 export const DEFAULTS = {
+	contextWindow: 128_000,
+	maxTokens: 16_384,
 	probeTimeoutMs: 10_000,
 	probeBodyBytes: 4 * 1024 * 1024,
 	probeMaxModels: 2_000,
 } as const;
+
+export const API_CHOICES = [
+	{ value: "openai-completions", label: "OpenAI Chat Completions" },
+	{ value: "openai-responses", label: "OpenAI Responses" },
+	{ value: "anthropic-messages", label: "Anthropic Messages" },
+	{ value: "google-generative-ai", label: "Google Generative AI" },
+] as const;
 
 const PROVIDER_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
 

@@ -1,113 +1,126 @@
-# `models` — manage `~/.pi/agent/models.json`
+# `models` — structured custom-model management
 
-`/models` opens one Pi-native management menu for the whole custom-model
-workflow. Configuration is edited as JSON instead of duplicating Pi's evolving
-schema in a large field-by-field form.
+`/models` manages `~/.pi/agent/models.json` through provider and model menus.
+Users never need to edit the complete JSON document inside Pi.
 
-The data contract follows Pi's upstream
+The supported fields follow Pi's upstream
 [Custom Models documentation](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md).
 
-## Main menu
+## Main flow
 
 ```text
-Models · ~/.pi/agent/models.json
-
-  Edit complete models.json
-  + Add provider from a starter JSON
-  CPA — anthropic-messages · 1 custom model · http://127.0.0.1:8317
-  ollama — openai-completions · 3 custom models · http://localhost:11434/v1
-  Reload models.json
-  Close
+/models
+└─ Provider list
+   ├─ + Add provider
+   ├─ Reload models.json
+   └─ <provider>
+      ├─ Configure provider and models
+      │  ├─ Provider fields
+      │  ├─ Headers
+      │  ├─ Compatibility settings
+      │  ├─ Model overrides
+      │  └─ Models
+      │     ├─ + Add model
+      │     └─ <model> → edit every model field
+      ├─ Fetch remote model list
+      └─ Remove provider
 ```
 
-Selecting a provider opens:
+Every editor works on an in-memory draft. Cancel discards the draft; saving
+updates `models.json`, reloads Pi's registry, and keeps the editor open if Pi
+rejects the result.
 
-```text
-Edit provider JSON
-Rename provider key
-Probe remote model catalog
-Remove provider
-Back
-```
+## Provider fields
 
-The complete-file and provider editors both use Pi's native multiline editor.
-That directly supports every documented field, including `oauth`,
-`authHeader`, `compat`, `thinkingLevelMap`, `cost.tiers`, per-model headers,
-and `modelOverrides`, without this extension having to mirror each schema
-revision.
+The provider editor exposes:
 
-Adding a provider asks for its ID, then offers small starter objects for:
+- provider ID and display name;
+- default API and base URL;
+- API-key configuration (`literal`, `$ENV_VAR`, interpolation, or `!command`);
+- Radius OAuth and `authHeader`;
+- structured header add/edit/rename/remove;
+- compatibility fields, including a list of documented keys plus custom keys;
+- per-model overrides;
+- the provider's model list.
 
-- an OpenAI-compatible local server;
-- an Anthropic-compatible proxy;
-- Google AI Studio;
-- overriding a built-in provider.
+Renaming a provider is committed as one read and one write. Unknown provider
+fields that the menu does not understand are preserved unchanged.
 
-The starter opens in the same JSON editor before anything is written.
+## Model fields
+
+Each model can configure:
+
+- ID and display name;
+- API and base-URL overrides;
+- reasoning support;
+- input types (`text` or `text + image`);
+- context window and maximum output tokens;
+- a structured thinking-level map (`off` through `max`, including unsupported
+  `null` levels);
+- input/output/cache token costs and pricing tiers;
+- model-specific headers and compatibility fields.
+
+Model overrides use the same relevant field editors for built-in or
+extension-registered models. Unknown model and override fields are preserved.
+
+## Fetching model lists
+
+**Fetch remote model list** resolves the provider's effective URL, API key, and
+headers through Pi, then supports:
+
+- OpenAI Chat Completions / Responses: `<baseUrl>/models`;
+- Ollama fallback for `/v1` base paths: `<origin>/api/tags`;
+- paginated Google Generative AI model lists;
+- Anthropic Messages: no fetch, because Anthropic exposes no public catalog
+  endpoint.
+
+Results are deduplicated and sorted, then displayed in a scrollable
+multi-select. Selected entries are appended once as minimal model definitions;
+their fields can then be customized from the Models menu.
+
+Catalog requests are bounded to 10 seconds, 4 MiB, and 2,000 model IDs. The
+extension does not currently enrich results from `models.dev`; remote discovery
+and per-model customization remain separate, predictable operations.
 
 ## Command shortcuts
 
-The menu is the primary interface. These commands are thin shortcuts into the
-same operations:
+The `/models` menu is the primary interface. Thin shortcuts are also available:
 
 | Command | Behavior |
 |---|---|
-| `/models` | Open the management menu. |
-| `/models file` | Edit the complete file. |
-| `/models list` | Open the management menu. |
-| `/models add` | Add from a starter JSON. |
-| `/models edit <provider-id>` | Edit one provider object. |
-| `/models remove <provider-id>` | Confirm and remove one provider. |
-| `/models probe <provider-id>` | Probe and append selected model IDs. |
-| `/models reload` | Re-read the file without restarting Pi. |
+| `/models` | Open the provider list. |
+| `/models list` | Same as `/models`. |
+| `/models add` | Open a new provider draft. |
+| `/models edit <provider-id>` | Open the provider field editor. |
+| `/models remove <provider-id>` | Confirm and remove a provider. |
+| `/models probe <provider-id>` | Fetch and select remote models. |
+| `/models reload` | Reload `models.json`. |
 
 Completion offers provider IDs after `edit`, `remove`, and `probe`.
 
-## Probe flow
-
-Probe is deliberately separate from JSON editing. It uses the provider's
-effective API/base URL and Pi's resolved authentication, then handles:
-
-- OpenAI Chat Completions / Responses: `<baseUrl>/models`;
-- Ollama fallback for base paths ending in `/v1`: `<origin>/api/tags`;
-- paginated Google Generative AI: `<baseUrl>/models`;
-- Anthropic Messages: no probe, because Anthropic exposes no public catalog
-  endpoint.
-
-Catalog responses are capped at 4 MiB, 10 seconds, and 2,000 normalized IDs.
-Results are deduplicated and sorted, then shown in a scrollable multi-select.
-Selected entries are appended as minimal `{ "id": "..." }` definitions, with
-`name` included only when the catalog supplies a distinct display name.
-
-This extension does not query `models.dev` or guess model metadata. That would
-be a separate enrichment feature with its own matching and freshness policy;
-it is not required by Pi's `models.json` contract.
-
 ## Persistence and recovery
 
-- **Complete-file edit:** writes exactly the text returned by Pi's editor, so
-  comments and formatting can be retained.
-- **Provider operations:** parse the whole document, preserve unrelated and
-  unknown fields, then normalize the resulting file as formatted JSON. Existing
-  comments are therefore not retained by provider add/edit/rename/remove/probe.
-- Writes use a unique temporary file and atomic rename. Existing permissions
-  are retained where the platform supports them.
-- Provider rename is one read/one write, not delete followed by insert.
-- Every mutation immediately calls `ctx.modelRegistry.refresh()`. If Pi rejects
-  the schema or provider composition, the exact original file bytes are
-  restored and the previous registry state is refreshed.
-- Probe re-reads the provider before appending selections, reducing accidental
-  overwrite of a concurrent manual edit.
+- The whole document is read before every mutation, preserving unrelated
+  providers and unknown top-level fields.
+- Pi-style line and block comments are accepted on read. Managed writes format
+  the result as JSON, so comments are not retained.
+- Writes use a unique temporary file and atomic rename.
+- Existing permissions are retained where supported by the platform.
+- After every mutation, `ctx.modelRegistry.refresh()` is authoritative. Schema
+  or provider-composition failures restore the exact original file bytes and
+  refresh the previous registry state.
+- Probe re-reads the provider before appending selections, avoiding duplicate
+  models and reducing overwrite risk from concurrent manual edits.
 
-Provider IDs created or renamed through the menu use letters, digits, `_`, and
-`-` (maximum 64 characters), keeping slash-command targeting unambiguous.
-Authentication login/logout remains the responsibility of `/login` and
-`/logout`.
+Provider IDs created through the manager use letters, digits, `_`, and `-`
+(maximum 64 characters). Authentication login/logout remains the responsibility
+of `/login` and `/logout`.
 
 ## Files
 
-- `index.ts` — menu, command shortcuts, JSON editing, registry reload, and rollback.
-- `store.ts` — comment-aware reads, lossless provider mutations, snapshots, and atomic writes.
+- `index.ts` — command/menu routing, registry refresh, rollback, and probe integration.
+- `editor.ts` — staged provider, model, header, compatibility, override, thinking, and cost menus.
+- `dialog.ts` — single-line input and remote-model multi-select components.
+- `store.ts` — comment-aware reads, lossless mutations, snapshots, and atomic writes.
 - `probe.ts` — bounded catalog requests and response normalization.
-- `dialog.ts` — private multi-select probe checklist.
-- `constants.ts` — command parsing and probe limits.
+- `constants.ts` — command parsing, API choices, and defaults.
