@@ -31,12 +31,12 @@ import {
 	READ_OUTPUT_CHARS,
 	SUBAGENT_CONFIG_ENTRY_TYPE,
 	SUBAGENT_NOTIFICATION_TYPE,
-	SUBAGENT_STATUS_KEY,
 	SUBAGENT_USER_CONFIG_VERSION,
 	SUBAGENT_WIDGET_KEY,
 	TIMELINE_MAX_CHARS,
 	TIMELINE_MAX_ITEMS,
 } from "./constants.ts";
+import { isTerminalStatus } from "./format.ts";
 import { panelOverlayOptions, SubagentPanel } from "./panel.ts";
 import type {
 	AgentScope,
@@ -85,10 +85,6 @@ function emptyUsage(): SubagentUsage {
 		totalTokens: 0,
 		cost: 0,
 	};
-}
-
-function isTerminalStatus(status: SubagentStatus): boolean {
-	return status === "completed" || status === "failed" || status === "stopped";
 }
 
 function assistantText(message: AgentMessage | undefined): string {
@@ -255,7 +251,6 @@ export class SubagentController implements SubagentPanelHost {
 		this.ctx = ctx;
 		this.disposed = false;
 		if (persistedConfig) this.applyConfig(persistedConfig, false);
-		this.updateStatus();
 		this.syncWidget();
 	}
 
@@ -600,7 +595,6 @@ export class SubagentController implements SubagentPanelHost {
 		this.disposed = true;
 		this.queue.length = 0;
 		if (this.ctx?.mode === "tui") {
-			this.ctx.ui.setStatus(SUBAGENT_STATUS_KEY, undefined);
 			if (this.widgetVisible) {
 				this.widgetVisible = false;
 				this.widget = undefined;
@@ -1381,7 +1375,6 @@ export class SubagentController implements SubagentPanelHost {
 				`Unknown subagent id: ${id}.`,
 			);
 		record.unread = false;
-		this.updateStatus();
 
 		const timeline = record.timeline
 			.slice(-120)
@@ -1607,7 +1600,6 @@ export class SubagentController implements SubagentPanelHost {
 	}
 
 	private stateChanged(): void {
-		this.updateStatus();
 		this.syncWidget();
 		this.requestPanelRender();
 	}
@@ -1645,28 +1637,5 @@ export class SubagentController implements SubagentPanelHost {
 
 	private requestPanelRender(): void {
 		this.panel?.requestRender();
-	}
-
-	private updateStatus(): void {
-		if (this.ctx?.mode !== "tui") return;
-		const records = [...this.records.values()];
-		const running = records.filter(
-			(record) => record.status === "running" || record.status === "starting",
-		).length;
-		const queued = records.filter(
-			(record) => record.status === "queued",
-		).length;
-		const unread = records.filter(
-			(record) => record.unread && isTerminalStatus(record.status),
-		).length;
-		const parts = [
-			running ? `${running} agent${running === 1 ? "" : "s"} running` : "",
-			queued ? `${queued} queued` : "",
-			unread ? `${unread} done` : "",
-		].filter(Boolean);
-		this.ctx.ui.setStatus(
-			SUBAGENT_STATUS_KEY,
-			parts.length ? parts.join(" · ") : undefined,
-		);
 	}
 }

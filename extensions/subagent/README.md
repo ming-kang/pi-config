@@ -88,9 +88,10 @@ overflow line. Until the panel is opened for the first time in a session, a
 one-time `alt+o to view` onboarding line is appended; it disappears the
 moment the panel is first opened.
 
-`ctx.ui.setStatus()` still publishes a compact `N running · M queued · K done`
-summary so the bundled `statusline` extension shows counts without a
-cross-extension import.
+The footer widget is the single source of live status, so the extension no
+longer publishes a separate `ctx.ui.setStatus()` summary into the bundled
+`statusline` extension — that slot is intentionally left empty pending a
+future redesign.
 
 ### Transcript overlay
 
@@ -109,6 +110,13 @@ cross-extension import.
   (profile, model, elapsed, tool uses, tokens, cost) that is dropped on short
   terminals. While running, a live status line above the input shows the
   current tool activity.
+- Completed assistant messages render as Markdown with the same theme as the
+  main session (headings, code blocks with syntax highlighting, lists, inline
+  code), reusing Pi's `Markdown` component and `getMarkdownTheme()`. Tool
+  calls, tool results, and user instructions keep their compact one-line
+  prefixes (`→`, `⎿`, `›`). The streaming tail stays plain text until the
+  message completes, since half-written fences and tables re-render unstably.
+  Each completed message caches its rendered lines per width.
 - `ctrl+c` follows terminal convention: it stops the worker being viewed if
   it is active, and closes the overlay otherwise. `Esc` always closes.
 

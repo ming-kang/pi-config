@@ -1,8 +1,10 @@
 /** Keyboard-focused transcript overlay for background subagent workers. */
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import {
 	type Component,
 	Input,
+	Markdown,
 	matchesKey,
 	type OverlayOptions,
 	type TUI,
@@ -103,6 +105,13 @@ export class SubagentPanel implements Component {
 	private readonly host: SubagentPanelHost;
 	private readonly done: () => void;
 	private readonly input = new Input();
+	/**
+	 * One Markdown component per completed assistant message; the component
+	 * caches its own rendered lines per width, so repeat frames are free.
+	 * Timeline items are immutable (trimming drops whole items), which keeps
+	 * the cache sound.
+	 */
+	private readonly markdownCache = new WeakMap<TimelineItem, Markdown>();
 	private selectedId: string | undefined;
 	private scrollFromBottom = 0;
 	/** True when the last render had more transcript than fits; drives the scroll hint. */
@@ -534,22 +543,20 @@ export class SubagentPanel implements Component {
 		return { label, hint: parts.join(" · ") };
 	}
 
+	private markdownLines(item: TimelineItem, width: number): string[] {
+		let component = this.markdownCache.get(item);
+		if (!component) {
+			component = new Markdown(item.text, 0, 0, getMarkdownTheme());
+			this.markdownCache.set(item, component);
+		}
+		return component.render(Math.max(1, width));
+	}
+
 	private renderTranscript(
 		snapshot: SubagentSnapshot,
 		width: number,
 	): string[] {
 		const items: TimelineItem[] = snapshot.timeline.slice(-100);
-		if (snapshot.liveText) {
-			items.push({
-				kind: "assistant",
-				text: snapshot.liveText,
-				timestamp: Date.now(),
-			});
-		}
-		if (!items.length) {
-			return [this.theme.fg("muted", "(waiting for output)")];
-		}
-
 		const lines: string[] = [];
 		let previousKind: TimelineKind | undefined;
 		for (const item of items) {
@@ -560,19 +567,41 @@ export class SubagentPanel implements Component {
 			) {
 				lines.push("");
 			}
-			const prefix = timelinePrefix(item.kind);
-			const wrapped = wrapPlainLine(
-				item.text,
-				Math.max(1, width - visibleWidth(prefix)),
-			);
-			for (let index = 0; index < wrapped.length; index++) {
-				const actualPrefix =
-					index === 0 ? prefix : " ".repeat(visibleWidth(prefix));
-				lines.push(
-					`${this.theme.fg("dim", actualPrefix)}${this.theme.fg(timelineColor(item.kind), wrapped[index] ?? "")}`,
+			if (item.kind === "assistant") {
+				// Completed assistant messages get the same Markdown treatment as
+				// the main session, indented to keep the transcript hierarchy.
+				for (const line of this.markdownLines(item, Math.max(1, width - 2))) {
+					lines.push(`  ${line}`);
+				}
+			} else {
+				const prefix = timelinePrefix(item.kind);
+				const wrapped = wrapPlainLine(
+					item.text,
+					Math.max(1, width - visibleWidth(prefix)),
 				);
+				for (let index = 0; index < wrapped.length; index++) {
+					const actualPrefix =
+						index === 0 ? prefix : " ".repeat(visibleWidth(prefix));
+					lines.push(
+						`${this.theme.fg("dim", actualPrefix)}${this.theme.fg(timelineColor(item.kind), wrapped[index] ?? "")}`,
+					);
+				}
 			}
 			previousKind = item.kind;
+		}
+		if (snapshot.liveText) {
+			// The streaming tail stays plain text: half-written markdown (open
+			// fences, partial tables) re-renders unstably frame to frame.
+			if (lines.length && previousKind !== "assistant") lines.push("");
+			for (const line of wrapPlainLine(
+				snapshot.liveText,
+				Math.max(1, width - 2),
+			)) {
+				lines.push(`  ${this.theme.fg("text", line)}`);
+			}
+		}
+		if (!lines.length) {
+			return [this.theme.fg("muted", "(waiting for output)")];
 		}
 		return lines;
 	}

@@ -8,7 +8,6 @@ export const SUBAGENTS_COMMAND_NAME = "subagents";
 /** The single global shortcut: jump into the most relevant worker's transcript. */
 export const SUBAGENT_VIEW_SHORTCUT = "alt+o" as const;
 
-export const SUBAGENT_STATUS_KEY = "subagent";
 export const SUBAGENT_WIDGET_KEY = "subagent";
 export const SUBAGENT_CONFIG_ENTRY_TYPE = "pi-config-subagent-config";
 export const SUBAGENT_NOTIFICATION_TYPE = "pi-config-subagent-notification";
