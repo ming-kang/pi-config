@@ -32,6 +32,7 @@ import {
 	DEFAULT_MAX_CONCURRENCY,
 	HARD_MAX_AGENTS,
 	HARD_MAX_CONCURRENCY,
+	PANEL_RENDER_THROTTLE_MS,
 	READ_OUTPUT_CHARS,
 	SUBAGENT_CONFIG_ENTRY_TYPE,
 	SUBAGENT_NOTIFICATION_TYPE,
@@ -164,6 +165,8 @@ export class SubagentController implements SubagentPanelHost {
 	/** Once true, the widget's one-time "/agents to view" onboarding line disappears. */
 	private panelOpenedThisSession = false;
 	private panel: SubagentPanel | undefined;
+	private panelRenderTimer: ReturnType<typeof setTimeout> | undefined;
+	private lastPanelRenderAt = 0;
 	private widget: SubagentFooterWidget | undefined;
 	private widgetVisible = false;
 	private preferencesLoaded = false;
@@ -441,6 +444,7 @@ export class SubagentController implements SubagentPanelHost {
 				},
 			);
 		} finally {
+			this.cancelPanelRenderTimer();
 			this.panel?.dispose();
 			this.panel = undefined;
 			this.panelOpen = false;
@@ -578,6 +582,7 @@ export class SubagentController implements SubagentPanelHost {
 		if (this.disposed) return;
 		this.disposed = true;
 		this.queue.length = 0;
+		this.cancelPanelRenderTimer();
 		if (this.ctx?.mode === "tui") {
 			if (this.widgetVisible) {
 				this.widgetVisible = false;
@@ -1198,7 +1203,7 @@ export class SubagentController implements SubagentPanelHost {
 
 			case "turn_end":
 				if (event.message.role === "assistant") record.usage.turns++;
-				this.requestPanelRender();
+				this.requestPanelRender(true);
 				break;
 
 			case "tool_execution_start":
@@ -1209,7 +1214,7 @@ export class SubagentController implements SubagentPanelHost {
 					event.args,
 				);
 				record.usage.toolUses++;
-				this.requestPanelRender();
+				this.requestPanelRender(true);
 				break;
 
 			case "tool_execution_update":
@@ -1225,13 +1230,13 @@ export class SubagentController implements SubagentPanelHost {
 					event.result,
 					event.isError,
 				);
-				this.requestPanelRender();
+				this.requestPanelRender(true);
 				break;
 
 			case "auto_retry_start":
 				record.currentActivity = `Retrying request (attempt ${event.attempt})...`;
 				this.addTimeline(record, "system", record.currentActivity);
-				this.requestPanelRender();
+				this.requestPanelRender(true);
 				break;
 
 			case "auto_retry_end":
@@ -1252,17 +1257,17 @@ export class SubagentController implements SubagentPanelHost {
 						`Retry failed (attempt ${event.attempt})${event.finalError ? `: ${oneLine(event.finalError, 200)}` : ""}.`,
 					);
 				}
-				this.requestPanelRender();
+				this.requestPanelRender(true);
 				break;
 
 			case "compaction_start":
 				record.currentActivity = "Compacting subagent context...";
-				this.requestPanelRender();
+				this.requestPanelRender(true);
 				break;
 
 			case "compaction_end":
 				record.currentActivity = undefined;
-				this.requestPanelRender();
+				this.requestPanelRender(true);
 				break;
 		}
 	}
@@ -1795,9 +1800,8 @@ export class SubagentController implements SubagentPanelHost {
 	}
 
 	private stateChanged(): void {
-		this.invalidateSnapshots();
+		this.requestPanelRender(true);
 		this.syncWidget();
-		this.requestPanelRender();
 	}
 
 	/** Show the footer widget while records exist; remove it when the session has none. */
@@ -1831,11 +1835,42 @@ export class SubagentController implements SubagentPanelHost {
 		}
 	}
 
-	private requestPanelRender(): void {
-		// Every controller-side caller invokes this after mutating a record, so
-		// it doubles as a snapshot invalidation point (panel-internal scrolling
-		// renders bypass the controller entirely).
+	private cancelPanelRenderTimer(): void {
+		if (!this.panelRenderTimer) return;
+		clearTimeout(this.panelRenderTimer);
+		this.panelRenderTimer = undefined;
+	}
+
+	private requestPanelRender(immediate = false): void {
+		// State remains current immediately; only TUI repaint requests are
+		// coalesced. Panel-internal scrolling bypasses the controller entirely.
 		this.invalidateSnapshots();
-		this.panel?.requestRender();
+		if (!this.panel) return;
+
+		const now = Date.now();
+		if (immediate) {
+			this.cancelPanelRenderTimer();
+			this.lastPanelRenderAt = now;
+			this.panel.requestRender();
+			return;
+		}
+		if (this.panelRenderTimer) return;
+
+		const delay = Math.max(
+			0,
+			PANEL_RENDER_THROTTLE_MS - (now - this.lastPanelRenderAt),
+		);
+		if (delay === 0) {
+			this.lastPanelRenderAt = now;
+			this.panel.requestRender();
+			return;
+		}
+
+		this.panelRenderTimer = setTimeout(() => {
+			this.panelRenderTimer = undefined;
+			this.lastPanelRenderAt = Date.now();
+			this.panel?.requestRender();
+		}, delay);
+		this.panelRenderTimer.unref?.();
 	}
 }

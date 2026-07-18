@@ -24,6 +24,7 @@ export const TIMELINE_MAX_CHARS = 120_000;
 export const ACTIVITY_MAX_ITEMS = 160;
 export const ACTIVITY_MAX_CHARS = 40_000;
 export const PANEL_FINAL_OUTPUT_CHARS = 120_000;
+export const PANEL_RENDER_THROTTLE_MS = 80;
 
 export const SUBAGENT_TOOL_DESCRIPTION = [
 	"Launch and control isolated background Pi AgentSession workers.",

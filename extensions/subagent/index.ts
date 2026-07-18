@@ -80,16 +80,7 @@ export default function subagent(pi: ExtensionAPI): void {
 		executionMode: "sequential" as ToolExecutionMode,
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const result = await controller.execute(params, ctx);
-			if (result.details?.errorCode) {
-				const first = result.content[0];
-				throw new Error(
-					first?.type === "text"
-						? first.text
-						: `Subagent operation failed (${result.details.errorCode}).`,
-				);
-			}
-			return result;
+			return controller.execute(params, ctx);
 		},
 
 		renderCall(args, theme) {
@@ -103,6 +94,16 @@ export default function subagent(pi: ExtensionAPI): void {
 				context.isError,
 			);
 		},
+	});
+
+	// Tool execute results cannot set Pi's error flag directly. Preserve the
+	// structured controller details, then mark expected operation failures in
+	// the official result middleware instead of throwing them away.
+	pi.on("tool_result", (event) => {
+		if (event.toolName !== SUBAGENT_TOOL_NAME) return;
+		const details = event.details as SubagentDetails | undefined;
+		if (details?.errorCode) return { isError: true };
+		return undefined;
 	});
 
 	pi.registerCommand(AGENTS_COMMAND_NAME, {

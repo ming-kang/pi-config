@@ -123,7 +123,7 @@ Acceptance:
 
 ### Batch 3 — Coalesced rendering and structured errors
 
-**Status:** pending
+**Status:** complete
 
 Scope:
 
@@ -241,7 +241,7 @@ load checks; “runtime” means the behavior was driven through Pi.
 | `stop` queued/running | pending | pending | |
 | batch parent notification | pending | pending | |
 | automatic retention eviction | pending | pending | |
-| collapsed/expanded tool rendering | pending | pending | |
+| collapsed/expanded tool rendering | pass | pending | Structured errors retain details; visual state check pending |
 | footer widget | pass | pending | Semantic `currentActivity` source wired; visual check pending |
 | `/agents` panel and commands | pass | pending | Activity/conversation/result renderer type-checked |
 | `/reload`, `/tree`, shutdown cleanup | pending | pending | |
@@ -295,6 +295,24 @@ load checks; “runtime” means the behavior was driven through Pi.
   passed.
 - Load verification: `pi -ne -e . --list-models --offline` exited successfully.
 - Interactive panel/footer states remain scheduled for the final runtime pass.
+- Checkpoint commit: `fd3b32f` (`feat(subagent): add structured activity previews`).
+
+### Batch 3 — render coalescing and structured errors
+
+- Added an 80 ms controller-side repaint budget. State and snapshot invalidation
+  remain immediate; text/thinking/tool-update deltas share a pending repaint.
+- Tool start/end, turn end, retry/compaction transitions, controller state
+  changes, stop, and completion force immediate panel renders.
+- Pending panel repaint timers are cancelled when the panel closes and during
+  controller disposal, and timer handles are unref'd.
+- Controller operation errors now return their original `SubagentDetails`.
+  `index.ts` marks results carrying `errorCode` as Pi errors through the
+  `tool_result` middleware instead of throwing away details.
+- Static verification: strict TypeScript no-emit check and `git diff --check`
+  passed.
+- Load verification: `pi -ne -e . --list-models --offline` exited successfully.
+- Runtime streaming cadence and native error-row rendering remain scheduled for
+  the final Pi UI pass.
 
 ## Open risks and rollback notes
 
