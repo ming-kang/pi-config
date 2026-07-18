@@ -11,6 +11,7 @@ import {
 	type ExtensionAPI,
 	type ExtensionContext,
 	getAgentDir,
+	ModelRuntime,
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
@@ -36,7 +37,12 @@ import {
 	TIMELINE_MAX_CHARS,
 	TIMELINE_MAX_ITEMS,
 } from "./constants.ts";
-import { isTerminalStatus } from "./format.ts";
+import {
+	formatDuration,
+	formatTokens,
+	isTerminalStatus,
+	oneLine,
+} from "./format.ts";
 import { panelOverlayOptions, SubagentPanel } from "./panel.ts";
 import type {
 	AgentScope,
@@ -118,16 +124,6 @@ function truncateText(
 ): string {
 	if (text.length <= maxChars) return text;
 	return `${text.slice(0, maxChars)}\n\n[${label} truncated: ${text.length - maxChars} characters omitted. Use subagent action "read" for the retained snapshot.]`;
-}
-
-function oneLine(text: string, maxChars = 160): string {
-	const flattened = text
-		.replace(/[\r\n\t]+/g, " ")
-		.replace(/ +/g, " ")
-		.trim();
-	return flattened.length <= maxChars
-		? flattened
-		: `${flattened.slice(0, Math.max(1, maxChars - 3))}...`;
 }
 
 function formatToolCall(toolName: string, args: unknown): string {
@@ -239,6 +235,16 @@ export class SubagentController implements SubagentPanelHost {
 		version: SUBAGENT_USER_CONFIG_VERSION,
 		profiles: {},
 	};
+	/** Shared across all workers so runtime provider registrations resolve once. */
+	private modelRuntimePromise: Promise<ModelRuntime> | undefined;
+	/** Ids replayed into the shared runtime, for mirrored unregistration. */
+	private readonly replayedProviderIds = new Set<string>();
+	/** SettingsManager per cwd, shared by a worker's loader and its session. */
+	private readonly settingsManagers = new Map<string, SettingsManager>();
+	/** ResourceLoader per (cwd, agent identity, systemPrompt); reload is expensive. */
+	private readonly loaders = new Map<string, Promise<DefaultResourceLoader>>();
+	/** Lazily rebuilt snapshot list; invalidated on any record mutation. */
+	private snapshotsCache: SubagentSnapshot[] | undefined;
 
 	constructor(pi: ExtensionAPI) {
 		this.pi = pi;
@@ -250,6 +256,10 @@ export class SubagentController implements SubagentPanelHost {
 	): void {
 		this.ctx = ctx;
 		this.disposed = false;
+		// A revived session re-mounts the widget; drop any stale cached snapshots
+		// so the first render reflects current records (applyConfig may not fire
+		// stateChanged when persistedConfig is unchanged).
+		this.invalidateSnapshots();
 		if (persistedConfig) this.applyConfig(persistedConfig, false);
 		this.syncWidget();
 	}
@@ -259,7 +269,40 @@ export class SubagentController implements SubagentPanelHost {
 	}
 
 	getSnapshots(): SubagentSnapshot[] {
-		return [...this.records.values()].map((record) => this.snapshot(record));
+		// Cached and returned by reference: callers treat the array and its
+		// snapshots as immutable. snapshot() deep-copies each record, and every
+		// record mutation path invalidates this cache (see invalidateSnapshots
+		// call sites), so pure animation frames reuse one stable array.
+		if (!this.snapshotsCache) {
+			this.snapshotsCache = [...this.records.values()].map((record) =>
+				this.snapshot(record),
+			);
+		}
+		return this.snapshotsCache;
+	}
+
+	private invalidateSnapshots(): void {
+		this.snapshotsCache = undefined;
+	}
+
+	/** Lightweight worker facts for /agents argument completion (no snapshot build). */
+	getCompletionWorkers(): Array<{
+		id: string;
+		label: string;
+		status: SubagentStatus;
+		agentName: string;
+	}> {
+		return [...this.records.values()].map((record) => ({
+			id: record.id,
+			label: record.label,
+			status: record.status,
+			agentName: record.agentName,
+		}));
+	}
+
+	/** Cwd of the currently bound session context, for completion-time discovery. */
+	getBoundCwd(): string | undefined {
+		return this.ctx?.cwd;
 	}
 
 	/** The worker the user most likely wants to open: unread first, then active, then most recent. */
@@ -621,6 +664,13 @@ export class SubagentController implements SubagentPanelHost {
 				record.session = undefined;
 			}),
 		);
+		// Drop all cross-worker caches; a revived session rebuilds them cheaply
+		// and picks up any on-disk settings/model/agent changes made meanwhile.
+		this.loaders.clear();
+		this.settingsManagers.clear();
+		this.modelRuntimePromise = undefined;
+		this.replayedProviderIds.clear();
+		this.snapshotsCache = undefined;
 		this.panel = undefined;
 	}
 
@@ -832,7 +882,7 @@ export class SubagentController implements SubagentPanelHost {
 				};
 			}
 
-			const parentThinking = this.pi.getThinkingLevel() as ThinkingLevelName;
+			const parentThinking = this.pi.getThinkingLevel();
 			const hasPreferredThinking = Boolean(
 				preference && Object.hasOwn(preference, "thinkingLevel"),
 			);
@@ -970,7 +1020,7 @@ export class SubagentController implements SubagentPanelHost {
 		this.stateChanged();
 
 		try {
-			if (!record.session) await this.createSession(record);
+			if (!record.session) await this.createSession(record, generation);
 			if (this.disposed || record.generation !== generation) return;
 
 			const deferred = record.pendingInstructions.splice(0);
@@ -989,7 +1039,7 @@ export class SubagentController implements SubagentPanelHost {
 			record.resolvedModel = session.model ?? record.resolvedModel;
 			this.stateChanged();
 
-			await session.prompt(prompt);
+			await session.prompt(prompt, { expandPromptTemplates: false });
 			if (this.disposed || record.generation !== generation) return;
 
 			const finalMessage = latestAssistantMessage(session.messages);
@@ -1024,33 +1074,134 @@ export class SubagentController implements SubagentPanelHost {
 		}
 	}
 
-	private async createSession(record: SubagentRecord): Promise<void> {
-		const loader = new DefaultResourceLoader({
-			cwd: record.cwd,
-			agentDir: getAgentDir(),
-			noExtensions: true,
-			noPromptTemplates: true,
-			noThemes: true,
-			systemPromptOverride: (base) =>
-				[base, makeWorkerSystemPrompt(record.agentDefinition)]
-					.filter(Boolean)
-					.join("\n\n"),
+	/** SettingsManager.create per cwd; the loader and session share one instance. */
+	private settingsManagerFor(cwd: string): SettingsManager {
+		const existing = this.settingsManagers.get(cwd);
+		if (existing) return existing;
+		const created = SettingsManager.create(cwd, getAgentDir());
+		this.settingsManagers.set(cwd, created);
+		return created;
+	}
+
+	/** Cached, reloaded ResourceLoader keyed by cwd + agent identity + prompt. */
+	private loaderFor(record: SubagentRecord): Promise<DefaultResourceLoader> {
+		const agent = record.agentDefinition;
+		// systemPrompt is part of the key: an on-disk agent definition can be
+		// edited between spawns, and a stale loader closes over the old prompt.
+		const key = [record.cwd, agent.name, agent.source, agent.systemPrompt].join(
+			"\0",
+		);
+		const existing = this.loaders.get(key);
+		if (existing) return existing;
+		const promise = (async () => {
+			const loader = new DefaultResourceLoader({
+				cwd: record.cwd,
+				agentDir: getAgentDir(),
+				noExtensions: true,
+				noPromptTemplates: true,
+				noThemes: true,
+				settingsManager: this.settingsManagerFor(record.cwd),
+				systemPromptOverride: (base) =>
+					[base, makeWorkerSystemPrompt(agent)].filter(Boolean).join("\n\n"),
+			});
+			await loader.reload();
+			return loader;
+		})().catch((error) => {
+			// Drop a failed loader so the next spawn retries, but only if a newer
+			// attempt has not already replaced this cache slot.
+			if (this.loaders.get(key) === promise) this.loaders.delete(key);
+			throw error;
 		});
-		await loader.reload();
+		this.loaders.set(key, promise);
+		return promise;
+	}
+
+	/** Lazily create one shared ModelRuntime for all workers, mirroring sdk defaults. */
+	private ensureModelRuntime(): Promise<ModelRuntime> {
+		const existing = this.modelRuntimePromise;
+		if (existing) return existing;
+		const promise = ModelRuntime.create({
+			authPath: path.join(getAgentDir(), "auth.json"),
+			modelsPath: path.join(getAgentDir(), "models.json"),
+		}).catch((error) => {
+			if (this.modelRuntimePromise === promise) this.modelRuntimePromise = undefined;
+			throw error;
+		});
+		this.modelRuntimePromise = promise;
+		return promise;
+	}
+
+	/**
+	 * Replay the parent session's dynamically registered providers into the
+	 * shared runtime so custom/proxy models resolve for workers. Registrations
+	 * are validate-then-merge (idempotent); each id is isolated so one bad
+	 * provider cannot block the rest. Two limitations: providers registered as a
+	 * native pi-ai Provider object are not exposed by this API surface (only the
+	 * config form is replayable), and runtime-only api keys (setRuntimeApiKey)
+	 * live in the parent runtime's memory and cannot be replayed — such workers
+	 * fall back to disk auth.
+	 */
+	private replayProviderRegistrations(runtime: ModelRuntime): void {
+		const registry = this.ctx?.modelRegistry;
+		if (!registry) return;
+		const currentIds = new Set<string>();
+		for (const id of registry.getRegisteredProviderIds()) {
+			currentIds.add(id);
+			try {
+				const config = registry.getRegisteredProviderConfig(id);
+				if (config) runtime.registerProvider(id, config);
+				this.replayedProviderIds.add(id);
+			} catch {
+				// A provider that conflicts with builtins/models.json will surface a
+				// clean spawn error when its model fails to resolve; skip it here.
+			}
+		}
+		// Mirror parent unregistrations so the shared runtime keeps no ghosts.
+		for (const id of [...this.replayedProviderIds]) {
+			if (currentIds.has(id)) continue;
+			try {
+				runtime.unregisterProvider(id);
+			} catch {
+				// Best-effort cleanup.
+			}
+			this.replayedProviderIds.delete(id);
+		}
+	}
+
+	private async createSession(
+		record: SubagentRecord,
+		generation: number,
+	): Promise<void> {
+		if (!this.modelRuntimePromise) {
+			// Only the very first spawn pays the runtime bootstrap (may include a
+			// one-time model-catalog refresh); surface it instead of stalling.
+			record.currentActivity = "Preparing model runtime...";
+		}
+		const runtime = await this.ensureModelRuntime();
+		// Replay before createAgentSession: resolvedModel is resolved against the
+		// parent registry, but auth is resolved in the shared runtime by provider id.
+		this.replayProviderRegistrations(runtime);
+		const loader = await this.loaderFor(record);
 
 		const { session } = await createAgentSession({
 			cwd: record.cwd,
 			agentDir: getAgentDir(),
-			...(this.ctx?.modelRegistry
-				? { modelRegistry: this.ctx.modelRegistry }
-				: {}),
+			modelRuntime: runtime,
 			...(record.resolvedModel ? { model: record.resolvedModel } : {}),
 			...(record.thinkingLevel ? { thinkingLevel: record.thinkingLevel } : {}),
 			...(record.tools ? { tools: record.tools } : {}),
 			resourceLoader: loader,
 			sessionManager: SessionManager.inMemory(record.cwd),
-			settingsManager: SettingsManager.inMemory(),
+			settingsManager: this.settingsManagerFor(record.cwd),
 		});
+
+		if (this.disposed || record.generation !== generation) {
+			// A dispose/stop/restart raced this build. A newer run may already own
+			// record.session, so never mount or release through the record here —
+			// just drop the session this call created.
+			session.dispose();
+			return;
+		}
 
 		record.session = session;
 		record.resolvedModel = session.model ?? record.resolvedModel;
@@ -1066,6 +1217,8 @@ export class SubagentController implements SubagentPanelHost {
 		event: AgentSessionEvent,
 	): void {
 		record.updatedAt = Date.now();
+		// updatedAt mutates on every event, including types with no branch below.
+		this.invalidateSnapshots();
 		switch (event.type) {
 			case "message_update":
 				if (event.assistantMessageEvent.type === "text_delta") {
@@ -1074,6 +1227,14 @@ export class SubagentController implements SubagentPanelHost {
 						record.liveText = `[earlier streaming text omitted]\n${record.liveText.slice(-READ_OUTPUT_CHARS * 2)}`;
 					}
 					record.currentActivity = "Writing response...";
+					this.requestPanelRender();
+				} else if (
+					event.assistantMessageEvent.type === "thinking_delta" &&
+					record.currentActivity !== "Thinking..."
+				) {
+					// Thinking output is not accumulated; just surface that the worker
+					// is reasoning so the activity line does not stall pre-response.
+					record.currentActivity = "Thinking...";
 					this.requestPanelRender();
 				}
 				break;
@@ -1151,6 +1312,27 @@ export class SubagentController implements SubagentPanelHost {
 				this.requestPanelRender();
 				break;
 
+			case "auto_retry_end":
+				// Clear the "Retrying..." activity the start event set. Terminal
+				// status/error stay owned by the run finalizer (stopReason), never here.
+				if (event.success) {
+					record.currentActivity = "Waiting for the model...";
+					this.addTimeline(
+						record,
+						"system",
+						`Retry succeeded (attempt ${event.attempt}).`,
+					);
+				} else {
+					record.currentActivity = undefined;
+					this.addTimeline(
+						record,
+						"error",
+						`Retry failed (attempt ${event.attempt})${event.finalError ? `: ${oneLine(event.finalError, 200)}` : ""}.`,
+					);
+				}
+				this.requestPanelRender();
+				break;
+
 			case "compaction_start":
 				record.currentActivity = "Compacting subagent context...";
 				this.requestPanelRender();
@@ -1180,9 +1362,9 @@ export class SubagentController implements SubagentPanelHost {
 		const stats = [
 			`${record.usage.toolUses} tool use${record.usage.toolUses === 1 ? "" : "s"}`,
 			`${record.usage.turns} turn${record.usage.turns === 1 ? "" : "s"}`,
-			record.usage.output ? `output ${record.usage.output} tokens` : "",
+			record.usage.output ? `output ${formatTokens(record.usage.output)} tokens` : "",
 			record.startedAt
-				? `elapsed ${Math.max(0, Math.round(((record.endedAt ?? Date.now()) - record.startedAt) / 1000))}s`
+				? `elapsed ${formatDuration(record.startedAt, record.endedAt ?? Date.now())}`
 				: "",
 		]
 			.filter(Boolean)
@@ -1351,7 +1533,7 @@ export class SubagentController implements SubagentPanelHost {
 		}
 		const lines = records.map((record) => {
 			const elapsed = record.startedAt
-				? `${Math.max(0, Math.floor(((record.endedAt ?? Date.now()) - record.startedAt) / 1000))}s`
+				? formatDuration(record.startedAt, record.endedAt ?? Date.now()) || "-"
 				: "-";
 			return `- ${record.id} [${record.status}] ${record.label} agent=${record.agentName} toolUses=${record.usage.toolUses} elapsed=${elapsed}${record.currentActivity ? ` activity=${oneLine(record.currentActivity, 100)}` : ""}`;
 		});
@@ -1379,7 +1561,7 @@ export class SubagentController implements SubagentPanelHost {
 				"not_found",
 				`Unknown subagent id: ${id}.`,
 			);
-		record.unread = false;
+		this.markViewed(record.id);
 
 		const timeline = record.timeline
 			.slice(-120)
@@ -1605,6 +1787,7 @@ export class SubagentController implements SubagentPanelHost {
 	}
 
 	private stateChanged(): void {
+		this.invalidateSnapshots();
 		this.syncWidget();
 		this.requestPanelRender();
 	}
@@ -1641,6 +1824,10 @@ export class SubagentController implements SubagentPanelHost {
 	}
 
 	private requestPanelRender(): void {
+		// Every controller-side caller invokes this after mutating a record, so
+		// it doubles as a snapshot invalidation point (panel-internal scrolling
+		// renders bypass the controller entirely).
+		this.invalidateSnapshots();
 		this.panel?.requestRender();
 	}
 }

@@ -14,19 +14,9 @@ import {
 } from "@earendil-works/pi-tui";
 
 import { SUBAGENT_TOOL_LABEL } from "./constants.ts";
-import { formatTokens } from "./format.ts";
+import { formatTokens, oneLine } from "./format.ts";
 import type { SubagentParams } from "./schema.ts";
 import type { SubagentDetails } from "./types.ts";
-
-function oneLine(text: string, maxChars: number): string {
-	const flattened = text
-		.replace(/[\r\n\t]+/g, " ")
-		.replace(/ +/g, " ")
-		.trim();
-	return flattened.length <= maxChars
-		? flattened
-		: `${flattened.slice(0, Math.max(1, maxChars - 3))}...`;
-}
 
 function firstText(result: AgentToolResult<SubagentDetails>): string {
 	for (const part of result.content ?? []) {

@@ -26,7 +26,9 @@ import type {
 	ExtensionContext,
 	ToolExecutionMode,
 } from "@earendil-works/pi-coding-agent";
+import { type AutocompleteItem, fuzzyFilter } from "@earendil-works/pi-tui";
 
+import { discoverAgents } from "./agents.ts";
 import {
 	AGENTS_COMMAND_NAME,
 	SUBAGENT_CONFIG_ENTRY_TYPE,
@@ -106,6 +108,40 @@ export default function subagent(pi: ExtensionAPI): void {
 	pi.registerCommand(AGENTS_COMMAND_NAME, {
 		description:
 			"Background subagents: /agents [id] opens the panel, /agents settings [profile] configures profiles",
+		getArgumentCompletions: (prefix): AutocompleteItem[] | null => {
+			// The returned value replaces the whole argument text after
+			// "/agents ", so profile items must carry the "settings " prefix.
+			const settingsMatch = /^settings\s+(.*)$/.exec(prefix);
+			if (settingsMatch) {
+				const cwd = controller.getBoundCwd();
+				if (!cwd) return null;
+				const items = discoverAgents(cwd, "both").agents.map((agent) => ({
+					value: `settings ${agent.name}`,
+					label: agent.name,
+					description: `${agent.source} · ${agent.description}`,
+				}));
+				const filtered = fuzzyFilter(
+					items,
+					settingsMatch[1] ?? "",
+					(item) => item.label,
+				);
+				return filtered.length ? filtered : null;
+			}
+			const items: AutocompleteItem[] = [
+				{
+					value: "settings",
+					label: "settings",
+					description: "configure profile model/thinking",
+				},
+				...controller.getCompletionWorkers().map((worker) => ({
+					value: worker.id,
+					label: worker.id,
+					description: `${worker.status} · ${worker.label} [${worker.agentName}]`,
+				})),
+			];
+			const filtered = fuzzyFilter(items, prefix, (item) => item.value);
+			return filtered.length ? filtered : null;
+		},
 		handler: async (args, ctx) => {
 			const input = args.trim();
 			if (input === "settings" || input.startsWith("settings ")) {

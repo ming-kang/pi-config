@@ -84,6 +84,17 @@ export function formatDuration(
 	return `${hours}h${String(minutes % 60).padStart(2, "0")}m`;
 }
 
+/** Flatten to a single line and clip to maxChars with an ellipsis. */
+export function oneLine(text: string, maxChars = 160): string {
+	const flattened = text
+		.replace(/[\r\n\t]+/g, " ")
+		.replace(/ +/g, " ")
+		.trim();
+	return flattened.length <= maxChars
+		? flattened
+		: `${flattened.slice(0, Math.max(1, maxChars - 3))}...`;
+}
+
 export function formatTokens(value: number): string {
 	if (value < 1000) return String(value);
 	if (value < 10_000) return `${(value / 1000).toFixed(1)}k`;
