@@ -41,7 +41,7 @@ export function createTextInput(
 		container.addChild(input);
 		container.addChild(errorText);
 		container.addChild(new Spacer(1));
-		container.addChild(new Text(theme.fg("dim", "  Enter save · Esc cancel"), 0, 0));
+		container.addChild(new Text(theme.fg("dim", "  Enter accept · Esc cancel"), 0, 0));
 		container.addChild(new DynamicBorder((text) => theme.fg("border", text)));
 
 		Object.defineProperty(container, "focused", {
@@ -81,6 +81,8 @@ export interface SearchableSelectorOptions<T extends string> {
 	subtitle?: string;
 	items: readonly SearchableSelectorItem<T>[];
 	initialQuery?: string;
+	/** Restores the cursor when a parent menu is reopened. */
+	initialValue?: T;
 	maxVisible?: number;
 	emptyMessage?: string;
 	/** Optional Ctrl+S destination for workspace-style selectors. */
@@ -102,7 +104,7 @@ export function createSearchableSelector<T extends string>(
 	return (tui, theme, keybindings, done) => {
 		const allItems = [...opts.items];
 		let filteredItems = allItems;
-		let selectedIndex = 0;
+		let selectedIndex = Math.max(0, allItems.findIndex((item) => item.value === opts.initialValue));
 		const maxVisible = Math.max(1, opts.maxVisible ?? 9);
 		const input = new Input();
 		const search = new Container();
@@ -153,7 +155,7 @@ export function createSearchableSelector<T extends string>(
 			tui.requestRender();
 		};
 
-		const applyFilter = (query: string) => {
+		const applyFilter = (query: string, preferredValue?: T) => {
 			filteredItems = query
 				? fuzzyFilter(
 						allItems,
@@ -161,7 +163,10 @@ export function createSearchableSelector<T extends string>(
 						(item) => item.searchText ?? `${item.label} ${item.description ?? ""} ${item.value}`,
 					)
 				: allItems;
-			selectedIndex = 0;
+			const preferredIndex = preferredValue
+				? filteredItems.findIndex((item) => item.value === preferredValue)
+				: -1;
+			selectedIndex = preferredIndex >= 0 ? preferredIndex : 0;
 			refresh();
 		};
 
@@ -220,8 +225,9 @@ export function createSearchableSelector<T extends string>(
 			}
 			if (keybindings.matches(data, "tui.select.cancel")) {
 				if (input.getValue()) {
+					const currentValue = filteredItems[selectedIndex]?.value;
 					input.setValue("");
-					applyFilter("");
+					applyFilter("", currentValue);
 					return;
 				}
 				done(undefined);
@@ -232,7 +238,7 @@ export function createSearchableSelector<T extends string>(
 		};
 
 		if (opts.initialQuery) input.handleInput(opts.initialQuery);
-		applyFilter(opts.initialQuery ?? "");
+		applyFilter(opts.initialQuery ?? "", opts.initialValue);
 		return container;
 	};
 }
@@ -299,13 +305,16 @@ export function createSearchableChecklist(
 			if (index >= offset + viewport) offset = index - viewport + 1;
 		};
 
-		const applyFilter = () => {
+		const applyFilter = (preferredValue?: string) => {
 			const query = input.getValue();
 			filteredItems = query
 				? fuzzyFilter(items, query, (item) => item.searchText ?? `${item.label} ${item.value}`)
 				: items;
-			index = 0;
-			offset = 0;
+			const preferredIndex = preferredValue
+				? filteredItems.findIndex((item) => item.value === preferredValue)
+				: -1;
+			index = preferredIndex >= 0 ? preferredIndex : 0;
+			offset = Math.max(0, index - viewport + 1);
 			refresh();
 		};
 
@@ -417,8 +426,9 @@ export function createSearchableChecklist(
 			}
 			if (keybindings.matches(data, "tui.select.cancel")) {
 				if (input.getValue()) {
+					const currentValue = filteredItems[index]?.value;
 					input.setValue("");
-					applyFilter();
+					applyFilter(currentValue);
 					return;
 				}
 				if (searching) {
@@ -460,7 +470,7 @@ export function createProbeChecklist(
 	done: (result: ProbeChecklistResult) => void,
 ) => Container {
 	return createSearchableChecklist({
-		title: `Select models to add · ${providerLabel}`,
+		title: `Add fetched models · ${providerLabel}`,
 		items: models.map((model) => ({
 			value: model.id,
 			label: model.name && model.name !== model.id ? `${model.id} — ${model.name}` : model.id,
@@ -480,11 +490,15 @@ export interface ModelWorkspaceItem {
 	searchText?: string;
 }
 
+interface ModelWorkspaceState {
+	selectedIds: string[];
+	cursorId?: string;
+}
+
 export type ModelWorkspaceResult =
-	| { kind: "edit"; id: string; selectedIds: string[] }
-	| { kind: "actions" | "add" | "discover" | "bulk" | "remove"; selectedIds: string[] }
-	| { kind: "save"; selectedIds: string[] }
-	| { kind: "back"; selectedIds: string[] };
+	| ({ kind: "edit"; id: string } & ModelWorkspaceState)
+	| ({ kind: "actions" | "add" | "discover" | "bulk" | "remove" } & ModelWorkspaceState)
+	| ({ kind: "save" | "back" } & ModelWorkspaceState);
 
 /**
  * Provider-local model management. Unlike a checklist, Enter edits the
@@ -496,6 +510,7 @@ export function createModelWorkspace(
 	items: readonly ModelWorkspaceItem[],
 	initialSelected: readonly string[],
 	dirty: boolean,
+	initialCursorId?: string,
 ): (
 	tui: TUI,
 	theme: Theme,
@@ -506,8 +521,8 @@ export function createModelWorkspace(
 		const allItems = [...items];
 		const selected = new Set(initialSelected);
 		let filteredItems = allItems;
-		let index = 0;
-		let offset = 0;
+		let index = Math.max(0, allItems.findIndex((item) => item.id === initialCursorId));
+		let offset = Math.max(0, index - 9);
 		let searching = false;
 		let focused = false;
 		const viewport = 10;
@@ -524,6 +539,8 @@ export function createModelWorkspace(
 		};
 
 		const selectedIds = () => allItems.map((item) => item.id).filter((id) => selected.has(id));
+		const cursorId = () => filteredItems[index]?.id ?? initialCursorId;
+		const state = (): ModelWorkspaceState => ({ selectedIds: selectedIds(), cursorId: cursorId() });
 		const refresh = () => {
 			container.invalidate();
 			tui.requestRender();
@@ -532,13 +549,16 @@ export function createModelWorkspace(
 			if (index < offset) offset = index;
 			if (index >= offset + viewport) offset = index - viewport + 1;
 		};
-		const applyFilter = () => {
+		const applyFilter = (preferredId?: string) => {
 			const query = input.getValue();
 			filteredItems = query
 				? fuzzyFilter(allItems, query, (item) => item.searchText ?? `${item.label} ${item.id}`)
 				: allItems;
-			index = 0;
-			offset = 0;
+			const preferredIndex = preferredId
+				? filteredItems.findIndex((item) => item.id === preferredId)
+				: -1;
+			index = preferredIndex >= 0 ? preferredIndex : 0;
+			offset = Math.max(0, index - viewport + 1);
 			refresh();
 		};
 
@@ -547,7 +567,7 @@ export function createModelWorkspace(
 			lines.push(
 				theme.fg(
 					"muted",
-					`  ${allItems.length} configured · ${selected.size} selected${dirty ? " · unsaved changes" : ""}`,
+					`  ${allItems.length} configured · ${selected.size} selected${dirty ? " · Unsaved changes" : ""}`,
 				),
 				"",
 			);
@@ -567,8 +587,7 @@ export function createModelWorkspace(
 				);
 			}
 			if (allItems.length === 0) {
-				lines.push(theme.fg("muted", "  No models configured."));
-				lines.push(theme.fg("dim", "  Press a to add model IDs or f to fetch the server catalog."));
+				lines.push(theme.fg("muted", "  No models configured. Press a to add · f to fetch."));
 			} else if (filteredItems.length === 0) {
 				lines.push(theme.fg("muted", "  No matching models"));
 			} else if (filteredItems.length > viewport) {
@@ -577,7 +596,7 @@ export function createModelWorkspace(
 			lines.push("");
 			lines.push(
 				truncateToWidth(
-					theme.fg("dim", "  Enter edit · Space select · a add · f fetch · / filter · Tab more"),
+					theme.fg("dim", "  Enter edit · Space select · a add · f fetch · / filter · Tab actions"),
 					width,
 				),
 			);
@@ -603,10 +622,10 @@ export function createModelWorkspace(
 					refresh();
 					return;
 				}
-				if (matchesKey(data, "a")) return done({ kind: "add", selectedIds: selectedIds() });
-				if (matchesKey(data, "f")) return done({ kind: "discover", selectedIds: selectedIds() });
-				if (selected.size > 0 && matchesKey(data, "e")) return done({ kind: "bulk", selectedIds: selectedIds() });
-				if (selected.size > 0 && matchesKey(data, "d")) return done({ kind: "remove", selectedIds: selectedIds() });
+				if (matchesKey(data, "a")) return done({ kind: "add", ...state() });
+				if (matchesKey(data, "f")) return done({ kind: "discover", ...state() });
+				if (selected.size > 0 && matchesKey(data, "e")) return done({ kind: "bulk", ...state() });
+				if (selected.size > 0 && matchesKey(data, "d")) return done({ kind: "remove", ...state() });
 			}
 			if (keybindings.matches(data, "tui.select.up")) {
 				if (filteredItems.length === 0) return;
@@ -644,7 +663,7 @@ export function createModelWorkspace(
 				return;
 			}
 			if (keybindings.matches(data, "tui.input.tab")) {
-				done({ kind: "actions", selectedIds: selectedIds() });
+				done({ kind: "actions", ...state() });
 				return;
 			}
 			if (keybindings.matches(data, "app.models.enableAll")) {
@@ -658,18 +677,19 @@ export function createModelWorkspace(
 				return;
 			}
 			if (keybindings.matches(data, "app.models.save")) {
-				done({ kind: "save", selectedIds: selectedIds() });
+				done({ kind: "save", ...state() });
 				return;
 			}
 			if (keybindings.matches(data, "tui.select.confirm")) {
 				const item = filteredItems[index];
-				if (item) done({ kind: "edit", id: item.id, selectedIds: selectedIds() });
+				if (item) done({ kind: "edit", id: item.id, ...state() });
 				return;
 			}
 			if (keybindings.matches(data, "tui.select.cancel")) {
 				if (input.getValue()) {
+					const currentId = cursorId();
 					input.setValue("");
-					applyFilter();
+					applyFilter(currentId);
 					return;
 				}
 				if (searching) {
@@ -678,7 +698,7 @@ export function createModelWorkspace(
 					refresh();
 					return;
 				}
-				done({ kind: "back", selectedIds: selectedIds() });
+				done({ kind: "back", ...state() });
 				return;
 			}
 			if (searching) {

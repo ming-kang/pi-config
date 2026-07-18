@@ -260,8 +260,125 @@ export async function saveProvider(
 		throw new Error(`Provider "${originalId}" no longer exists.`);
 	}
 	if (originalId !== undefined && originalId !== newId) delete current.providers[originalId];
-	current.providers[newId] = structuredClone(entry);
+	current.providers[newId] = canonicalizeProviderEntry(entry);
 	await writeModelsJson(current);
+}
+
+const PROVIDER_FIELD_ORDER = [
+	"baseUrl",
+	"api",
+	"apiKey",
+	"models",
+	"oauth",
+	"headers",
+	"authHeader",
+	"compat",
+	"modelOverrides",
+] as const;
+
+const MODEL_FIELD_ORDER = [
+	"id",
+	"name",
+	"reasoning",
+	"thinkingLevelMap",
+	"input",
+	"contextWindow",
+	"maxTokens",
+	"api",
+	"cost",
+	"headers",
+	"compat",
+] as const;
+
+const OVERRIDE_FIELD_ORDER = [
+	"name",
+	"reasoning",
+	"thinkingLevelMap",
+	"input",
+	"contextWindow",
+	"maxTokens",
+	"cost",
+	"headers",
+	"compat",
+] as const;
+
+const THINKING_FIELD_ORDER: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+const COST_FIELD_ORDER = ["input", "output", "cacheRead", "cacheWrite", "tiers"] as const;
+const COST_TIER_FIELD_ORDER = ["inputTokensAbove", "input", "output", "cacheRead", "cacheWrite"] as const;
+
+/**
+ * Put documented fields in a stable human-readable order while appending every
+ * unknown field unchanged. Only Providers saved by this extension are
+ * canonicalized; unrelated Providers retain their existing object order.
+ */
+export function canonicalizeProviderEntry(entry: ProviderEntry): ProviderEntry {
+	return orderFields(structuredClone(entry), PROVIDER_FIELD_ORDER, {
+		models: (value) =>
+			Array.isArray(value) ? value.map((model) => canonicalizeModelEntry(model as ModelEntry)) : value,
+		modelOverrides: (value) =>
+			isRecord(value)
+				? Object.fromEntries(
+						Object.entries(value).map(([id, override]) => [
+							id,
+							isRecord(override) ? canonicalizeModelOverride(override as ModelOverride) : override,
+						]),
+					)
+				: value,
+	}) as ProviderEntry;
+}
+
+function canonicalizeModelEntry(entry: ModelEntry): ModelEntry {
+	return orderFields(entry, MODEL_FIELD_ORDER, {
+		thinkingLevelMap: canonicalizeThinkingMap,
+		input: canonicalizeInput,
+		cost: canonicalizeCost,
+	}) as ModelEntry;
+}
+
+function canonicalizeModelOverride(entry: ModelOverride): ModelOverride {
+	return orderFields(entry, OVERRIDE_FIELD_ORDER, {
+		thinkingLevelMap: canonicalizeThinkingMap,
+		input: canonicalizeInput,
+		cost: canonicalizeCost,
+	}) as ModelOverride;
+}
+
+function canonicalizeThinkingMap(value: unknown): unknown {
+	return isRecord(value) ? orderFields(value, THINKING_FIELD_ORDER) : value;
+}
+
+function canonicalizeInput(value: unknown): unknown {
+	if (!Array.isArray(value)) return value;
+	const known = ["text", "image"].filter((input) => value.includes(input));
+	const unknown = value.filter((input) => input !== "text" && input !== "image");
+	return [...known, ...unknown];
+}
+
+function canonicalizeCost(value: unknown): unknown {
+	if (!isRecord(value)) return value;
+	return orderFields(value, COST_FIELD_ORDER, {
+		tiers: (tiers) =>
+			Array.isArray(tiers)
+				? tiers.map((tier) => (isRecord(tier) ? orderFields(tier, COST_TIER_FIELD_ORDER) : tier))
+				: tiers,
+	});
+}
+
+function orderFields(
+	source: Record<string, unknown>,
+	preferredOrder: readonly string[],
+	transforms: Record<string, (value: unknown) => unknown> = {},
+): Record<string, unknown> {
+	const ordered: Record<string, unknown> = {};
+	const known = new Set(preferredOrder);
+	for (const key of preferredOrder) {
+		if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+		ordered[key] = transforms[key]?.(source[key]) ?? source[key];
+	}
+	for (const [key, value] of Object.entries(source)) {
+		if (!known.has(key)) ordered[key] = value;
+	}
+	return ordered;
 }
 
 export async function removeProvider(id: string): Promise<boolean> {

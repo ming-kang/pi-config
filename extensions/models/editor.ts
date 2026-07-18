@@ -1,7 +1,7 @@
 /** Browse-first provider workspace and focused model editors built from Pi-native dialogs. */
 
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { API_CHOICES, DEFAULTS, isValidProviderId, truncate } from "./constants.ts";
+import { API_CHOICES, DEFAULTS, isValidProviderId, MODEL_LIMIT_PRESETS, truncate } from "./constants.ts";
 import { createModelWorkspace, createSearchableSelector, createTextInput, type ModelWorkspaceResult } from "./dialog.ts";
 import type {
 	Cost,
@@ -41,7 +41,7 @@ const COMPAT_FIELDS = [
 	"allowEmptySignature",
 ] as const;
 
-const SEARCHABLE_MENU_THRESHOLD = 12;
+const MENU_CURSOR_MEMORY = new Map<string, string>();
 
 export interface SaveAttempt {
 	ok: boolean;
@@ -94,19 +94,19 @@ export async function createProviderSetup(
 		ctx.ui.confirm("Discard new provider?", "The connection details have not been saved.");
 
 	while (!id) {
-		const value = await promptText(ctx, "New provider · Step 1 of 4 · Provider ID", id, "my-provider", (candidate) =>
+		const value = await promptText(ctx, "Provider ID · step 1 of 4", id, "my-provider", (candidate) =>
 			validateProviderId(candidate.trim(), existingIds),
 		);
 		if (value !== undefined) id = value.trim();
 		else if (await cancel()) return undefined;
 	}
 	while (!entry.baseUrl) {
-		const value = await promptRequiredUrl(ctx, "New provider · Step 2 of 4 · Base URL", entry.baseUrl);
+		const value = await promptRequiredUrl(ctx, "Base URL · step 2 of 4", entry.baseUrl);
 		if (value !== undefined) entry.baseUrl = value;
 		else if (await cancel()) return undefined;
 	}
 	while (!entry.api) {
-		const value = await chooseRequiredApi(ctx, "New provider · Step 3 of 4 · API protocol", entry.api);
+		const value = await chooseRequiredApi(ctx, "API protocol · step 3 of 4", entry.api);
 		if (value.changed && value.value) entry.api = value.value;
 		else if (value.value === undefined && (await cancel())) return undefined;
 	}
@@ -122,8 +122,8 @@ export async function createProviderSetup(
 			{ key: "baseUrl", label: summaryRow("Base URL", entry.baseUrl) },
 			{ key: "api", label: summaryRow("API protocol", formatApi(entry.api)) },
 			{ key: "auth", label: summaryRow("Authentication", summarizeSetupAuthentication(entry)) },
-			{ key: "create", label: "Create provider and find models" },
-			{ key: "cancel", label: "Cancel" },
+			{ key: "create", label: "Create provider and fetch models" },
+			{ key: "cancel", label: "Discard" },
 		]);
 		if (choice === undefined || choice === "cancel") {
 			if (await cancel()) return undefined;
@@ -159,9 +159,9 @@ async function chooseProviderSetupAuthentication(
 	providerId: string,
 	entry: ProviderEntry,
 ): Promise<boolean> {
-	const choice = await selectKey(ctx, "New provider · Step 4 of 4 · Authentication", [
+	const choice = await selectKey(ctx, "Authentication · step 4 of 4", [
 		{ key: "environment", label: "Environment variable · recommended" },
-		{ key: "advanced", label: "Advanced key config · literal, interpolation, or command" },
+		{ key: "advanced", label: "Advanced · literal, interpolation, or command" },
 		{ key: "later", label: "Configure later · keyless server or /login" },
 	]);
 	if (choice === undefined) return false;
@@ -197,6 +197,7 @@ export async function editProvider(
 	let id = baseline.id;
 	const entry = structuredClone(baseline.entry);
 	const knownIds = new Set(opts.existingIds);
+	const providerWorkspaceMemoryKey = `provider-workspace:${opts.initialId}`;
 
 	const save = async (): Promise<boolean> => {
 		if (jsonEqual(baseline, { id, entry })) return true;
@@ -237,12 +238,12 @@ export async function editProvider(
 		const dirty = !jsonEqual(baseline, { id, entry });
 		const models = Array.isArray(entry.models) ? entry.models : [];
 		const workspaceOptions: MenuOption<string>[] = [
-			{ key: "models", label: `Models · ${models.length} · manage and bulk edit` },
+			{ key: "models", label: `Models · ${models.length}` },
 			{ key: "id", label: summaryRow("Provider ID", id) },
-			{ key: "baseUrl", label: summaryRow("Base URL", entry.baseUrl ?? "not set") },
+			{ key: "baseUrl", label: summaryRow("Base URL", entry.baseUrl ?? "Not set") },
 			{ key: "api", label: summaryRow("API protocol", formatApi(entry.api)) },
 			{ key: "apiKey", label: summaryRow("API key", formatSecret(entry.apiKey)) },
-			{ key: "auth", label: summaryRow("Authentication advanced", summarizeAuthenticationAdvanced(entry)) },
+			{ key: "auth", label: summaryRow("Advanced authentication", summarizeAuthenticationAdvanced(entry)) },
 			{ key: "headers", label: `Headers · ${countLabel(entry.headers, "header")}` },
 			{ key: "compat", label: `Compatibility · ${countLabel(entry.compat, "setting")}` },
 			{ key: "overrides", label: `Built-in model overrides · ${countLabel(entry.modelOverrides, "override")}` },
@@ -250,7 +251,7 @@ export async function editProvider(
 			{ key: "remove", label: "Remove provider" },
 			{ key: "back", label: "Back" },
 		];
-		const choice = await selectProviderWorkspaceKey(ctx, id, dirty, workspaceOptions);
+		const choice = await selectProviderWorkspaceKey(ctx, id, providerWorkspaceMemoryKey, dirty, workspaceOptions);
 
 		if (choice === undefined || choice === "back") {
 			if (!dirty) return { kind: "closed", id: persistedId };
@@ -315,7 +316,7 @@ export async function editProvider(
 			case "remove": {
 				const confirmed = await ctx.ui.confirm(
 					"Remove provider?",
-					`The persisted models.json entry for "${persistedId}" will be removed. Any unsaved draft changes will be discarded.`,
+					`Provider "${persistedId}" and its models will be removed. Unsaved changes will be discarded.`,
 				);
 				if (confirmed) return { kind: "remove", id: persistedId };
 				break;
@@ -327,7 +328,7 @@ export async function editProvider(
 async function editProviderAuthentication(ctx: ExtensionCommandContext, entry: ProviderEntry): Promise<void> {
 	while (true) {
 		const choice = await selectKey(ctx, "Provider authentication", [
-			{ key: "oauth", label: `OAuth · ${entry.oauth ?? "not set"}` },
+			{ key: "oauth", label: `OAuth · ${entry.oauth ?? "Not set"}` },
 			{ key: "authHeader", label: `Send Bearer auth header · ${formatOptionalBoolean(entry.authHeader)}` },
 			{ key: "back", label: "Back" },
 		]);
@@ -359,6 +360,7 @@ async function editModelsWorkspace(
 ): Promise<boolean> {
 	const models = entry.models ?? (entry.models = []);
 	let selectedIds: string[] = [];
+	let cursorId: string | undefined;
 	while (true) {
 		const result =
 			ctx.mode === "tui"
@@ -372,10 +374,12 @@ async function editModelsWorkspace(
 							})),
 							selectedIds,
 							opts.dirty(),
+							cursorId,
 						),
 					)
-				: await selectModelWorkspaceFallback(ctx, models, selectedIds);
+				: await selectModelWorkspaceFallback(ctx, models, selectedIds, cursorId);
 		selectedIds = result.selectedIds;
+		cursorId = result.cursorId;
 		if (result.kind === "back") return false;
 		if (result.kind === "save") {
 			await opts.onSave();
@@ -390,9 +394,11 @@ async function editModelsWorkspace(
 			if (updated === REMOVE_MODEL) {
 				models.splice(index, 1);
 				selectedIds = selectedIds.filter((selected) => selected !== originalId);
+				cursorId = models[index]?.id ?? models[index - 1]?.id;
 			} else if (updated && updated.id !== originalId) {
 				models[index] = updated;
 				selectedIds = selectedIds.map((selected) => (selected === originalId ? updated.id : selected));
+				cursorId = updated.id;
 			}
 			continue;
 		}
@@ -408,10 +414,7 @@ async function editModelsWorkspace(
 		}
 		if (result.kind === "remove") {
 			if (await ctx.ui.confirm("Remove selected models?", `Remove ${selectedIds.length} model${selectedIds.length === 1 ? "" : "s"} from this provider?`)) {
-				const selected = new Set(selectedIds);
-				for (let index = models.length - 1; index >= 0; index--) {
-					if (selected.has(models[index]!.id)) models.splice(index, 1);
-				}
+				cursorId = removeSelectedModels(models, selectedIds, cursorId);
 				selectedIds = [];
 			}
 			continue;
@@ -421,15 +424,13 @@ async function editModelsWorkspace(
 		const actionOptions: MenuOption<string>[] = [
 			{
 				key: "discover",
-				label: opts.dirty()
-					? "Fetch available models · apply unsaved changes first"
-					: "Fetch available models from server",
+				label: opts.dirty() ? "Fetch from server · saves pending changes first" : "Fetch from server",
 			},
-			{ key: "add", label: "Add model IDs manually" },
+			{ key: "add", label: "Add model IDs" },
 			...(selectedIds.length
 				? [
-					{ key: "bulk", label: `Bulk edit ${selectedIds.length} selected model${selectedIds.length === 1 ? "" : "s"}` },
-					{ key: "remove", label: `Remove ${selectedIds.length} selected model${selectedIds.length === 1 ? "" : "s"}` },
+					{ key: "bulk", label: `Bulk edit ${selectedIds.length} model${selectedIds.length === 1 ? "" : "s"}` },
+					{ key: "remove", label: `Remove ${selectedIds.length} model${selectedIds.length === 1 ? "" : "s"}` },
 					{ key: "clear", label: "Clear selection" },
 				]
 				: []),
@@ -447,10 +448,7 @@ async function editModelsWorkspace(
 		}
 		if (action === "remove") {
 			if (await ctx.ui.confirm("Remove selected models?", `Remove ${selectedIds.length} model${selectedIds.length === 1 ? "" : "s"} from this provider?`)) {
-				const selected = new Set(selectedIds);
-				for (let index = models.length - 1; index >= 0; index--) {
-					if (selected.has(models[index]!.id)) models.splice(index, 1);
-				}
+				cursorId = removeSelectedModels(models, selectedIds, cursorId);
 				selectedIds = [];
 			}
 		}
@@ -462,16 +460,35 @@ async function selectModelWorkspaceFallback(
 	ctx: ExtensionCommandContext,
 	models: readonly ModelEntry[],
 	selectedIds: readonly string[],
+	cursorId: string | undefined,
 ): Promise<ModelWorkspaceResult> {
 	const labels = models.map((model) => `${model.id} — ${summarizeModel(model)}`);
 	labels.push("Model actions", "Save changes", "Back");
 	const choice = await ctx.ui.select(`Models · ${models.length}`, labels);
-	if (choice === "Model actions") return { kind: "actions", selectedIds: [...selectedIds] };
-	if (choice === "Save changes") return { kind: "save", selectedIds: [...selectedIds] };
-	if (choice === undefined || choice === "Back") return { kind: "back", selectedIds: [...selectedIds] };
+	if (choice === "Model actions") return { kind: "actions", selectedIds: [...selectedIds], cursorId };
+	if (choice === "Save changes") return { kind: "save", selectedIds: [...selectedIds], cursorId };
+	if (choice === undefined || choice === "Back") return { kind: "back", selectedIds: [...selectedIds], cursorId };
 	const index = labels.indexOf(choice);
 	const model = models[index];
-	return model ? { kind: "edit", id: model.id, selectedIds: [...selectedIds] } : { kind: "back", selectedIds: [...selectedIds] };
+	return model
+		? { kind: "edit", id: model.id, selectedIds: [...selectedIds], cursorId: model.id }
+		: { kind: "back", selectedIds: [...selectedIds], cursorId };
+}
+
+function removeSelectedModels(
+	models: ModelEntry[],
+	selectedIds: readonly string[],
+	cursorId: string | undefined,
+): string | undefined {
+	const selected = new Set(selectedIds);
+	const cursorIndex = cursorId === undefined ? 0 : models.findIndex((model) => model.id === cursorId);
+	const cursorRemoved = cursorId !== undefined && selected.has(cursorId);
+	for (let index = models.length - 1; index >= 0; index--) {
+		if (selected.has(models[index]!.id)) models.splice(index, 1);
+	}
+	if (!cursorRemoved && cursorId !== undefined && models.some((model) => model.id === cursorId)) return cursorId;
+	const nextIndex = Math.min(Math.max(cursorIndex, 0), models.length - 1);
+	return models[nextIndex]?.id;
 }
 
 async function addModelIds(ctx: ExtensionCommandContext, models: ModelEntry[]): Promise<string[]> {
@@ -505,6 +522,7 @@ async function bulkEditModels(ctx: ExtensionCommandContext, models: ModelEntry[]
 		const choice = await selectKey(ctx, `Bulk edit · ${selected().length} model${selected().length === 1 ? "" : "s"}`, [
 			{ key: "reasoning", label: "Reasoning support" },
 			{ key: "input", label: "Input types" },
+			{ key: "limitPreset", label: "Limit preset" },
 			{ key: "context", label: "Context window" },
 			{ key: "maxTokens", label: "Maximum output tokens" },
 			{ key: "thinking", label: "Thinking level mapping" },
@@ -523,6 +541,9 @@ async function bulkEditModels(ctx: ExtensionCommandContext, models: ModelEntry[]
 				}
 			}
 		}
+		if (choice === "limitPreset") {
+			await applyModelLimitPreset(ctx, "Limit preset for selected models", selected());
+		}
 		if (choice === "context") {
 			const value = await promptBulkOptionalInteger(ctx, "Context window for selected models");
 			if (value.changed) for (const model of selected()) setOptional(model, "contextWindow", value.value);
@@ -535,9 +556,31 @@ async function bulkEditModels(ctx: ExtensionCommandContext, models: ModelEntry[]
 	}
 }
 
+async function applyModelLimitPreset(
+	ctx: ExtensionCommandContext,
+	title: string,
+	models: readonly ModelEntry[],
+): Promise<void> {
+	const options: MenuOption<string>[] = MODEL_LIMIT_PRESETS.map((preset) => ({
+		key: preset.value,
+		label: preset.label,
+	}));
+	options.push(
+		{ key: "clear", label: "Clear both · Pi fallback" },
+		{ key: "back", label: "Back" },
+	);
+	const selected = await selectKey(ctx, title, options);
+	if (selected === undefined || selected === "back") return;
+	const preset = MODEL_LIMIT_PRESETS.find((candidate) => candidate.value === selected);
+	for (const model of models) {
+		setOptional(model, "contextWindow", preset?.contextWindow);
+		setOptional(model, "maxTokens", preset?.maxTokens);
+	}
+}
+
 async function chooseBulkOptionalBoolean(ctx: ExtensionCommandContext, title: string): Promise<EditResult<boolean>> {
 	const selected = await selectKey(ctx, title, [
-		{ key: "unset", label: "Clear override / use provider default" },
+		{ key: "unset", label: "Default" },
 		{ key: "true", label: "True" },
 		{ key: "false", label: "False" },
 	]);
@@ -547,7 +590,7 @@ async function chooseBulkOptionalBoolean(ctx: ExtensionCommandContext, title: st
 
 async function chooseBulkInput(ctx: ExtensionCommandContext): Promise<EditResult<ModelEntry["input"]>> {
 	const selected = await selectKey(ctx, "Input types for selected models", [
-		{ key: "unset", label: "Clear override / default text" },
+		{ key: "unset", label: "Default · text" },
 		{ key: "text", label: "Text only" },
 		{ key: "image", label: "Text + image" },
 	]);
@@ -574,21 +617,22 @@ async function editModel(
 	while (true) {
 		const choice = await selectKey(ctx, `Model · ${model.id || "new"}`, [
 			{ key: "id", label: summaryRow("Model ID", model.id || "required") },
-			{ key: "name", label: summaryRow("Model name", model.name ?? "optional") },
+			{ key: "name", label: summaryRow("Model name", model.name ?? "Not set") },
 			{ key: "reasoning", label: summaryRow("Reasoning support", formatOptionalBoolean(model.reasoning)) },
 			{ key: "input", label: summaryRow("Input types", formatInput(model.input)) },
+			{ key: "limitPreset", label: summaryRow("Limit preset", summarizeModelLimitPreset(model)) },
 			{
 				key: "context",
 				label: summaryRow(
 					"Context window",
-					model.contextWindow?.toLocaleString() ?? `default ${DEFAULTS.contextWindow.toLocaleString()}`,
+					model.contextWindow?.toLocaleString() ?? `Pi fallback · ${DEFAULTS.contextWindow.toLocaleString()}`,
 				),
 			},
 			{
 				key: "maxTokens",
 				label: summaryRow(
 					"Maximum output tokens",
-					model.maxTokens?.toLocaleString() ?? `default ${DEFAULTS.maxTokens.toLocaleString()}`,
+					model.maxTokens?.toLocaleString() ?? `Pi fallback · ${DEFAULTS.maxTokens.toLocaleString()}`,
 				),
 			},
 			{ key: "thinking", label: summaryRow("Thinking level mapping", summarizeThinkingMap(model.thinkingLevelMap)) },
@@ -626,6 +670,9 @@ async function editModel(
 				if (value.changed) setOptional(model, "input", value.value);
 				break;
 			}
+			case "limitPreset":
+				await applyModelLimitPreset(ctx, "Model limit preset", [model]);
+				break;
 			case "context": {
 				const value = await promptOptionalInteger(ctx, "Context window", model.contextWindow);
 				if (value.changed) setOptional(model, "contextWindow", value.value);
@@ -674,7 +721,7 @@ async function editModelOverrides(
 		options.push(
 			{ key: "add", label: "+ Add model override" },
 			{ key: "done", label: "Done" },
-			{ key: "cancel", label: "Cancel override changes" },
+			{ key: "cancel", label: "Discard override changes" },
 		);
 		const choice = await selectSearchableKey(ctx, `Model overrides · ${ids.length}`, options);
 		if (choice === undefined || choice === "cancel") {
@@ -856,7 +903,7 @@ async function editHeaders(
 		options.push(
 			{ key: "add", label: "+ Add header" },
 			{ key: "done", label: "Done" },
-			{ key: "cancel", label: "Cancel header changes" },
+			{ key: "cancel", label: "Discard header changes" },
 		);
 		const choice = await selectKey(ctx, `${title} · ${names.length}`, options);
 		if (choice === undefined || choice === "cancel") {
@@ -926,7 +973,7 @@ async function editCompat(
 			{ key: "known", label: "+ Add documented compatibility field" },
 			...(preserved ? [{ key: "preserved", label: `${preserved} undocumented field${preserved === 1 ? "" : "s"} preserved unchanged` }] : []),
 			{ key: "done", label: "Done" },
-			{ key: "cancel", label: "Cancel compatibility changes" },
+			{ key: "cancel", label: "Discard compatibility changes" },
 		);
 		const choice = await selectKey(ctx, `${title} · ${keys.length}`, options);
 		if (choice === undefined || choice === "cancel") {
@@ -938,7 +985,11 @@ async function editCompat(
 		if (choice === "done") return { changed: !jsonEqual(original, working), value: working };
 		if (choice === "known") {
 			const available = COMPAT_FIELDS.filter((field) => !(field in working));
-			const selected = await ctx.ui.select("Documented compatibility field", [...available]);
+			const selected = await selectKey(
+				ctx,
+				"Documented compatibility field",
+				available.map((field) => ({ key: field, label: field })),
+			);
 			if (selected) {
 				const value = await editCompatValue(ctx, selected, undefined);
 				if (value.changed) {
@@ -991,7 +1042,7 @@ async function editThinkingMap(
 		];
 		options.push(
 			{ key: "done", label: "Done" },
-			{ key: "cancel", label: "Cancel thinking-map changes" },
+			{ key: "cancel", label: "Discard thinking-map changes" },
 		);
 		const choice = await selectKey(ctx, "Thinking level mapping · Pi level → provider value", options);
 		if (choice === undefined || choice === "cancel") {
@@ -1017,8 +1068,8 @@ async function editThinkingMap(
 		const level = choice as ThinkingLevel;
 		const action = await selectKey(ctx, `Thinking level · ${level}`, [
 			{ key: "value", label: "Map to provider value" },
-			{ key: "unsupported", label: "Hide this Pi level · null" },
-			{ key: "unset", label: "Use Pi default · remove mapping" },
+			{ key: "unsupported", label: "Hide this Pi level" },
+			{ key: "unset", label: "Use Pi default" },
 			{ key: "back", label: "Back" },
 		]);
 		if (action === "value") {
@@ -1102,8 +1153,8 @@ async function editBulkThinkingMaps(ctx: ExtensionCommandContext, models: ModelE
 		const level = choice as ThinkingLevel;
 		const action = await selectKey(ctx, `Bulk mapping · ${level}`, [
 			{ key: "unchanged", label: "Leave unchanged" },
-			{ key: "default", label: "Use Pi default on selected models" },
-			{ key: "hidden", label: "Hide this Pi level · null" },
+			{ key: "default", label: "Use Pi default" },
+			{ key: "hidden", label: "Hide this Pi level" },
 			{ key: "value", label: "Map to provider value" },
 			{ key: "back", label: "Back" },
 		]);
@@ -1135,7 +1186,7 @@ async function editCost(
 			{ key: "tiers", label: `Pricing tiers     ${working?.tiers?.length ?? 0}` },
 			{ key: "clear", label: "Clear cost configuration" },
 			{ key: "done", label: "Done" },
-			{ key: "cancel", label: "Cancel cost changes" },
+			{ key: "cancel", label: "Discard cost changes" },
 		]);
 		if (choice === undefined || choice === "cancel") {
 			if (jsonEqual(original, working) || (await ctx.ui.confirm("Discard cost changes?", "Unsaved cost changes will be lost."))) {
@@ -1190,7 +1241,7 @@ async function editCostTiers(
 		options.push(
 			{ key: "add", label: "+ Add pricing tier" },
 			{ key: "done", label: "Done" },
-			{ key: "cancel", label: "Cancel tier changes" },
+			{ key: "cancel", label: "Discard tier changes" },
 		);
 		const choice = await selectKey(ctx, `Pricing tiers · ${working.length}`, options);
 		if (choice === undefined || choice === "cancel") {
@@ -1249,7 +1300,7 @@ async function editCostTier(ctx: ExtensionCommandContext, initial: CostTier): Pr
 }
 
 async function chooseApi(ctx: ExtensionCommandContext, title: string, current: string | undefined): Promise<EditResult<string>> {
-	const options: MenuOption<string>[] = [{ key: "unset", label: "Not set / inherit" }];
+	const options: MenuOption<string>[] = [{ key: "unset", label: "Default" }];
 	for (const api of API_CHOICES) options.push({ key: api.value, label: api.label });
 	if (current && !API_CHOICES.some((api) => api.value === current)) options.push({ key: current, label: `Keep current: ${current}` });
 	const selected = await selectKey(ctx, title, options);
@@ -1275,7 +1326,7 @@ async function chooseOptionalBoolean(
 	current: boolean | undefined,
 ): Promise<EditResult<boolean>> {
 	const selected = await selectKey(ctx, title, [
-		{ key: "unset", label: "Not set / inherit" },
+		{ key: "unset", label: "Default" },
 		{ key: "true", label: "True" },
 		{ key: "false", label: "False" },
 	]);
@@ -1289,7 +1340,7 @@ async function chooseInput(
 	current: ModelEntry["input"],
 ): Promise<EditResult<ModelEntry["input"]>> {
 	const selected = await selectKey(ctx, "Input types", [
-		{ key: "unset", label: 'Not set (defaults to ["text"])' },
+		{ key: "unset", label: "Default · text" },
 		{ key: "text", label: "Text only" },
 		{ key: "image", label: "Text + image" },
 	]);
@@ -1435,15 +1486,41 @@ async function promptText(
 	return ctx.ui.custom(createTextInput({ title, initial, placeholder, validate }));
 }
 
+function menuCursorMemoryKey(title: string): string {
+	let key = title;
+	while (true) {
+		const stable = key.replace(/ · unsaved$/, "").replace(/ · \d+(?: selected| models?)?$/, "");
+		if (stable === key) return key;
+		key = stable;
+	}
+}
+
 async function selectKey<T extends string>(
 	ctx: ExtensionCommandContext,
 	title: string,
 	options: readonly MenuOption<T>[],
+	memoryKey = menuCursorMemoryKey(title),
 ): Promise<T | undefined> {
-	const labels = options.map((option) => option.label);
-	const selected = await ctx.ui.select(title, labels);
-	if (selected === undefined) return undefined;
-	return options[labels.indexOf(selected)]?.key;
+	if (ctx.mode !== "tui") {
+		const labels = options.map((option) => option.label);
+		const selected = await ctx.ui.select(title, labels);
+		if (selected === undefined) return undefined;
+		return options[labels.indexOf(selected)]?.key;
+	}
+	const selected = await ctx.ui.custom(
+		createSearchableSelector({
+			title,
+			items: options.map((option) => ({
+				value: option.key,
+				label: option.label,
+				searchText: `${option.key} ${option.label}`,
+			})),
+			initialValue: MENU_CURSOR_MEMORY.get(memoryKey) as T | undefined,
+			maxVisible: Math.min(12, Math.max(1, options.length)),
+		}),
+	);
+	if (selected !== undefined) MENU_CURSOR_MEMORY.set(memoryKey, selected);
+	return selected;
 }
 
 async function selectSearchableKey<T extends string>(
@@ -1451,41 +1528,36 @@ async function selectSearchableKey<T extends string>(
 	title: string,
 	options: readonly MenuOption<T>[],
 ): Promise<T | undefined> {
-	if (ctx.mode !== "tui" || options.length <= SEARCHABLE_MENU_THRESHOLD) return selectKey(ctx, title, options);
-	return ctx.ui.custom(
-		createSearchableSelector({
-			title,
-			items: options.map((option) => ({
-				value: option.key,
-				label: option.label,
-			})),
-		}),
-	);
+	return selectKey(ctx, title, options);
 }
 
 async function selectProviderWorkspaceKey(
 	ctx: ExtensionCommandContext,
 	providerId: string,
+	memoryKey: string,
 	dirty: boolean,
 	options: readonly MenuOption<string>[],
 ): Promise<string | undefined> {
 	const title = `Provider · ${providerId}`;
-	if (ctx.mode !== "tui") return selectKey(ctx, `${title}${dirty ? " · unsaved" : ""}`, options);
-	return ctx.ui.custom(
+	if (ctx.mode !== "tui") return selectKey(ctx, `${title}${dirty ? " · unsaved" : ""}`, options, memoryKey);
+	const selected = await ctx.ui.custom(
 		createSearchableSelector({
 			title,
 			subtitle: dirty
-				? "Unsaved changes · Enter opens a setting · Ctrl+S saves"
-				: "Up to date · Enter opens a setting · Ctrl+S saves",
+				? "Unsaved changes · Enter opens · Ctrl+S saves"
+				: "Up to date · Enter opens · Ctrl+S saves",
 			items: options.map((option) => ({
 				value: option.key,
 				label: option.label,
 				searchText: `${option.key} ${option.label}`,
 			})),
+			initialValue: MENU_CURSOR_MEMORY.get(memoryKey),
 			maxVisible: 12,
 			saveValue: "save",
 		}),
 	);
+	if (selected !== undefined) MENU_CURSOR_MEMORY.set(memoryKey, selected);
+	return selected;
 }
 
 function validateProvider(
@@ -1540,7 +1612,7 @@ function setOptionalRecord<T extends object, K extends keyof T>(target: T, key: 
 }
 
 function formatApi(api: string | undefined): string {
-	return API_CHOICES.find((choice) => choice.value === api)?.label ?? api ?? "not set / inherit";
+	return API_CHOICES.find((choice) => choice.value === api)?.label ?? api ?? "Default";
 }
 
 function summarizeSetupAuthentication(entry: ProviderEntry): string {
@@ -1556,7 +1628,7 @@ function summarizeAuthenticationAdvanced(entry: ProviderEntry): string {
 	const parts: string[] = [];
 	if (entry.oauth === "radius") parts.push("Radius OAuth");
 	if (entry.authHeader !== undefined) parts.push(`Bearer header ${entry.authHeader ? "enabled" : "disabled"}`);
-	return parts.length > 0 ? parts.join(" · ") : "not set / inherit";
+	return parts.length > 0 ? parts.join(" · ") : "Default";
 }
 
 function extractEnvironmentVariable(value: unknown): string | undefined {
@@ -1584,18 +1656,18 @@ function normalizeEnvironmentVariable(value: string): string {
 }
 
 function formatSecret(value: unknown): string {
-	if (typeof value !== "string" || !value) return "not set";
-	if (value.startsWith("!")) return `command: ${truncate(value.slice(1), 32)}`;
-	if (value.includes("$")) return `environment/interpolated: ${truncate(value, 32)}`;
-	return `configured (${value.length} chars)`;
+	if (typeof value !== "string" || !value) return "Not set";
+	if (value.startsWith("!")) return `Command · ${truncate(value.slice(1), 32)}`;
+	if (value.includes("$")) return `Variable · ${truncate(value, 32)}`;
+	return `Literal · ${value.length} chars`;
 }
 
 function formatOptionalBoolean(value: boolean | undefined): string {
-	return value === undefined ? "not set / inherit" : value ? "true" : "false";
+	return value === undefined ? "Default" : value ? "true" : "false";
 }
 
 function formatInput(value: ModelEntry["input"]): string {
-	if (!Array.isArray(value)) return "not set / default text";
+	if (!Array.isArray(value)) return "Default · text";
 	return value.includes("image") ? "text + image" : "text";
 }
 
@@ -1634,9 +1706,9 @@ function validateProviderId(id: string, existingIds: readonly string[], currentI
 }
 
 function formatThinkingMapping(level: ThinkingLevel, value: string | null | undefined): string {
-	if (value === null) return "hidden · null";
+	if (value === null) return "Hidden";
 	if (typeof value === "string") return `→ ${value}`;
-	if (level === "xhigh" || level === "max") return "not offered · add mapping";
+	if (level === "xhigh" || level === "max") return "Unmapped";
 	return "Pi default";
 }
 
@@ -1662,9 +1734,9 @@ function clearThinkingMap(map: ThinkingLevelMap): void {
 }
 
 function formatBulkThinkingAction(action: BulkThinkingAction | undefined): string {
-	if (!action || action.kind === "unchanged") return "leave unchanged";
+	if (!action || action.kind === "unchanged") return "Unchanged";
 	if (action.kind === "default") return "Pi default";
-	if (action.kind === "hidden") return "hidden · null";
+	if (action.kind === "hidden") return "Hidden";
 	return `→ ${action.value}`;
 }
 
@@ -1695,6 +1767,13 @@ function formatRate(value: number | undefined, partial: boolean): string {
 function countLabel(value: unknown, noun: string): string {
 	const count = isRecord(value) ? Object.keys(value).length : 0;
 	return count === 0 ? "none" : `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+function summarizeModelLimitPreset(model: Pick<ModelEntry, "contextWindow" | "maxTokens">): string {
+	if (model.contextWindow === undefined && model.maxTokens === undefined) return "Pi fallback";
+	return MODEL_LIMIT_PRESETS.find(
+		(preset) => preset.contextWindow === model.contextWindow && preset.maxTokens === model.maxTokens,
+	)?.label ?? "Custom";
 }
 
 function summarizeModel(model: ModelEntry): string {

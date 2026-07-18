@@ -53,8 +53,8 @@ const SUBCOMMAND_DESCRIPTIONS: Record<(typeof SUBCOMMANDS)[number], string> = {
 	list: "Browse providers",
 	edit: "Edit a provider",
 	remove: "Remove a provider",
-	reload: "Reload models.json",
-	probe: "Fetch remote models",
+	reload: "Reload providers",
+	probe: "Fetch models",
 };
 
 async function completeArguments(prefix: string): Promise<AutocompleteItem[] | null> {
@@ -136,13 +136,14 @@ async function openProviderReference(providerRef: string, ctx: ExtensionCommandC
 
 async function openProvidersMenu(ctx: ExtensionCommandContext, initialQuery?: string): Promise<void> {
 	let query = initialQuery;
+	let cursorValue: string | undefined;
 	while (true) {
 		const providers = await listProviders();
 		const items = [
 			{
 				value: "action:add",
 				label: "+ Add provider",
-				description: "Guided connection setup, then model discovery",
+				description: "Create a new connection",
 				searchText: "add create new provider connection",
 			},
 			...providers.map(({ id, entry }) => ({
@@ -153,9 +154,9 @@ async function openProvidersMenu(ctx: ExtensionCommandContext, initialQuery?: st
 			})),
 			{
 				value: "action:reload",
-				label: "Reload registry",
-				description: "Re-read ~/.pi/agent/models.json",
-				searchText: "reload refresh models json registry",
+				label: "Reload providers",
+				description: "Refresh the provider list",
+				searchText: "reload refresh providers models",
 			},
 		];
 		const filteredItems = query ? fuzzyFilter(items, query, (item) => item.searchText) : items;
@@ -164,23 +165,31 @@ async function openProvidersMenu(ctx: ExtensionCommandContext, initialQuery?: st
 			ctx.mode === "tui"
 				? await ctx.ui.custom(
 						createSearchableSelector({
-							title: "Custom model providers",
+							title: "Model providers",
 							subtitle:
 								providers.length === 0
-									? "No providers configured yet. Start with Add provider."
-									: `${providers.length} provider${providers.length === 1 ? "" : "s"} · Enter opens settings`,
+									? "No providers yet. Start with Add provider."
+									: `${providers.length} provider${providers.length === 1 ? "" : "s"} · Enter opens`,
 							items,
 							initialQuery: query,
+							initialValue: cursorValue,
 							maxVisible: 11,
 							emptyMessage: "No matching providers or actions",
 						}),
 					)
-				: await selectNativeItem(ctx, "Custom model providers", visibleItems);
+				: await selectNativeItem(ctx, "Model providers", visibleItems);
 		query = undefined;
 		if (selected === undefined) return;
-		if (selected === "action:add") await addProvider(ctx);
-		else if (selected === "action:reload") await reloadModels(ctx);
-		else if (selected.startsWith("provider:")) await editExistingProvider(selected.slice("provider:".length), ctx);
+		cursorValue = selected;
+		if (selected === "action:add") {
+			const providerId = await addProvider(ctx);
+			if (providerId) cursorValue = `provider:${providerId}`;
+		} else if (selected === "action:reload") {
+			await reloadModels(ctx);
+		} else if (selected.startsWith("provider:")) {
+			const providerId = await editExistingProvider(selected.slice("provider:".length), ctx);
+			if (providerId) cursorValue = `provider:${providerId}`;
+		}
 	}
 }
 
@@ -207,7 +216,7 @@ async function editExistingProvider(
 ): Promise<string | undefined> {
 	const entry = await getProvider(providerId);
 	if (!entry) {
-		ctx.ui.notify(`Provider "${providerId}" was not found in models.json.`, "warning");
+		ctx.ui.notify(`Provider "${providerId}" not found.`, "warning");
 		return undefined;
 	}
 	const result = await editProvider(ctx, {
@@ -219,7 +228,7 @@ async function editExistingProvider(
 			commitModelsChange(
 				ctx,
 				() => saveProvider(originalId, id, updated),
-				`Saved provider "${id}" and reloaded the model registry.`,
+				`Saved provider "${id}".`,
 			),
 	});
 	if (result.kind === "discover") {
@@ -239,12 +248,12 @@ async function confirmAndRemove(
 	confirmationAlreadyGiven = false,
 ): Promise<boolean> {
 	if (!(await getProvider(providerId))) {
-		ctx.ui.notify(`Provider "${providerId}" was not found in models.json.`, "warning");
+		ctx.ui.notify(`Provider "${providerId}" not found.`, "warning");
 		return false;
 	}
 	if (
 		!confirmationAlreadyGiven &&
-		!(await ctx.ui.confirm(`Remove "${providerId}"?`, "This removes its models.json entry."))
+		!(await ctx.ui.confirm(`Remove provider "${providerId}"?`, `Provider "${providerId}" and its models will be removed.`))
 	)
 		return false;
 	const result = await commitModelsChange(
@@ -261,22 +270,22 @@ async function confirmAndRemove(
 async function reloadModels(ctx: ExtensionCommandContext): Promise<void> {
 	await ctx.modelRegistry.refresh();
 	const error = ctx.modelRegistry.getError();
-	if (error) ctx.ui.notify(`models.json reload failed:\n${truncate(error, 1_500)}`, "error");
-	else ctx.ui.notify("Reloaded ~/.pi/agent/models.json.", "info");
+	if (error) ctx.ui.notify(`Reload failed:\n${truncate(error, 1_500)}`, "error");
+	else ctx.ui.notify("Reloaded providers.", "info");
 }
 
 async function probeFlow(providerId: string, ctx: ExtensionCommandContext): Promise<void> {
 	while (true) {
 		const entry = await getProvider(providerId);
 		if (!entry) {
-			ctx.ui.notify(`Provider "${providerId}" was not found in models.json.`, "warning");
+			ctx.ui.notify(`Provider "${providerId}" not found.`, "warning");
 			return;
 		}
 		const inheritedModel = ctx.modelRegistry.getAll().find((model) => model.provider === providerId);
 		const baseUrl = typeof entry.baseUrl === "string" ? entry.baseUrl : inheritedModel?.baseUrl;
 		const api = typeof entry.api === "string" ? entry.api : inheritedModel?.api;
 		if (!baseUrl || !api) {
-			const action = await selectProbeFailureAction(ctx, "Configure an effective Base URL and API protocol before fetching models.");
+			const action = await selectProbeFailureAction(ctx, "Set Base URL and API protocol before fetching models.");
 			if (action === "edit") await editExistingProvider(providerId, ctx);
 			if (action === "manual") await addManualModels(providerId, ctx);
 			if (action === "retry") continue;
@@ -284,7 +293,7 @@ async function probeFlow(providerId: string, ctx: ExtensionCommandContext): Prom
 		}
 
 		if (api === "anthropic-messages") {
-			ctx.ui.notify("Anthropic Messages has no public model-list endpoint. Add model IDs manually.", "info");
+			ctx.ui.notify("Anthropic Messages has no catalog endpoint. Add model IDs manually.", "info");
 			await addManualModels(providerId, ctx);
 			return;
 		}
@@ -343,10 +352,10 @@ async function probeFlow(providerId: string, ctx: ExtensionCommandContext): Prom
 		const existing = new Set(Array.isArray(entry.models) ? entry.models.map((model) => model.id) : []);
 		const available = result.models.filter((model) => !existing.has(model.id));
 		if (available.length === 0) {
-			ctx.ui.notify("The remote catalog has no models that are not already configured.", "info");
+			ctx.ui.notify("All fetched models are already configured.", "info");
 			return;
 		}
-		if (result.truncated) ctx.ui.notify("The remote catalog exceeded the 2,000-model limit and was truncated.", "warning");
+		if (result.truncated) ctx.ui.notify("Fetched more than 2,000 models; only the first 2,000 are shown.", "warning");
 
 		let selectedIds: string[];
 		if (ctx.mode === "tui") {
@@ -370,12 +379,17 @@ async function selectProbeFailureAction(
 	ctx: ExtensionCommandContext,
 	message: string,
 ): Promise<"retry" | "edit" | "manual" | "back" | undefined> {
-	return selectNativeItem(ctx, message, [
-		{ value: "retry", label: "Retry" },
-		{ value: "edit", label: "Edit provider settings" },
-		{ value: "manual", label: "Add model IDs manually" },
-		{ value: "back", label: "Back" },
-	]);
+	return selectNativeItem(
+		ctx,
+		message,
+		[
+			{ value: "retry", label: "Retry" },
+			{ value: "edit", label: "Edit provider" },
+			{ value: "manual", label: "Add manually" },
+			{ value: "back", label: "Back" },
+		],
+		"probe-failure",
+	);
 }
 
 async function addManualModels(providerId: string, ctx: ExtensionCommandContext): Promise<void> {
@@ -484,11 +498,27 @@ function providerSearchText(provider: { id: string; entry: ProviderEntry }): str
 	}`;
 }
 
+const nativeSelectorMemory = new Map<string, string>();
+
 async function selectNativeItem<T extends string>(
 	ctx: ExtensionCommandContext,
 	title: string,
 	items: ReadonlyArray<{ value: T; label: string; description?: string }>,
+	memoryKey = title,
 ): Promise<T | undefined> {
+	if (ctx.mode === "tui") {
+		const remembered = nativeSelectorMemory.get(memoryKey) as T | undefined;
+		const selected = await ctx.ui.custom(
+			createSearchableSelector({
+				title,
+				items,
+				initialValue: remembered,
+				maxVisible: Math.min(10, Math.max(1, items.length)),
+			}),
+		);
+		if (selected !== undefined) nativeSelectorMemory.set(memoryKey, selected);
+		return selected;
+	}
 	const labels = items.map((item) => (item.description ? `${item.label} — ${item.description}` : item.label));
 	const selected = await ctx.ui.select(title, labels);
 	if (selected === undefined) return undefined;

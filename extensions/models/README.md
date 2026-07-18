@@ -15,10 +15,10 @@ Provider display name.
    ├─ + Add provider
    │  ├─ Guided setup: ID → Base URL → API → authentication
    │  ├─ Review and create
-   │  ├─ Fetch the remote catalog
+   │  ├─ Fetch from server
    │  └─ Models workspace
    ├─ <Provider ID> → Provider workspace
-   └─ Reload registry
+   └─ Reload providers
 ```
 
 Selecting a Provider opens its workspace directly; there is no intermediate
@@ -42,8 +42,14 @@ lets every value be corrected before the first write.
 ## Provider and model workspaces
 
 Provider edits share one in-memory draft. Ctrl+S or **Save changes** writes it
-atomically and reloads Pi's model registry. A clean Ctrl+S is a no-op. Leaving
-a dirty Provider offers save, discard, or continue editing.
+atomically and refreshes Pi's available models. A clean Ctrl+S is a no-op.
+Leaving a dirty Provider offers save, discard, or continue editing.
+
+Every TUI selector wraps in both directions: Up on the first row moves to the
+last row, and Down on the last row moves to the first. Parent menus remember
+their cursor when a child screen closes. The Models workspace also remembers
+the current model, follows a renamed model ID, and chooses the nearest remaining
+row after removal.
 
 The Models workspace is list-first and teaches its actions in two short hint
 lines instead of hiding them behind nested menus:
@@ -64,6 +70,24 @@ cost, and compatibility in one place.
 
 Bulk editing applies reasoning, input, context, max output, and thinking maps
 to the selected models. Clearing a field is distinct from leaving it unchanged.
+
+## Model limits
+
+Leaving `contextWindow` or `maxTokens` unset still uses Pi's documented
+fallbacks: 128,000 context and 16,384 output. The manager does not silently
+replace those fallbacks, because real limits vary by model, provider, and
+gateway. Instead, single-model and bulk editors offer explicit presets:
+
+- **Modern** — 262,144 context / 128,000 output;
+- **Long context** — 1,000,000 context / 128,000 output;
+- **Large output** — 1,000,000 context / 384,000 output;
+- **Pi fallback** — clear both overrides.
+
+This choice follows a models.dev API snapshot reviewed during the redesign:
+across 5,697 catalog entries, median context was about 204,800 tokens, 62% had
+at least 200,000 context, and 128,000 was the most common single output limit.
+384,000 output exists but is not universal, so it remains an opt-in preset.
+Provider-specific limits remain authoritative.
 
 The manager does not promote undocumented model-level `baseUrl` or `headers`.
 Existing unknown fields remain untouched. The Provider workspace keeps
@@ -123,9 +147,17 @@ workflow.
 
 Writes read the complete document first, preserve unrelated and unknown fields,
 use atomic replacement, and restore the exact prior bytes if Pi rejects the
-new registry configuration. Provider IDs must be nonempty and cannot contain
-`/` (Pi reserves `provider/model` references); the manager imposes no extra
-ASCII or length restriction.
+new configuration. Provider IDs must be nonempty and cannot contain `/` (Pi
+reserves `provider/model` references); the manager imposes no extra ASCII or
+length restriction.
+
+A Provider saved by this extension gets stable, readable field order. Known
+Provider fields begin with `baseUrl`, `api`, `apiKey`, and `models`. Known model
+fields begin with `id`, `name`, `reasoning`, `thinkingLevelMap`, `input`,
+`contextWindow`, and `maxTokens`. Thinking levels are ordered from `off` through
+`max`; input types are ordered as text then image. Every unknown field is
+appended unchanged, and Providers that were not edited retain their existing
+object order.
 
 ## Files
 
