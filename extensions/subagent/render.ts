@@ -119,6 +119,10 @@ export function renderSubagentResult(
 	if (options.expanded) return expandedMarkdown(text);
 
 	const summary = theme.fg("accent", summarizeDetails(result.details, text));
-	const hint = `${theme.fg("muted", "(")}${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+	const viewHint =
+		result.details?.action === "spawn" || result.details?.action === "send"
+			? theme.fg("dim", "alt+o view · ")
+			: "";
+	const hint = `${theme.fg("muted", "(")}${viewHint}${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
 	return new Text(`${summary}\n${hint}`, 0, 0);
 }

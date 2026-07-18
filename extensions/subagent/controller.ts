@@ -427,6 +427,7 @@ export class SubagentController implements SubagentPanelHost {
 
 		this.panelOpen = true;
 		try {
+			const startId = initialId ?? this.mostRelevantId();
 			await ctx.ui.custom<void>(
 				(tui, theme, _keybindings, done) => {
 					const panel = new SubagentPanel({
@@ -434,7 +435,7 @@ export class SubagentController implements SubagentPanelHost {
 						theme,
 						host: this,
 						done,
-						initialId,
+						...(startId ? { initialId: startId } : {}),
 					});
 					this.panel = panel;
 					return panel;
@@ -582,20 +583,6 @@ export class SubagentController implements SubagentPanelHost {
 		}
 
 		return `${record.id} is already ${record.status}.`;
-	}
-
-	clearFinished(): string {
-		const targets = [...this.records.values()].filter((record) =>
-			isTerminalStatus(record.status),
-		);
-		if (!targets.length) return "No finished subagents to clear.";
-		for (const record of targets) {
-			this.removeFromQueue(record.id);
-			this.releaseSession(record);
-			this.records.delete(record.id);
-		}
-		this.stateChanged();
-		return `Cleared ${targets.length} finished record${targets.length === 1 ? "" : "s"}.`;
 	}
 
 	async dispose(): Promise<void> {

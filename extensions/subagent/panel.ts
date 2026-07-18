@@ -1,4 +1,4 @@
-/** Keyboard-focused manager overlay: worker list and live transcript views. */
+/** Keyboard-focused transcript overlay for background subagent workers. */
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
 	type Component,
@@ -101,8 +101,6 @@ export class SubagentPanel implements Component {
 	private readonly host: SubagentPanelHost;
 	private readonly done: () => void;
 	private readonly input = new Input();
-	private view: "list" | "detail" = "list";
-	private selectedIndex = 0;
 	private selectedId: string | undefined;
 	private scrollFromBottom = 0;
 	private sendMode: SendMode = "steer";
@@ -124,17 +122,13 @@ export class SubagentPanel implements Component {
 		this.input.onSubmit = () => this.submitOrRestart();
 
 		const snapshots = sortSnapshots(this.host.getSnapshots());
-		const initialId =
-			options.initialId ??
-			(snapshots.length === 1 ? snapshots[0]?.id : undefined);
-		if (initialId) {
-			const index = snapshots.findIndex(
-				(snapshot) => snapshot.id === initialId,
-			);
-			if (index >= 0) {
-				this.selectedIndex = index;
-				this.openDetail(initialId);
-			}
+		const initial =
+			(options.initialId &&
+				snapshots.find((snapshot) => snapshot.id === options.initialId)) ||
+			snapshots[0];
+		if (initial) {
+			this.selectedId = initial.id;
+			this.host.markViewed(initial.id);
 		}
 	}
 
@@ -143,100 +137,7 @@ export class SubagentPanel implements Component {
 	}
 
 	handleInput(data: string): void {
-		if (this.view === "list") {
-			this.handleListInput(data);
-			return;
-		}
-		this.handleDetailInput(data);
-	}
-
-	invalidate(): void {
-		this.input.invalidate();
-	}
-
-	dispose(): void {
-		this.disposed = true;
-		this.stopTimer();
-	}
-
-	render(width: number): string[] {
-		const safeWidth = Math.max(4, width);
-		this.syncTimer();
-		return this.view === "list"
-			? this.renderList(safeWidth)
-			: this.renderDetail(safeWidth);
-	}
-
-	// ---------------------------------------------------------------- input
-
-	private handleListInput(data: string): void {
-		const snapshots = sortSnapshots(this.host.getSnapshots());
 		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
-			this.close();
-			return;
-		}
-		if (matchesKey(data, "up") || data === "k") {
-			this.selectedIndex = Math.max(0, this.selectedIndex - 1);
-			this.requestRender();
-			return;
-		}
-		if (matchesKey(data, "down") || data === "j") {
-			this.selectedIndex = Math.min(
-				Math.max(0, snapshots.length - 1),
-				this.selectedIndex + 1,
-			);
-			this.requestRender();
-			return;
-		}
-		if (matchesKey(data, "home")) {
-			this.selectedIndex = 0;
-			this.requestRender();
-			return;
-		}
-		if (matchesKey(data, "end")) {
-			this.selectedIndex = Math.max(0, snapshots.length - 1);
-			this.requestRender();
-			return;
-		}
-		if (/^[1-9]$/.test(data)) {
-			const target = snapshots[Number(data) - 1];
-			if (target) {
-				this.selectedIndex = Number(data) - 1;
-				this.openDetail(target.id);
-			}
-			return;
-		}
-		if (matchesKey(data, "enter") || matchesKey(data, "return")) {
-			const selected = snapshots[this.selectedIndex];
-			if (selected) this.openDetail(selected.id);
-			return;
-		}
-		if (data === "x") {
-			const selected = snapshots[this.selectedIndex];
-			if (selected) this.runAction(() => this.host.stopAgent(selected.id));
-			return;
-		}
-		if (data === "r") {
-			const selected = snapshots[this.selectedIndex];
-			if (selected) this.runAction(() => this.host.restartAgent(selected.id));
-			return;
-		}
-		if (data === "c") {
-			this.feedback = this.host.clearFinished();
-			this.requestRender();
-			return;
-		}
-	}
-
-	private handleDetailInput(data: string): void {
-		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+l")) {
-			this.view = "list";
-			this.feedback = "";
-			this.input.setValue("");
-			this.requestRender();
-			return;
-		}
-		if (matchesKey(data, "ctrl+c")) {
 			this.close();
 			return;
 		}
@@ -255,18 +156,14 @@ export class SubagentPanel implements Component {
 			return;
 		}
 		if (matchesKey(data, "pageUp")) {
-			this.scrollFromBottom += Math.max(
-				4,
-				Math.floor(this.detailBodyRows() / 2),
-			);
+			this.scrollFromBottom += this.halfPage();
 			this.requestRender();
 			return;
 		}
 		if (matchesKey(data, "pageDown")) {
 			this.scrollFromBottom = Math.max(
 				0,
-				this.scrollFromBottom -
-					Math.max(4, Math.floor(this.detailBodyRows() / 2)),
+				this.scrollFromBottom - this.halfPage(),
 			);
 			this.requestRender();
 			return;
@@ -292,6 +189,23 @@ export class SubagentPanel implements Component {
 		this.requestRender();
 	}
 
+	invalidate(): void {
+		this.input.invalidate();
+	}
+
+	dispose(): void {
+		this.disposed = true;
+		this.stopTimer();
+	}
+
+	render(width: number): string[] {
+		const safeWidth = Math.max(4, width);
+		this.syncTimer();
+		return this.renderTranscriptView(safeWidth);
+	}
+
+	// ---------------------------------------------------------------- state
+
 	private cycleAgent(step: number): void {
 		const snapshots = sortSnapshots(this.host.getSnapshots());
 		if (snapshots.length < 2) return;
@@ -299,11 +213,16 @@ export class SubagentPanel implements Component {
 			(snapshot) => snapshot.id === this.selectedId,
 		);
 		const nextIndex =
-			(currentIndex + step + snapshots.length) % snapshots.length;
+			currentIndex < 0
+				? 0
+				: (currentIndex + step + snapshots.length) % snapshots.length;
 		const next = snapshots[nextIndex];
 		if (next) {
-			this.selectedIndex = nextIndex;
-			this.openDetail(next.id);
+			this.selectedId = next.id;
+			this.scrollFromBottom = 0;
+			this.feedback = "";
+			this.host.markViewed(next.id);
+			this.requestRender();
 		}
 	}
 
@@ -314,20 +233,23 @@ export class SubagentPanel implements Component {
 		this.done();
 	}
 
-	private openDetail(id: string): void {
-		this.selectedId = id;
-		this.view = "detail";
-		this.scrollFromBottom = 0;
-		this.feedback = "";
-		this.host.markViewed(id);
-		this.requestRender();
+	private selectedSnapshot(): SubagentSnapshot | undefined {
+		const snapshots = this.host.getSnapshots();
+		return (
+			snapshots.find((snapshot) => snapshot.id === this.selectedId) ??
+			sortSnapshots(snapshots)[0]
+		);
 	}
 
-	private selectedSnapshot(): SubagentSnapshot | undefined {
-		if (!this.selectedId) return undefined;
-		return this.host
-			.getSnapshots()
-			.find((snapshot) => snapshot.id === this.selectedId);
+	private halfPage(): number {
+		return Math.max(4, Math.floor(this.bodyRows() / 2));
+	}
+
+	private bodyRows(): number {
+		return Math.max(
+			5,
+			Math.min(20, Math.floor(this.tui.terminal.rows * 0.72) - 8),
+		);
 	}
 
 	// -------------------------------------------------------------- actions
@@ -442,173 +364,25 @@ export class SubagentPanel implements Component {
 		return ` ${this.theme.fg("dim", "─".repeat(Math.max(1, width - 4)))}`;
 	}
 
-	private listBodyRows(): number {
-		return Math.max(
-			4,
-			Math.min(16, Math.floor(this.tui.terminal.rows * 0.72) - 9),
-		);
-	}
-
-	private detailBodyRows(): number {
-		return Math.max(
-			5,
-			Math.min(18, Math.floor(this.tui.terminal.rows * 0.72) - 12),
-		);
-	}
-
-	// ----------------------------------------------------------- list view
-
-	private renderList(width: number): string[] {
-		const snapshots = sortSnapshots(this.host.getSnapshots());
-		this.selectedIndex = Math.min(
-			this.selectedIndex,
-			Math.max(0, snapshots.length - 1),
-		);
-		const config = this.host.getConfig();
-		const running = snapshots.filter((snapshot) =>
-			isActiveStatus(snapshot.status),
-		).length;
-		const queued = snapshots.filter(
-			(snapshot) => snapshot.status === "queued",
-		).length;
-		const unread = snapshots.filter((snapshot) => snapshot.unread).length;
-		const summary = [
-			running ? `${running} running` : "",
-			queued ? `${queued} queued` : "",
-			unread ? `${unread} unread` : "",
-		]
-			.filter(Boolean)
-			.join(" · ");
-		const lines: string[] = [
-			` ${this.theme.fg("toolTitle", this.theme.bold("Subagents"))} ${this.theme.fg("dim", summary || "idle")}  ${this.theme.fg("dim", `${snapshots.length}/${config.maxAgents}`)}`,
-			this.divider(width),
-		];
-
-		if (!snapshots.length) {
-			lines.push(
-				` ${this.theme.fg("muted", "No background subagents yet.")}`,
-				"",
-				` ${this.theme.fg("dim", "Ask the model to delegate work with the")}`,
-				` ${this.theme.fg("dim", "subagent tool, e.g. \"spawn an explorer to")}`,
-				` ${this.theme.fg("dim", "map the auth flow\". /subagent configures")}`,
-				` ${this.theme.fg("dim", "profile model/thinking overrides.")}`,
-			);
-		} else {
-			const visibleRows = this.listBodyRows();
-			const rowsPerAgent = 2;
-			const agentWindow = Math.max(1, Math.floor(visibleRows / rowsPerAgent));
-			const windowStart = Math.max(
-				0,
-				Math.min(
-					this.selectedIndex - Math.floor(agentWindow / 2),
-					snapshots.length - agentWindow,
-				),
-			);
-			for (
-				let index = windowStart;
-				index < Math.min(snapshots.length, windowStart + agentWindow);
-				index++
-			) {
-				const snapshot = snapshots[index];
-				if (!snapshot) continue;
-				lines.push(...this.listRow(snapshot, index, width));
-			}
-			if (snapshots.length > agentWindow) {
-				lines.push(
-					` ${this.theme.fg("dim", `${windowStart + 1}-${Math.min(snapshots.length, windowStart + agentWindow)} of ${snapshots.length}`)}`,
-				);
-			}
-		}
-
-		if (this.feedback) {
-			lines.push(
-				` ${this.theme.fg(this.feedback.startsWith("Error:") ? "error" : "dim", this.feedback)}`,
-			);
-		}
-		lines.push(
-			this.divider(width),
-			` ${this.theme.fg("dim", "↑↓ select · Enter view · x stop · r restart · c clear · Esc")}`,
-		);
-		return this.frame(lines, width);
-	}
-
-	private listRow(
-		snapshot: SubagentSnapshot,
-		index: number,
-		width: number,
-	): string[] {
-		const selected = index === this.selectedIndex;
-		const marker = selected ? this.theme.fg("accent", "❯") : " ";
-		const icon = this.statusIcon(snapshot);
-		const label = selected
-			? this.theme.fg("accent", this.theme.bold(snapshot.label))
-			: this.theme.fg("text", snapshot.label);
-		const unreadMark = snapshot.unread
-			? this.theme.fg("warning", " unread")
-			: "";
-
-		const elapsed = formatDuration(
-			snapshot.startedAt,
-			snapshot.endedAt ?? Date.now(),
-		);
-		const statsParts = [
-			elapsed,
-			snapshot.usage.output ? `↓ ${formatTokens(snapshot.usage.output)}` : "",
-		].filter(Boolean);
-		const stats =
-			snapshot.status === "queued" ? "queued" : statsParts.join(" · ");
-		const statsWidth = stats ? visibleWidth(stats) + 2 : 0;
-
-		const innerWidth = width - 2;
-		const leftBudget = Math.max(10, innerWidth - 3 - statsWidth);
-		let left = `${marker} ${icon} ${this.theme.fg("dim", snapshot.id)} ${label}${unreadMark}`;
-		if (innerWidth >= 56) {
-			left += ` ${this.theme.fg("muted", `[${snapshot.agentName}]`)}`;
-		}
-		const leftClipped = truncateToWidth(
-			left,
-			leftBudget,
-			this.theme.fg("dim", "…"),
-		);
-		const gap = Math.max(
-			1,
-			innerWidth - 1 - visibleWidth(leftClipped) - (stats ? visibleWidth(stats) : 0),
-		);
-		const row = `${leftClipped}${stats ? `${" ".repeat(gap)}${this.theme.fg("dim", stats)}` : ""}`;
-
-		const rows = [row];
-		const detailLine = selected
-			? (snapshot.currentActivity ??
-				(snapshot.error
-					? `error: ${snapshot.error}`
-					: snapshot.lastOutput || undefined))
-			: undefined;
-		if (detailLine) {
-			rows.push(
-				`   ${this.theme.fg("dim", "⎿")} ${this.theme.fg(snapshot.error ? "error" : "dim", truncateToWidth(detailLine.replace(/[\r\n\t]+/g, " "), Math.max(8, width - 9), "…"))}`,
-			);
-		}
-		return rows;
-	}
-
-	// --------------------------------------------------------- detail view
-
-	private renderDetail(width: number): string[] {
+	private renderTranscriptView(width: number): string[] {
 		const snapshot = this.selectedSnapshot();
 		if (!snapshot) {
-			this.view = "list";
-			return this.renderList(width);
+			return this.frame(
+				[
+					` ${this.theme.fg("muted", "No background subagents yet.")}`,
+					` ${this.theme.fg("dim", "Ask the model to delegate work with the subagent tool.")}`,
+					` ${this.theme.fg("dim", "Esc close")}`,
+				],
+				width,
+			);
 		}
+		this.selectedId = snapshot.id;
 		// Seeing the transcript counts as reading a completion that lands mid-view.
 		if (snapshot.unread) this.host.markViewed(snapshot.id);
 
 		const innerWidth = Math.max(1, width - 2);
 		const snapshots = sortSnapshots(this.host.getSnapshots());
-		const position = snapshots.findIndex(
-			(item) => item.id === snapshot.id,
-		);
-		const positionText =
-			snapshots.length > 1 ? ` (${position + 1}/${snapshots.length})` : "";
+		const position = snapshots.findIndex((item) => item.id === snapshot.id);
 
 		const statusText = this.theme.fg(
 			STATUS_COLOR[snapshot.status],
@@ -618,23 +392,25 @@ export class SubagentPanel implements Component {
 			snapshot.startedAt,
 			snapshot.endedAt ?? Date.now(),
 		);
-		const stats = formatStats(snapshot.usage);
 		const metaParts = [
 			snapshot.agentName,
 			snapshot.model,
 			elapsed,
-			stats,
+			formatStats(snapshot.usage),
 			snapshot.maxTurns
 				? `turns ${snapshot.usage.turns}/${snapshot.maxTurns}`
 				: "",
 			snapshot.usage.cost ? `$${snapshot.usage.cost.toFixed(2)}` : "",
 			snapshot.runCount > 1 ? `run ${snapshot.runCount}` : "",
 		].filter(Boolean);
+		const counter =
+			snapshots.length > 1
+				? this.theme.fg("dim", `  ${position + 1}/${snapshots.length} ⇥`)
+				: "";
 
 		const lines: string[] = [
-			` ${this.statusIcon(snapshot)} ${this.theme.fg("toolTitle", this.theme.bold(snapshot.label))} ${this.theme.fg("dim", snapshot.id)}  ${statusText}${this.theme.fg("dim", positionText)}`,
+			` ${this.statusIcon(snapshot)} ${this.theme.fg("toolTitle", this.theme.bold(snapshot.label))} ${this.theme.fg("dim", snapshot.id)}  ${statusText}${counter}`,
 			` ${this.theme.fg("dim", metaParts.join(" · "))}`,
-			` ${this.theme.fg("dim", `Task: ${snapshot.task.replace(/[\r\n\t]+/g, " ")}`)}`,
 			this.divider(width),
 		];
 
@@ -643,7 +419,7 @@ export class SubagentPanel implements Component {
 			Math.max(8, innerWidth - 2),
 		);
 		const bodyRows = Math.min(
-			this.detailBodyRows(),
+			this.bodyRows(),
 			Math.max(transcript.length, 3),
 		);
 		const maxOffset = Math.max(0, transcript.length - bodyRows);
@@ -655,7 +431,7 @@ export class SubagentPanel implements Component {
 		for (const line of visible) lines.push(` ${line}`);
 		if (this.scrollFromBottom > 0) {
 			lines.push(
-				` ${this.theme.fg("warning", `▾ ${this.scrollFromBottom} newer lines · ↓ to follow`)}`,
+				` ${this.theme.fg("warning", `▾ ${this.scrollFromBottom} newer lines · ↓/PgDn to follow`)}`,
 			);
 		}
 
@@ -680,19 +456,21 @@ export class SubagentPanel implements Component {
 		}
 
 		const mode = this.inputModeLabel(snapshot);
-		this.input.focused = this.focused && this.view === "detail";
+		this.input.focused = this.focused;
 		const modeWidth = visibleWidth(mode.label) + 3;
 		const [inputLine = ""] = this.input.render(
 			Math.max(1, innerWidth - modeWidth),
 		);
 		lines.push(` ${mode.label} ${inputLine}`);
-		if (this.feedback) {
-			lines.push(
-				` ${this.theme.fg(this.feedback.startsWith("Error:") ? "error" : "dim", this.feedback)}`,
-			);
-		}
 		lines.push(
-			` ${this.theme.fg("dim", mode.hint)}`,
+			` ${
+				this.feedback
+					? this.theme.fg(
+							this.feedback.startsWith("Error:") ? "error" : "dim",
+							this.feedback,
+						)
+					: this.theme.fg("dim", mode.hint)
+			}`,
 		);
 		return this.frame(lines, width);
 	}
@@ -708,24 +486,24 @@ export class SubagentPanel implements Component {
 					: this.theme.fg("warning", "[follow-up]");
 			return {
 				label,
-				hint: "Enter send · ^T mode · Tab agent · ^X stop · Esc back",
+				hint: "Enter send · ^T mode · ↑↓ scroll · Tab agent · ^X stop · Esc",
 			};
 		}
 		if (snapshot.status === "starting" || snapshot.status === "queued") {
 			return {
 				label: this.theme.fg("dim", "[on start]"),
-				hint: "Enter attaches at start · Tab agent · ^X stop · Esc back",
+				hint: "Enter queue · ↑↓ scroll · Tab agent · ^X stop · Esc",
 			};
 		}
 		if (snapshot.status === "completed") {
 			return {
 				label: this.theme.fg("success", "[continue]"),
-				hint: "Enter continues this conversation · Tab agent · Esc back",
+				hint: "Enter continue · ↑↓ scroll · Tab agent · Esc",
 			};
 		}
 		return {
 			label: this.theme.fg("muted", "[restart]"),
-			hint: "Enter restarts fresh (input = new task) · Tab agent · Esc back",
+			hint: "Enter restart (input = new task) · ↑↓ scroll · Tab agent · Esc",
 		};
 	}
 

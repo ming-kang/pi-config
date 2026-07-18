@@ -65,55 +65,39 @@ Excess tasks remain queued and start automatically when a slot opens.
 
 ## TUI
 
+Two surfaces, no redundancy: the footer widget is the passive live list, and
+one focused transcript overlay is where all interaction happens.
+
 ### Footer widget (always visible while workers exist)
 
 A below-editor widget appears automatically on the first spawn and disappears
 when the last record is cleared. Each row shows a pulse spinner (running),
 status icon, id, label, agent profile, the current tool activity (wide
 terminals), and right-aligned `elapsed · ↓ tokens`. Completed-but-unviewed
-workers carry a `*` mark and an `N unread` counter in the hint line. The
-spinner and elapsed times animate only while a worker is active. At most 5
-rows are shown, with a `… +N more` overflow line.
+workers carry a `*` mark. The spinner and elapsed times animate only while a
+worker is active. At most 5 rows are shown, with a `… +N more (alt+o)`
+overflow line.
 
 `ctx.ui.setStatus()` still publishes a compact `N running · M queued · K done`
 summary so the bundled `statusline` extension shows counts without a
 cross-extension import.
 
-### Opening the manager
+### Transcript overlay
 
-- `alt+o` jumps straight into the transcript of the most relevant worker
-  (unread first, then running, then most recently updated).
-- `/subagents [id]` or `ctrl+alt+a` opens the manager list (the shortcut
-  avoids `ctrl+shift+a`, which Windows Terminal reserves for Select All).
-- With exactly one worker, the list is skipped and its transcript opens
-  directly.
-
-The overlay is anchored top-right at 55% width and capped at 72% terminal
-height, so the parent editor, widget, and statusline remain visible.
-
-### List view
-
-`↑/↓` or `j/k` select; `Home`/`End` jump; `1-9` open the Nth row directly;
-`Enter` opens the transcript; `x` stops; `r` restarts; `c` clears finished
-records; `Esc` closes. Rows are sorted running → queued → failed → completed,
-and the selected row shows its live tool activity (or error/last output) on a
-`⎿` sub-line.
-
-### Transcript view
-
-The header shows the pulse spinner/status icon, label, id, status, and a
-`(n/total)` position, with agent profile, resolved model, elapsed, tool-use
-and token stats beneath. The body renders the retained timeline:
-
-- `›` user instructions, `→` tool calls in humanized form (`bash <command>`,
-  `read <path>`, `grep <pattern>`), `⎿` one-line tool-result summaries,
-  `!` errors, `•` system notes, and streaming assistant text.
-- `↑/↓` scroll by line, `PgUp`/`PgDn` by half-page; the view follows the tail
-  until scrolled, then shows `▾ N newer lines · ↓ to follow`.
-- While the worker runs, a live status line shows the spinner, current tool
-  activity, elapsed time, and output tokens.
-- `Tab` / `shift+Tab` cycle directly between workers without returning to the
-  list.
+- `alt+o` opens the most relevant worker (unread first, then running, then
+  most recently updated). `/subagents [id]` and `ctrl+alt+a` do the same,
+  optionally targeting an id. The collapsed spawn result in the main
+  transcript also names `alt+o`.
+- `Tab` / `shift+Tab` cycle between workers; the header shows `n/total ⇥`.
+- `↑`/`↓` scroll by line, `PgUp`/`PgDn` by half page. The view follows the
+  tail until scrolled, then shows `▾ N newer lines · ↓/PgDn to follow`.
+  Mouse wheel scrolling cannot work here: Pi renders into the normal
+  terminal screen without mouse tracking, so the wheel always scrolls the
+  terminal's own scrollback.
+- The header is two lines: status icon/spinner, label, id, status, position;
+  then agent profile, model, elapsed, tool uses, tokens, cost. While running,
+  a live status line above the input shows the current tool activity.
+- `Esc` or `ctrl+c` closes the overlay.
 
 ### Instruction input
 
@@ -128,8 +112,8 @@ The input line is always focused and its mode follows the worker state:
 
 `ctrl+enter` is a shortcut for an immediate follow-up on terminals that can
 distinguish it; `ctrl+t` works everywhere. `ctrl+r` restarts and `ctrl+x`
-stops from the transcript; `Esc` returns to the list and `ctrl+c` closes the
-overlay.
+stops the worker being viewed. Clearing finished records is a model-side
+action (`subagent` action `clear`).
 
 ### Main-transcript rendering
 

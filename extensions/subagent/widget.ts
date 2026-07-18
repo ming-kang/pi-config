@@ -68,13 +68,13 @@ export class SubagentFooterWidget implements Component {
 		if (!snapshots.length) return [];
 
 		const safeWidth = Math.max(20, width);
-		const lines: string[] = [this.headerLine(snapshots, safeWidth)];
+		const lines: string[] = [];
 		for (const snapshot of snapshots.slice(0, MAX_ROWS)) {
 			lines.push(this.agentLine(snapshot, safeWidth));
 		}
 		if (snapshots.length > MAX_ROWS) {
 			lines.push(
-				` ${this.theme.fg("dim", `… +${snapshots.length - MAX_ROWS} more`)}`,
+				` ${this.theme.fg("dim", `… +${snapshots.length - MAX_ROWS} more (alt+o)`)}`,
 			);
 		}
 		return lines;
@@ -93,13 +93,6 @@ export class SubagentFooterWidget implements Component {
 			clearInterval(this.timer);
 			this.timer = undefined;
 		}
-	}
-
-	private headerLine(snapshots: SubagentSnapshot[], width: number): string {
-		const unread = snapshots.filter((snapshot) => snapshot.unread).length;
-		const summary = unread ? `${unread} unread · ` : "";
-		const hint = `${summary}alt+o view · ctrl+alt+a manage`;
-		return ` ${truncateToWidth(this.theme.fg("dim", hint), width - 2)}`;
 	}
 
 	private agentLine(snapshot: SubagentSnapshot, width: number): string {

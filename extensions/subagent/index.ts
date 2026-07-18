@@ -2,17 +2,19 @@
  * subagent — isolated background AgentSession workers with parent feedback.
  *
  * Interaction model (closest Pi-native approximation of Claude Code's
- * background-agent UX): a persistent below-editor widget lists workers with a
- * live pulse spinner, elapsed time, and output tokens; `alt+o` jumps straight
- * into the most relevant worker's transcript; `ctrl+alt+a` / `/subagents`
- * opens the manager; inside the overlay Tab cycles between workers and the
- * inline input steers, follows up, continues, or restarts depending on state.
+ * background-agent UX, kept deliberately minimal): a persistent below-editor
+ * widget lists workers with a live pulse spinner, elapsed time, and output
+ * tokens; `alt+o` / `ctrl+alt+a` / `/subagents` open one focused transcript
+ * overlay (no separate list view — the widget is the list); inside it Tab
+ * cycles workers, ↑↓ scroll, and the inline input steers, follows up,
+ * continues, or restarts depending on worker state.
  *
  * Pi's public TUI API supports focused keyboard overlays plus passive widgets
- * but no footer hit-testing or mouse events, so the widget is informational
- * and the transcript lives in a focused overlay rather than a split pane.
- * Pi's generic custom-tool fallback dumps full retained snapshots, so this
- * extension owns a small private call/result renderer with Ctrl+O expansion.
+ * but no footer hit-testing or mouse events; Pi renders into the normal
+ * terminal screen, so the mouse wheel always scrolls terminal scrollback and
+ * panel scrolling is keyboard-only. Pi's generic custom-tool fallback dumps
+ * full retained snapshots, so this extension owns a small private call/result
+ * renderer with Ctrl+O expansion.
  */
 import type {
 	AgentToolResult,

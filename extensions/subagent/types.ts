@@ -168,6 +168,4 @@ export interface SubagentPanelHost {
 	): Promise<string>;
 	restartAgent(id: string, message?: string): Promise<string>;
 	stopAgent(id: string): Promise<string>;
-	/** Remove all terminal (completed/failed/stopped) records; returns a feedback line. */
-	clearFinished(): string;
 }
