@@ -46,6 +46,7 @@ import {
 	formatTokens,
 	isTerminalStatus,
 	oneLine,
+	truncateText,
 } from "./format.ts";
 import { panelOverlayOptions, SubagentPanel } from "./panel.ts";
 import type {
@@ -120,15 +121,6 @@ function latestAssistantMessage(
 		if (message?.role === "assistant") return message as AssistantMessage;
 	}
 	return undefined;
-}
-
-function truncateText(
-	text: string,
-	maxChars: number,
-	label = "output",
-): string {
-	if (text.length <= maxChars) return text;
-	return `${text.slice(0, maxChars)}\n\n[${label} truncated: ${text.length - maxChars} characters omitted. Use subagent action "read" for the retained snapshot.]`;
 }
 
 function makeWorkerSystemPrompt(agent: AgentDefinition): string {
@@ -1434,35 +1426,36 @@ export class SubagentController implements SubagentPanelHost {
 		notices: CompletionNotice[],
 	): void {
 		if (this.disposed || !notices.length) return;
-		const resultBudget = Math.max(
-			800,
-			Math.floor((COMPLETION_OUTPUT_CHARS - 4_000) / notices.length),
+		const completed = notices.filter(
+			(notice) => notice.status === "completed",
+		).length;
+		const intro = `Subagent batch ${groupId} settled: ${completed}/${notices.length} completed successfully.`;
+		const closing = [
+			"Respond to the user once with a concise synthesis of the whole batch. Do not quote this notification verbatim and do not call subagent read merely to confirm completion.",
+			`Control: use subagent action "read" for a retained snapshot, or "send" to continue/steer a worker; set fresh=true for a new isolated context.`,
+		].join("\n\n");
+		const sectionPrefixes = notices.map((notice) =>
+			[
+				`## ${notice.id} [${notice.status}] ${oneLine(notice.label, 64)} (agent=${oneLine(notice.agentName, 64)})`,
+				`Task: ${oneLine(notice.task, 240)}`,
+				`Stats: ${this.completionStats(notice)}`,
+				"Result:\n",
+			].join("\n\n"),
 		);
-		const sections = notices.map((notice) => {
+		const separator = "\n\n---\n\n";
+		const fixedChars = [intro, ...sectionPrefixes, closing].join(separator).length;
+		const resultBudget = Math.max(
+			0,
+			Math.floor((COMPLETION_OUTPUT_CHARS - fixedChars) / notices.length),
+		);
+		const sections = notices.map((notice, index) => {
 			const succeeded = notice.status === "completed";
 			const rawOutput = succeeded
 				? notice.lastOutput || "(completed without text output)"
 				: notice.error || notice.lastOutput || "(no diagnostics)";
-			return [
-				`## ${notice.id} [${notice.status}] ${notice.label} (agent=${notice.agentName})`,
-				`Task: ${oneLine(notice.task, 500)}`,
-				`Stats: ${this.completionStats(notice)}`,
-				`Result:\n${truncateText(rawOutput, resultBudget, `${notice.id} result`)}`,
-			].join("\n\n");
+			return `${sectionPrefixes[index]}${truncateText(rawOutput, resultBudget, `${notice.id} result`)}`;
 		});
-		const completed = notices.filter(
-			(notice) => notice.status === "completed",
-		).length;
-		const content = truncateText(
-			[
-				`Subagent batch ${groupId} settled: ${completed}/${notices.length} completed successfully.`,
-				...sections,
-				"Respond to the user once with a concise synthesis of the whole batch. Do not quote this notification verbatim and do not call subagent read merely to confirm completion.",
-				`Control: use subagent action "read" for a retained snapshot, or "send" to continue/steer a worker; set fresh=true for a new isolated context.`,
-			].join("\n\n---\n\n"),
-			COMPLETION_OUTPUT_CHARS,
-			"batch completion",
-		);
+		const content = [intro, ...sections, closing].join(separator);
 
 		try {
 			this.pi.sendMessage(
@@ -1496,11 +1489,6 @@ export class SubagentController implements SubagentPanelHost {
 		const rawOutput = succeeded
 			? record.lastOutput || "(completed without text output)"
 			: record.error || record.lastOutput || "(no diagnostics)";
-		const output = truncateText(
-			rawOutput,
-			COMPLETION_OUTPUT_CHARS,
-			"completion output",
-		);
 		const stats = [
 			`${record.usage.toolUses} tool use${record.usage.toolUses === 1 ? "" : "s"}`,
 			`${record.usage.turns} turn${record.usage.turns === 1 ? "" : "s"}`,
@@ -1511,14 +1499,32 @@ export class SubagentController implements SubagentPanelHost {
 		]
 			.filter(Boolean)
 			.join(" · ");
-		const content = [
-			`Subagent ${record.id} (${record.label}, agent=${record.agentName}) ${record.status}.`,
+		const summary = [
+			`Subagent ${record.id} (${oneLine(record.label, 64)}, agent=${oneLine(record.agentName, 64)}) ${record.status}.`,
 			`Task: ${oneLine(record.task, 500)}`,
 			`Stats: ${stats}`,
-			`Result:\n${output}`,
+		];
+		const resultPrefix = "Result:\n";
+		const closing = [
 			"Respond to the user once with a concise synthesis. Do not quote this notification verbatim and do not call subagent read merely to confirm completion.",
 			`Control: use subagent action "read" for its retained snapshot, or "send" to continue/steer it; set fresh=true for a new isolated context.`,
-		].join("\n\n");
+		];
+		const separator = "\n\n";
+		const fixedChars = [
+			...summary,
+			resultPrefix,
+			...closing,
+		].join(separator).length;
+		const output = truncateText(
+			rawOutput,
+			Math.max(0, COMPLETION_OUTPUT_CHARS - fixedChars),
+			"completion output",
+		);
+		const content = [
+			...summary,
+			`${resultPrefix}${output}`,
+			...closing,
+		].join(separator);
 
 		try {
 			this.pi.sendMessage(

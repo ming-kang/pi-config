@@ -24,6 +24,7 @@ import {
 	spinnerFrame,
 	STATUS_COLOR,
 	STATUS_ICON,
+	truncateText,
 } from "./format.ts";
 import type {
 	SubagentPanelHost,
@@ -566,11 +567,11 @@ export class SubagentPanel implements Component {
 		snapshot: SubagentSnapshot,
 		width: number,
 	): string[] {
-		const original = snapshot.lastOutput;
-		const text =
-			original.length <= PANEL_FINAL_OUTPUT_CHARS
-				? original
-				: `${original.slice(0, PANEL_FINAL_OUTPUT_CHARS)}\n\n[Final result truncated in the panel: ${original.length - PANEL_FINAL_OUTPUT_CHARS} characters omitted. Use subagent read for the bounded retained snapshot.]`;
+		const text = truncateText(
+			snapshot.lastOutput,
+			PANEL_FINAL_OUTPUT_CHARS,
+			"final result",
+		);
 		let cached = this.finalMarkdownCache.get(snapshot.id);
 		if (!cached || cached.text !== text) {
 			cached = {

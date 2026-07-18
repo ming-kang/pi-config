@@ -95,6 +95,32 @@ export function oneLine(text: string, maxChars = 160): string {
 		: `${flattened.slice(0, Math.max(1, maxChars - 3))}...`;
 }
 
+/** Truncate to an exact character budget, including the omission notice. */
+export function truncateText(
+	text: string,
+	maxChars: number,
+	label = "output",
+): string {
+	const budget = Math.max(0, Math.floor(maxChars));
+	if (text.length <= budget) return text;
+	if (budget === 0) return "";
+
+	let contentChars = budget;
+	let suffix = "";
+	for (let attempt = 0; attempt < 3; attempt++) {
+		const omitted = text.length - contentChars;
+		suffix = `\n\n[${label} truncated: ${omitted} characters omitted. Use subagent action "read" for the retained snapshot.]`;
+		contentChars = Math.max(0, budget - suffix.length);
+	}
+	if (suffix.length >= budget) {
+		const shortSuffix = `[${label} truncated]`;
+		return shortSuffix.length <= budget
+			? shortSuffix
+			: shortSuffix.slice(0, budget);
+	}
+	return `${text.slice(0, contentChars)}${suffix}`;
+}
+
 export function formatTokens(value: number): string {
 	if (value < 1000) return String(value);
 	if (value < 10_000) return `${(value / 1000).toFixed(1)}k`;
