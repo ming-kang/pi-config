@@ -432,9 +432,6 @@ export class SubagentPanel implements Component {
 				snapshot.model,
 				elapsed,
 				formatStats(snapshot.usage),
-				snapshot.maxTurns
-					? `turns ${snapshot.usage.turns}/${snapshot.maxTurns}`
-					: "",
 				snapshot.usage.cost ? `$${snapshot.usage.cost.toFixed(2)}` : "",
 				snapshot.runCount > 1 ? `run ${snapshot.runCount}` : "",
 			].filter(Boolean);

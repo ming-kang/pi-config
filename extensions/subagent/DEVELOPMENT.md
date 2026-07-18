@@ -69,7 +69,7 @@ project-specific context injection are reference material only.
 
 ### Batch 1 — Remove the broken turn cap
 
-**Status:** pending
+**Status:** complete
 
 Scope:
 
@@ -82,8 +82,8 @@ Scope:
 
 Acceptance:
 
-- `rg maxTurns extensions/subagent` returns no implementation/documentation
-  references.
+- `rg maxTurns extensions/subagent --glob '!DEVELOPMENT.md'` returns no
+  implementation or durable user-facing references.
 - Tool schema no longer exposes `maxTurns`.
 - A turn count represents completed Pi turns, not assistant messages observed
   before tool execution.
@@ -231,7 +231,7 @@ load checks; “runtime” means the behavior was driven through Pi.
 
 | Surface | Static | Runtime | Notes |
 |---|---:|---:|---|
-| Extension/package loads | pending | pending | |
+| Extension/package loads | pass | pending | Batch 1: `pi -ne -e . --list-models --offline` |
 | `spawn` single and batch | pending | pending | |
 | queued/starting/running states | pending | pending | |
 | tool activity start/success/error | pending | pending | |
@@ -259,6 +259,20 @@ load checks; “runtime” means the behavior was driven through Pi.
   `createAgentSession` surface does not expose it; this round removes the bad
   cap rather than adding an upstream dependency.
 - No runtime behavior changed in this checkpoint.
+- Checkpoint commit: `cb3319d` (`docs(subagent): plan optimization round`).
+
+### Batch 1 — turn-cap removal
+
+- Removed `maxTurns` / `turnLimitHit` from the schema, launch specs, records,
+  snapshots, panel, completion notification, prompt guidance, and README.
+- Usage tokens/cost remain aggregated from assistant `message_end`; completed
+  Pi turns are now counted from `turn_end`, after the tool batch.
+- Aborted workers again finalize as failures instead of being relabeled as
+  completed limit hits.
+- Corrected steer copy to say “current tool batch.”
+- Static verification: no `maxTurns` references remain outside this working
+  plan; `git diff --check` passes.
+- Load verification: `pi -ne -e . --list-models --offline` exited successfully.
 
 ## Open risks and rollback notes
 

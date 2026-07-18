@@ -568,7 +568,7 @@ export class SubagentController implements SubagentPanelHost {
 			this.requestPanelRender();
 			return delivery === "followUp"
 				? `Queued — ${record.id} sees it when current work settles.`
-				: `Sent — ${record.id} sees it after the current tool call.`;
+				: `Sent — ${record.id} sees it after the current tool batch.`;
 		}
 
 		if (record.status === "completed") {
@@ -790,7 +790,6 @@ export class SubagentController implements SubagentPanelHost {
 				...(params.thinkingLevel
 					? { thinkingLevel: params.thinkingLevel }
 					: {}),
-				...(params.maxTurns ? { maxTurns: params.maxTurns } : {}),
 			},
 		];
 	}
@@ -911,7 +910,6 @@ export class SubagentController implements SubagentPanelHost {
 					cwd,
 					thinkingLevel,
 					agentScope: scope,
-					...(task.maxTurns ? { maxTurns: task.maxTurns } : {}),
 				},
 				agentDefinition,
 				resolvedModel,
@@ -1008,7 +1006,6 @@ export class SubagentController implements SubagentPanelHost {
 		record.currentActivity = "Starting isolated AgentSession...";
 		record.runCount++;
 		record.unread = false;
-		record.turnLimitHit = false;
 		if (run.fresh) {
 			this.releaseSession(record);
 			record.usage = emptyUsage();
@@ -1045,7 +1042,7 @@ export class SubagentController implements SubagentPanelHost {
 			const finalMessage = latestAssistantMessage(session.messages);
 			const failed =
 				finalMessage?.stopReason === "error" ||
-				(finalMessage?.stopReason === "aborted" && !record.turnLimitHit);
+				finalMessage?.stopReason === "aborted";
 			record.status = failed ? "failed" : "completed";
 			record.error = failed
 				? finalMessage?.errorMessage ||
@@ -1248,7 +1245,6 @@ export class SubagentController implements SubagentPanelHost {
 						this.addTimeline(record, "assistant", text);
 					}
 					record.liveText = "";
-					record.usage.turns++;
 					record.usage.input += message.usage?.input ?? 0;
 					record.usage.output += message.usage?.output ?? 0;
 					record.usage.cacheRead += message.usage?.cacheRead ?? 0;
@@ -1258,24 +1254,13 @@ export class SubagentController implements SubagentPanelHost {
 					record.usage.cost += message.usage?.cost?.total ?? 0;
 					if (message.stopReason === "error" && message.errorMessage)
 						record.error = message.errorMessage;
-					if (
-						record.maxTurns &&
-						!record.turnLimitHit &&
-						record.usage.turns >= record.maxTurns &&
-						(record.status === "running" || record.status === "starting")
-					) {
-						record.turnLimitHit = true;
-						this.addTimeline(
-							record,
-							"system",
-							`Turn limit (${record.maxTurns}) reached; ending this run.`,
-						);
-						void record.session?.abort().catch(() => {
-							// The run finalizer reports the outcome.
-						});
-					}
 					this.requestPanelRender();
 				}
+				break;
+
+			case "turn_end":
+				if (event.message.role === "assistant") record.usage.turns++;
+				this.requestPanelRender();
 				break;
 
 			case "tool_execution_start":
@@ -1356,9 +1341,6 @@ export class SubagentController implements SubagentPanelHost {
 			COMPLETION_OUTPUT_CHARS,
 			"completion output",
 		);
-		const statusLine = record.turnLimitHit
-			? `${record.status} (stopped at the ${record.maxTurns}-turn limit; the result below is its latest state)`
-			: record.status;
 		const stats = [
 			`${record.usage.toolUses} tool use${record.usage.toolUses === 1 ? "" : "s"}`,
 			`${record.usage.turns} turn${record.usage.turns === 1 ? "" : "s"}`,
@@ -1370,7 +1352,7 @@ export class SubagentController implements SubagentPanelHost {
 			.filter(Boolean)
 			.join(" · ");
 		const content = [
-			`Subagent ${record.id} (${record.label}, agent=${record.agentName}) ${statusLine}.`,
+			`Subagent ${record.id} (${record.label}, agent=${record.agentName}) ${record.status}.`,
 			`Task: ${oneLine(record.task, 500)}`,
 			`Stats: ${stats}`,
 			`Result:\n${output}`,
@@ -1724,7 +1706,6 @@ export class SubagentController implements SubagentPanelHost {
 			...(record.currentActivity
 				? { currentActivity: record.currentActivity }
 				: {}),
-			...(record.maxTurns ? { maxTurns: record.maxTurns } : {}),
 			timeline: record.timeline.map((item: TimelineItem) => ({ ...item })),
 			usage: { ...record.usage },
 			...(record.resolvedModel

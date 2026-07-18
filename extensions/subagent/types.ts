@@ -80,8 +80,6 @@ export interface SubagentLaunchSpec {
 	cwd: string;
 	thinkingLevel?: ThinkingLevelName;
 	agentScope: AgentScope;
-	/** Safety cap on assistant turns per run; the run ends as completed when reached. */
-	maxTurns?: number;
 }
 
 export interface PendingRun {
@@ -104,8 +102,6 @@ export interface SubagentRecord extends SubagentLaunchSpec {
 	lastOutput: string;
 	liveText: string;
 	currentActivity?: string;
-	/** Set when the current run was aborted because it reached maxTurns. */
-	turnLimitHit?: boolean;
 	timeline: TimelineItem[];
 	usage: SubagentUsage;
 	pendingRun?: PendingRun;
@@ -133,7 +129,6 @@ export interface SubagentSnapshot {
 	lastOutput: string;
 	liveText: string;
 	currentActivity?: string;
-	maxTurns?: number;
 	timeline: TimelineItem[];
 	usage: SubagentUsage;
 	model?: string;

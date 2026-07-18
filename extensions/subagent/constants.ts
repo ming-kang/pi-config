@@ -37,5 +37,5 @@ export const SUBAGENT_PROMPT_GUIDELINES = [
 	"Choose the `subagent` profile deliberately: `general` may edit, while `explorer` is a built-in read-only reconnaissance profile; omitted model/thinking settings inherit through the configured profile chain.",
 	"Use `subagent` action `list` or `read` only when the user requests progress or the result needs inspection; use `send` to steer or queue a follow-up, and `restart` only when a fresh context is preferable.",
 	"Avoid assigning overlapping edits to multiple `subagent` workers because they share the requested working directory unless the tasks are explicitly coordinated.",
-	"Use `subagent` action `configure`, or `maxConcurrency` on `spawn`, to bound concurrent deployments; set `maxTurns` on a task to cap runaway workers (the run is reported as completed with a turn-limit note when the cap is reached).",
+	"Use `subagent` action `configure`, or `maxConcurrency` on `spawn`, to bound concurrent deployments; queued workers start automatically as slots become available.",
 ];

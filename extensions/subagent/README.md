@@ -39,7 +39,7 @@ The `subagent` tool exposes these actions:
 | `clear` | Dispose and remove terminal records |
 | `configure` | Set session-local `maxConcurrency` and/or `maxAgents` |
 
-`spawn` accepts `agent`, `model`, `thinkingLevel`, `tools`, `cwd`, `label`, and `maxTurns` per task. Use `model: "inherit"` or `thinkingLevel: "inherit"` to force the parent setting for that invocation. An explicit empty `tools` list creates a model-only worker with no tools. `maxTurns` is a safety cap: when a run reaches it, the worker is stopped but reported as completed with a turn-limit note so the parent can decide whether to continue it. The default limits are 3 concurrent and 16 retained agents; hard limits are 8 and 32. Excess tasks remain queued and start automatically when a slot opens.
+`spawn` accepts `agent`, `model`, `thinkingLevel`, `tools`, `cwd`, and `label` per task. Use `model: "inherit"` or `thinkingLevel: "inherit"` to force the parent setting for that invocation. An explicit empty `tools` list creates a model-only worker with no tools. The default limits are 3 concurrent and 16 retained agents; hard limits are 8 and 32. Excess tasks remain queued and start automatically when a slot opens.
 
 ## TUI
 
@@ -68,7 +68,7 @@ The input line is always focused, and Enter always performs the single action th
 
 | State | Mode label | Enter behavior |
 |---|---|---|
-| running | `[send]` | delivered to the worker after its current tool call |
+| running | `[send]` | delivered to the worker after its current tool batch |
 | queued/starting | `[on start]` | attaches the message before the run starts |
 | completed | `[continue]` | continues the existing conversation |
 | failed/stopped | `[rerun]` | reruns fresh — empty input repeats the task, typed text replaces it |
