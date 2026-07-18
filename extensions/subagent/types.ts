@@ -60,6 +60,19 @@ export interface TimelineItem {
 	timestamp: number;
 }
 
+export type ToolActivityStatus = "running" | "succeeded" | "failed";
+
+export interface ToolActivity {
+	id: string;
+	toolName: string;
+	headline: string;
+	summary: string;
+	status: ToolActivityStatus;
+	startedAt: number;
+	endedAt?: number;
+	resultSummary?: string;
+}
+
 export interface SubagentUsage {
 	turns: number;
 	toolUses: number;
@@ -102,6 +115,8 @@ export interface SubagentRecord extends SubagentLaunchSpec {
 	lastOutput: string;
 	liveText: string;
 	currentActivity?: string;
+	activities: ToolActivity[];
+	omittedActivities: number;
 	timeline: TimelineItem[];
 	usage: SubagentUsage;
 	pendingRun?: PendingRun;
@@ -129,6 +144,8 @@ export interface SubagentSnapshot {
 	lastOutput: string;
 	liveText: string;
 	currentActivity?: string;
+	activities: ToolActivity[];
+	omittedActivities: number;
 	timeline: TimelineItem[];
 	usage: SubagentUsage;
 	model?: string;

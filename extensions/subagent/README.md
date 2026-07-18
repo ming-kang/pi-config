@@ -47,7 +47,7 @@ Two surfaces, no redundancy: the footer widget is the passive live list, and one
 
 ### Footer widget (always visible while workers exist)
 
-A below-editor widget appears automatically on the first spawn and disappears when the last record is cleared. Rows keep a stable order — pending/active workers first, finished ones sink below, spawn order within each group — so a row moves at most once, when it finishes, and never trades places because a neighbor produced output more recently. The panel's Tab cycle uses the same order. Each row shows a pulse spinner (running), status icon, id, label, agent profile, the current tool activity (wide terminals), and right-aligned `elapsed · ↓ tokens`. Completed-but-unviewed workers carry a `*` mark. The spinner and elapsed times animate only while a worker is active. At most 5 rows are shown, with a `… +N more (/agents)` overflow line. Until the panel is opened for the first time in a session, a one-time `/agents to view` onboarding line is appended; it disappears the moment the panel is first opened.
+A below-editor widget appears automatically on the first spawn and disappears when the last record is cleared. Rows keep a stable order — pending/active workers first, finished ones sink below, spawn order within each group — so a row moves at most once, when it finishes, and never trades places because a neighbor produced output more recently. The panel's Tab cycle uses the same order. Each row shows a pulse spinner (running), status icon, id, label, agent profile, a semantic current activity such as `Reading code` or `Running verification` (wide terminals), and right-aligned `elapsed · ↓ tokens`. Completed-but-unviewed workers carry a `*` mark. The spinner and elapsed times animate only while a worker is active. At most 5 rows are shown, with a `… +N more (/agents)` overflow line. Until the panel is opened for the first time in a session, a one-time `/agents to view` onboarding line is appended; it disappears the moment the panel is first opened.
 
 The footer widget is the single source of live status, so the extension no longer publishes a separate `ctx.ui.setStatus()` summary into the bundled `statusline` extension — that slot is intentionally left empty pending a future redesign.
 
@@ -57,7 +57,8 @@ The footer widget is the single source of live status, so the extension no longe
 - `Tab` cycles between workers (`shift+Tab` reverses); the hint line shows `Tab next (n/total)` whenever more than one worker exists.
 - `↑`/`↓` scroll by line, `PgUp`/`PgDn` by half page, `Home`/`End` jump to top/tail. The view follows the tail until scrolled, then shows `▾ N newer lines · End to follow`. Mouse wheel scrolling cannot work here: Pi renders into the normal terminal screen without mouse tracking, so the wheel always scrolls the terminal's own scrollback.
 - The header is one line (status, label, id, state) plus a metadata line (profile, model, elapsed, tool uses, tokens, cost) that is dropped on short terminals. While running, a live status line above the input shows the current tool activity, including `Thinking...` while a reasoning model works pre-response and explicit retry start/end transitions.
-- Completed assistant messages render as Markdown with the same theme as the main session (headings, code blocks with syntax highlighting, lists, inline code), reusing Pi's `Markdown` component and `getMarkdownTheme()`. Tool calls, tool results, and user instructions keep their compact one-line prefixes (`→`, `⎿`, `›`). The streaming tail stays plain text until the message completes, since half-written fences and tables re-render unstably. Each completed message caches its rendered lines per width.
+- Tool events render as a bounded `Activity` section with status icons and compact semantic rows such as `Read controller.ts`, `Search "maxTurns"`, `Edit schema.ts · 2 changes`, and `Run git diff --check`; short result summaries appear beneath the corresponding row. User instructions, retry/compaction notices, and errors remain in the chronological conversation updates.
+- A terminal worker renders its latest assistant answer separately under `Result` as Markdown with the same theme as the main session (headings, code blocks with syntax highlighting, lists, inline code), reusing Pi's `Markdown` component and `getMarkdownTheme()`. The streaming tail stays plain text until the message completes, since half-written fences and tables re-render unstably. Extremely large panel results are bounded with an explicit omission notice; model-facing completion and `read` retain their smaller documented budgets.
 - `ctrl+c` follows terminal convention: it stops the worker being viewed if it is active, and closes the overlay otherwise. `Esc` always closes.
 
 The overlay picks its geometry from the terminal size at open time: near-full width below 100 columns, 62% up to 170 columns, and a fixed 104 columns on wider terminals so transcript lines stay readable; percent-based sizes keep tracking live resizes.
@@ -114,7 +115,8 @@ Active workers are session-process resources. `/reload`, `/new`, `/resume`, and 
 
 - `index.ts` — tool/command registration and lifecycle hooks
 - `controller.ts` — scheduling, AgentSession lifecycle, parent notifications, tool actions, and widget lifecycle
-- `panel.ts` — manager overlay: list view and transcript view with the state-aware instruction input
+- `activity.ts` — semantic, bounded summaries for tool calls and results
+- `panel.ts` — manager overlay: activity/conversation/result view with the state-aware instruction input
 - `widget.ts` — persistent below-editor live worker list
 - `render.ts` — compact tool call/result UI with Ctrl+O expansion
 - `format.ts` — shared spinner frames, status icons, duration/token/stat formatting

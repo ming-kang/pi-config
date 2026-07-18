@@ -93,7 +93,7 @@ Acceptance:
 
 ### Batch 2 — Structured activity preview and final result
 
-**Status:** pending
+**Status:** complete
 
 Scope:
 
@@ -234,16 +234,16 @@ load checks; “runtime” means the behavior was driven through Pi.
 | Extension/package loads | pass | pending | Batch 1: `pi -ne -e . --list-models --offline` |
 | `spawn` single and batch | pending | pending | |
 | queued/starting/running states | pending | pending | |
-| tool activity start/success/error | pending | pending | |
-| complete final result | pending | pending | |
-| `read` list and snapshot | pending | pending | |
+| tool activity start/success/error | pass | pending | Batch 2: formatter assertions + typed event mapping |
+| complete final result | pass | pending | Dedicated bounded Markdown `Result` section |
+| `read` list and snapshot | partial | pending | Snapshot includes activity and explicit final result; list unchanged |
 | `send` attach/steer/continue/fresh rerun | pending | pending | |
 | `stop` queued/running | pending | pending | |
 | batch parent notification | pending | pending | |
 | automatic retention eviction | pending | pending | |
 | collapsed/expanded tool rendering | pending | pending | |
-| footer widget | pending | pending | |
-| `/agents` panel and commands | pending | pending | |
+| footer widget | pass | pending | Semantic `currentActivity` source wired; visual check pending |
+| `/agents` panel and commands | pass | pending | Activity/conversation/result renderer type-checked |
 | `/reload`, `/tree`, shutdown cleanup | pending | pending | |
 
 ## Checkpoint log
@@ -273,6 +273,28 @@ load checks; “runtime” means the behavior was driven through Pi.
 - Static verification: no `maxTurns` references remain outside this working
   plan; `git diff --check` passes.
 - Load verification: `pi -ne -e . --list-models --offline` exited successfully.
+- Checkpoint commit: `ec2f7ce` (`fix(subagent): remove broken turn cap`).
+
+### Batch 2 — structured activity and result preview
+
+- Added `activity.ts` with bounded, argument-safe summaries for Pi's built-in
+  tools and short result summaries.
+- Added structured `ToolActivity` records with running/succeeded/failed status,
+  timestamps, result summaries, and explicit omitted-activity accounting.
+- The panel now renders a compact `Activity` section and a separate bounded
+  Markdown `Result`; tool rows no longer depend on raw timeline strings.
+- The footer receives semantic headlines such as `Reading code`, `Applying
+  changes`, and `Running verification` through `currentActivity`.
+- Model-facing `read` now returns explicit `Tool activity`, `Final result` (or
+  latest assistant output), and conversation-update sections within its existing
+  32,000-character budget.
+- Updated README behavior and file ownership notes.
+- Static verification: TypeScript strict no-emit check passed using the installed
+  Pi type declarations; activity formatter assertions covered read/search/edit,
+  command classification, and multi-line result summaries; `git diff --check`
+  passed.
+- Load verification: `pi -ne -e . --list-models --offline` exited successfully.
+- Interactive panel/footer states remain scheduled for the final runtime pass.
 
 ## Open risks and rollback notes
 

@@ -12,11 +12,13 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 
+import { PANEL_FINAL_OUTPUT_CHARS } from "./constants.ts";
 import {
 	formatDuration,
 	formatStats,
 	formatTokens,
 	isActiveStatus,
+	isTerminalStatus,
 	sortSnapshots,
 	SPINNER_INTERVAL_MS,
 	spinnerFrame,
@@ -28,6 +30,7 @@ import type {
 	SubagentSnapshot,
 	TimelineItem,
 	TimelineKind,
+	ToolActivity,
 } from "./types.ts";
 
 /**
@@ -112,6 +115,10 @@ export class SubagentPanel implements Component {
 	 * the cache sound.
 	 */
 	private readonly markdownCache = new WeakMap<TimelineItem, Markdown>();
+	private readonly finalMarkdownCache = new Map<
+		string,
+		{ text: string; component: Markdown }
+	>();
 	private selectedId: string | undefined;
 	private scrollFromBottom = 0;
 	/** True when the last render had more transcript than fits; drives the scroll hint. */
@@ -205,6 +212,9 @@ export class SubagentPanel implements Component {
 
 	invalidate(): void {
 		this.input.invalidate();
+		for (const entry of this.finalMarkdownCache.values()) {
+			entry.component.invalidate();
+		}
 	}
 
 	dispose(): void {
@@ -550,12 +560,98 @@ export class SubagentPanel implements Component {
 		return component.render(Math.max(1, width));
 	}
 
+	private finalMarkdownLines(
+		snapshot: SubagentSnapshot,
+		width: number,
+	): string[] {
+		const original = snapshot.lastOutput;
+		const text =
+			original.length <= PANEL_FINAL_OUTPUT_CHARS
+				? original
+				: `${original.slice(0, PANEL_FINAL_OUTPUT_CHARS)}\n\n[Final result truncated in the panel: ${original.length - PANEL_FINAL_OUTPUT_CHARS} characters omitted. Use subagent read for the bounded retained snapshot.]`;
+		let cached = this.finalMarkdownCache.get(snapshot.id);
+		if (!cached || cached.text !== text) {
+			cached = {
+				text,
+				component: new Markdown(text, 0, 0, getMarkdownTheme()),
+			};
+			this.finalMarkdownCache.set(snapshot.id, cached);
+		}
+		return cached.component.render(Math.max(1, width));
+	}
+
+	private activityIcon(activity: ToolActivity): string {
+		if (activity.status === "running") {
+			return this.theme.fg("accent", spinnerFrame());
+		}
+		if (activity.status === "failed") return this.theme.fg("error", "✗");
+		return this.theme.fg("success", "✓");
+	}
+
+	private renderActivities(
+		snapshot: SubagentSnapshot,
+		width: number,
+	): string[] {
+		const maxVisible = 12;
+		const visible = snapshot.activities.slice(-maxVisible);
+		const omitted =
+			snapshot.omittedActivities +
+			Math.max(0, snapshot.activities.length - visible.length);
+		if (!visible.length && !omitted) return [];
+
+		const lines = [this.theme.fg("muted", this.theme.bold("Activity"))];
+		if (omitted) {
+			lines.push(
+				this.theme.fg("dim", `… ${omitted} earlier tool activities omitted`),
+			);
+		}
+		for (const activity of visible) {
+			const prefix = `${this.activityIcon(activity)} `;
+			const wrapped = wrapPlainLine(
+				activity.summary,
+				Math.max(1, width - visibleWidth(prefix)),
+			);
+			for (let index = 0; index < wrapped.length; index++) {
+				const actualPrefix =
+					index === 0 ? prefix : " ".repeat(visibleWidth(prefix));
+				lines.push(
+					`${actualPrefix}${this.theme.fg(activity.status === "failed" ? "error" : "toolOutput", wrapped[index] ?? "")}`,
+				);
+			}
+			if (activity.resultSummary) {
+				const resultPrefix = "  ⎿ ";
+				const resultLines = wrapPlainLine(
+					activity.resultSummary,
+					Math.max(1, width - visibleWidth(resultPrefix)),
+				);
+				for (let index = 0; index < resultLines.length; index++) {
+					const actualPrefix =
+						index === 0
+							? resultPrefix
+							: " ".repeat(visibleWidth(resultPrefix));
+					lines.push(
+						`${this.theme.fg("dim", actualPrefix)}${this.theme.fg(activity.status === "failed" ? "error" : "dim", resultLines[index] ?? "")}`,
+					);
+				}
+			}
+		}
+		return lines;
+	}
+
 	private renderTranscript(
 		snapshot: SubagentSnapshot,
 		width: number,
 	): string[] {
-		const items: TimelineItem[] = snapshot.timeline.slice(-100);
-		const lines: string[] = [];
+		const terminal = isTerminalStatus(snapshot.status);
+		const items: TimelineItem[] = snapshot.timeline
+			.slice(-100)
+			.filter(
+				(item) =>
+					item.kind !== "tool" &&
+					item.kind !== "toolResult" &&
+					!(terminal && item.kind === "assistant" && item.text === snapshot.lastOutput),
+			);
+		const lines = this.renderActivities(snapshot, width);
 		let previousKind: TimelineKind | undefined;
 		for (const item of items) {
 			if (
@@ -566,8 +662,6 @@ export class SubagentPanel implements Component {
 				lines.push("");
 			}
 			if (item.kind === "assistant") {
-				// Completed assistant messages get the same Markdown treatment as
-				// the main session, indented to keep the transcript hierarchy.
 				for (const line of this.markdownLines(item, Math.max(1, width - 2))) {
 					lines.push(`  ${line}`);
 				}
@@ -590,12 +684,19 @@ export class SubagentPanel implements Component {
 		if (snapshot.liveText) {
 			// The streaming tail stays plain text: half-written markdown (open
 			// fences, partial tables) re-renders unstably frame to frame.
-			if (lines.length && previousKind !== "assistant") lines.push("");
+			if (lines.length) lines.push("");
 			for (const line of wrapPlainLine(
 				snapshot.liveText,
 				Math.max(1, width - 2),
 			)) {
 				lines.push(`  ${this.theme.fg("text", line)}`);
+			}
+		}
+		if (terminal && snapshot.lastOutput) {
+			if (lines.length) lines.push("");
+			lines.push(this.theme.fg("muted", this.theme.bold("Result")));
+			for (const line of this.finalMarkdownLines(snapshot, width)) {
+				lines.push(line);
 			}
 		}
 		if (!lines.length) {

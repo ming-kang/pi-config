@@ -17,6 +17,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 
+import { describeToolCall, summarizeToolResult } from "./activity.ts";
 import { discoverAgents } from "./agents.ts";
 import {
 	getSubagentUserConfigPath,
@@ -24,6 +25,8 @@ import {
 	saveSubagentUserConfig,
 } from "./config.ts";
 import {
+	ACTIVITY_MAX_CHARS,
+	ACTIVITY_MAX_ITEMS,
 	COMPLETION_OUTPUT_CHARS,
 	DEFAULT_MAX_AGENTS,
 	DEFAULT_MAX_CONCURRENCY,
@@ -66,6 +69,7 @@ import type {
 	SubagentUsage,
 	SubagentUserConfig,
 	TimelineItem,
+	ToolActivity,
 	TimelineKind,
 } from "./types.ts";
 import { SubagentFooterWidget } from "./widget.ts";
@@ -124,74 +128,6 @@ function truncateText(
 ): string {
 	if (text.length <= maxChars) return text;
 	return `${text.slice(0, maxChars)}\n\n[${label} truncated: ${text.length - maxChars} characters omitted. Use subagent action "read" for the retained snapshot.]`;
-}
-
-function formatToolCall(toolName: string, args: unknown): string {
-	const record =
-		args && typeof args === "object" ? (args as Record<string, unknown>) : {};
-	const first = (...keys: string[]): string => {
-		for (const key of keys) {
-			const value = record[key];
-			if (typeof value === "string" && value.trim()) return value.trim();
-		}
-		return "";
-	};
-	let detail = "";
-	switch (toolName) {
-		case "bash":
-			detail = first("command", "cmd");
-			break;
-		case "read":
-		case "write":
-		case "edit":
-			detail = first("path", "file_path", "filePath");
-			break;
-		case "grep":
-			detail = [first("pattern"), first("path")].filter(Boolean).join(" in ");
-			break;
-		case "find":
-			detail = [first("pattern", "name"), first("path")]
-				.filter(Boolean)
-				.join(" in ");
-			break;
-		case "ls":
-			detail = first("path") || ".";
-			break;
-		default: {
-			try {
-				detail = JSON.stringify(record);
-			} catch {
-				detail = String(args);
-			}
-			if (detail === "{}") detail = "";
-		}
-	}
-	return detail ? `${toolName} ${oneLine(detail, 160)}` : toolName;
-}
-
-function summarizeToolResult(result: unknown): string {
-	const text = extractToolResultText(result);
-	if (!text) return "";
-	const lines = text.split("\n").filter((line) => line.trim().length > 0);
-	const head = oneLine(lines[0] ?? "", 110);
-	return lines.length > 1 ? `${head} (+${lines.length - 1} lines)` : head;
-}
-
-function extractToolResultText(result: unknown): string {
-	if (!result || typeof result !== "object") return "";
-	const content = (result as { content?: unknown }).content;
-	if (!Array.isArray(content)) return "";
-	return content
-		.filter(
-			(part): part is { type: "text"; text: string } =>
-				Boolean(part) &&
-				typeof part === "object" &&
-				(part as { type?: unknown }).type === "text" &&
-				typeof (part as { text?: unknown }).text === "string",
-		)
-		.map((part) => part.text)
-		.join("\n")
-		.trim();
 }
 
 function makeWorkerSystemPrompt(agent: AgentDefinition): string {
@@ -746,6 +682,8 @@ export class SubagentController implements SubagentPanelHost {
 				unread: false,
 				lastOutput: "",
 				liveText: "",
+				activities: [],
+				omittedActivities: 0,
 				timeline: [],
 				usage: emptyUsage(),
 				pendingInstructions: [],
@@ -1264,30 +1202,29 @@ export class SubagentController implements SubagentPanelHost {
 				break;
 
 			case "tool_execution_start":
-				record.currentActivity = formatToolCall(event.toolName, event.args);
+				this.startToolActivity(
+					record,
+					event.toolCallId,
+					event.toolName,
+					event.args,
+				);
 				record.usage.toolUses++;
-				this.addTimeline(record, "tool", record.currentActivity);
 				this.requestPanelRender();
 				break;
 
 			case "tool_execution_update":
-				record.currentActivity = `${event.toolName} (running)`;
+				// The structured activity created at tool start remains the stable
+				// preview while streaming updates arrive.
 				this.requestPanelRender();
 				break;
 
 			case "tool_execution_end":
-				record.currentActivity = undefined;
-				if (event.isError) {
-					const text = extractToolResultText(event.result);
-					this.addTimeline(
-						record,
-						"error",
-						`${event.toolName} failed${text ? `: ${oneLine(text, 200)}` : ""}`,
-					);
-				} else {
-					const summary = summarizeToolResult(event.result);
-					if (summary) this.addTimeline(record, "toolResult", summary);
-				}
+				this.finishToolActivity(
+					record,
+					event.toolCallId,
+					event.result,
+					event.isError,
+				);
 				this.requestPanelRender();
 				break;
 
@@ -1385,6 +1322,66 @@ export class SubagentController implements SubagentPanelHost {
 				`Subagent ${record.id} ${record.status}: ${record.label}`,
 				record.status === "failed" ? "error" : "info",
 			);
+		}
+	}
+
+	private startToolActivity(
+		record: SubagentRecord,
+		id: string,
+		toolName: string,
+		args: unknown,
+	): void {
+		const description = describeToolCall(toolName, args);
+		const activity: ToolActivity = {
+			id,
+			toolName,
+			headline: description.headline,
+			summary: description.summary,
+			status: "running",
+			startedAt: Date.now(),
+		};
+		record.activities.push(activity);
+		record.currentActivity = description.headline;
+		this.trimActivities(record);
+	}
+
+	private finishToolActivity(
+		record: SubagentRecord,
+		id: string,
+		result: unknown,
+		isError: boolean,
+	): void {
+		const activity = record.activities.findLast((item) => item.id === id);
+		if (activity) {
+			activity.status = isError ? "failed" : "succeeded";
+			activity.endedAt = Date.now();
+			const summary = summarizeToolResult(result);
+			if (summary) activity.resultSummary = summary;
+		}
+		const running = record.activities.findLast(
+			(item) => item.status === "running",
+		);
+		record.currentActivity = running?.headline;
+		this.trimActivities(record);
+	}
+
+	private trimActivities(record: SubagentRecord): void {
+		let characterCount = record.activities.reduce(
+			(total, item) =>
+				total + item.headline.length + item.summary.length + (item.resultSummary?.length ?? 0),
+			0,
+		);
+		while (
+			record.activities.length > ACTIVITY_MAX_ITEMS ||
+			characterCount > ACTIVITY_MAX_CHARS
+		) {
+			const removed = record.activities.shift();
+			if (!removed) break;
+			characterCount -=
+				removed.headline.length +
+				removed.summary.length +
+				(removed.resultSummary?.length ?? 0);
+			record.omittedActivities++;
 		}
 	}
 
@@ -1545,13 +1542,37 @@ export class SubagentController implements SubagentPanelHost {
 			);
 		this.markViewed(record.id);
 
+		const activities = [
+			record.omittedActivities
+				? `... ${record.omittedActivities} earlier tool activities omitted`
+				: "",
+			...record.activities.slice(-120).map((activity) => {
+				const result = activity.resultSummary
+					? ` — ${activity.resultSummary}`
+					: "";
+				return `[${activity.status}] ${activity.summary}${result}`;
+			}),
+		]
+			.filter(Boolean)
+			.join("\n");
 		const timeline = record.timeline
 			.slice(-120)
+			.filter(
+				(item) =>
+					item.kind !== "tool" &&
+					item.kind !== "toolResult" &&
+					!(item.kind === "assistant" && item.text === record.lastOutput),
+			)
 			.map((item) => `[${item.kind}] ${item.text}`)
 			.concat(
 				record.liveText ? [`[assistant-streaming] ${record.liveText}`] : [],
 			)
 			.join("\n");
+		const finalOutput = truncateText(
+			record.lastOutput || "(no final assistant output yet)",
+			Math.floor(READ_OUTPUT_CHARS * 0.7),
+			"final result",
+		);
 		const raw = [
 			`${record.id} [${record.status}] ${record.label}`,
 			`Agent: ${record.agentName} (${record.agentDefinition.source})`,
@@ -1562,8 +1583,12 @@ export class SubagentController implements SubagentPanelHost {
 				? `Current activity: ${record.currentActivity}`
 				: "",
 			record.error ? `Error: ${record.error}` : "",
-			"Timeline:",
-			timeline || record.liveText || "(no output yet)",
+			"Tool activity:",
+			activities || "(no tool activity yet)",
+			record.status === "completed" ? "Final result:" : "Latest assistant output:",
+			finalOutput,
+			"Conversation updates:",
+			timeline || "(no conversation updates yet)",
 		]
 			.filter(Boolean)
 			.join("\n\n");
@@ -1706,6 +1731,8 @@ export class SubagentController implements SubagentPanelHost {
 			...(record.currentActivity
 				? { currentActivity: record.currentActivity }
 				: {}),
+			activities: record.activities.map((activity) => ({ ...activity })),
+			omittedActivities: record.omittedActivities,
 			timeline: record.timeline.map((item: TimelineItem) => ({ ...item })),
 			usage: { ...record.usage },
 			...(record.resolvedModel
