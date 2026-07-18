@@ -1,9 +1,8 @@
 # Subagent optimization round
 
-> Working plan and checkpoint log for the current development round. Update this
-> file in the same commit as each completed batch. Durable user-facing behavior
-> still belongs in [`README.md`](README.md); remove or archive this working file
-> when the round is closed.
+> Completed plan and checkpoint log for the optimization round closed in Batch 6.
+> This file is retained as the archived implementation/verification record;
+> durable user-facing behavior belongs in [`README.md`](README.md).
 
 ## Goal
 
@@ -201,7 +200,7 @@ Acceptance:
 
 ### Batch 6 — End-to-end verification and documentation closeout
 
-**Status:** pending
+**Status:** complete
 
 Scope:
 
@@ -231,20 +230,20 @@ load checks; “runtime” means the behavior was driven through Pi.
 
 | Surface | Static | Runtime | Notes |
 |---|---:|---:|---|
-| Extension/package loads | pass | pending | Batch 1: `pi -ne -e . --list-models --offline` |
-| `spawn` single and batch | pass | partial | Batch grouping/capacity harness passed; live model run pending |
-| queued/starting/running states | pending | pending | |
-| tool activity start/success/error | pass | pending | Batch 2: formatter assertions + typed event mapping |
-| complete final result | pass | pending | Dedicated bounded Markdown `Result` section |
-| `read` list and snapshot | pass | partial | Pi-loaded harness verified optional-id list/snapshot routing and viewed state |
-| `send` attach/steer/continue/fresh rerun | pass | partial | Harness verified queued attach, completed continue, and failed automatic fresh rerun; live steer pending |
-| `stop` queued/running | pass | partial | Batch harness covered queued stop settlement; live abort pending |
-| batch parent notification | pass | partial | Pi-loaded harness verified one notification after full/stopped batch |
-| automatic retention eviction | pass | partial | Harness verified viewed-success eviction and unread-failure protection |
-| collapsed/expanded tool rendering | pass | pending | Structured errors retain details; visual state check pending |
-| footer widget | pass | pending | Semantic `currentActivity` source wired; visual check pending |
-| `/agents` panel and commands | pass | partial | Command registration/completion and limits/clear routing harness passed; visual panel/menu states pending |
-| `/reload`, `/tree`, shutdown cleanup | pending | pending | |
+| Extension/package loads | pass | pass | Offline package load plus live text/JSON/TUI sessions |
+| `spawn` single and batch | pass | pass | Live single completion and two-worker batch with one combined follow-up |
+| queued/starting/running states | pass | partial | Starting/running/stopped observed live; queued paths remain harness-covered |
+| tool activity start/success/error | pass | pass | Live read/bash rows and structured native error result accepted visually |
+| complete final result | pass | pass | Dedicated panel `Result` and full parent completion verified |
+| `read` list and snapshot | pass | pass | No-id list and id snapshot driven in the live TUI session |
+| `send` attach/steer/continue/fresh rerun | pass | partial | Continue/fresh verified live; queued attach and running follow-up remain harness/static covered |
+| `stop` queued/running | pass | pass | Live fresh-run stop plus queued-stop harness |
+| batch parent notification | pass | pass | Two live workers produced one 2/2 combined parent follow-up |
+| automatic retention eviction | pass | partial | Safety/ordering harness passed; no live cap-exhaustion run |
+| collapsed/expanded tool rendering | pass | pass | Main card, panel, stopped/rerun, and error states accepted in the TUI |
+| footer widget | pass | pass | Independent rows, status, elapsed time, and tokens accepted visually |
+| `/agents` panel and commands | pass | pass | Panel, limits, clear-all, empty state, and completion routing accepted |
+| `/reload`, `/tree`, shutdown cleanup | pass | pass | Limit replayed after reload; tree open/close and session exits were clean |
 
 ## Checkpoint log
 
@@ -370,18 +369,56 @@ load checks; “runtime” means the behavior was driven through Pi.
   command routing.
 - Live running-worker steer/follow-up, visual limits menu, and collapsed/expanded
   cards remain in the final runtime matrix.
-- Checkpoint commit: this checkpoint (`refactor(subagent): simplify control contract`).
+- Checkpoint commit: `a8e1bc6` (`refactor(subagent): simplify control contract`).
+
+### Batch 6 — end-to-end verification and closeout
+
+- Drove live Pi JSON-mode sessions through single spawn/completion and a two-task
+  batch. The batch emitted exactly one hidden custom completion message with both
+  final results, and the parent produced one combined response.
+- Verified live structured failures are marked with Pi's native `isError` flag
+  while retaining `SubagentDetails.errorCode`; invalid spawn arguments and an
+  unknown send id both rendered as expected errors.
+- In the interactive TUI, drove a two-worker read/bash batch and visually
+  accepted the collapsed main card, independent footer rows, semantic Activity
+  entries, separated Result content, completion statistics, and the single
+  combined 2/2 notification.
+- Drove `read` without and with an id, continuation on the same retained id,
+  `send.fresh`, active stop, and the stopped `[rerun]` panel state. The panel
+  retained prior activity/conversation context while showing the fresh-rerun and
+  parent-stop updates.
+- Drove `/agents limits` to `maxConcurrency=2`, reopened the menu, cleared both
+  terminal records with `/agents clear all`, and confirmed the footer disappeared
+  and `/agents` showed its empty state without error.
+- Reloaded the extension and confirmed the session-branch concurrency limit
+  remained `2`; opening/exiting `/tree` produced no errors or stale panel/timer
+  behavior. CLI sessions also exited cleanly after background completion.
+- Re-ran strict TypeScript no-emit, the Pi-loaded Batch 4/5 harnesses, offline
+  package load, stale turn-cap/action-copy searches, and `git diff --check`.
+- Audited `README.md`; Batch 5 already contains the durable four-action contract,
+  command, retention, UI, and output-budget behavior, so no additional durable
+  documentation change was required here.
+- Retained this file as the closed round archive rather than deleting it, because
+  it records the per-checkpoint design decisions, verification evidence, open
+  coverage limits, and rollback boundaries requested for the round.
+- Checkpoint commit: this checkpoint (`docs(subagent): finish optimization round`).
 
 ## Open risks and rollback notes
 
-- Batch 5 intentionally changes the model-facing schema. Keep its commit
-  isolated so the old action contract can be restored without reverting the UI
-  and runtime improvements.
-- Batch completion grouping must not suppress notifications for later continued
-  runs; completion-group state belongs to a run, not permanently to a worker.
-- Rendering a very large final answer can be expensive. Keep model-facing output
-  bounded and add an explicit panel/read omission notice if a UI budget is hit.
-- Automatic eviction must never dispose an active session. If candidate ordering
-  is uncertain, fail the spawn rather than evict a protected record.
-- Do not copy Trellis source. Reimplement the behavior from the observed design
+- Live acceptance did not deliberately hold a worker in the queue or exercise a
+  running `followUp`; queued attach/stop and delivery routing remain covered by
+  the Pi-loaded harness and typed session paths. A future regression pass can
+  add a slow model fixture if those timing-dependent states need visual proof.
+- Automatic eviction ordering/protection passed the focused harness but was not
+  driven by exhausting `maxAgents` in the live TUI. Never relax the active,
+  unsettled-group, or unread-failure protections without another capacity test.
+- Rendering a very large final answer can still be expensive. Keep the existing
+  model/panel budgets and omission notices when changing retained output.
+- Rollback boundaries are isolated: reverting `a8e1bc6` restores the previous
+  model action contract; reverting `59019ff` removes grouping/automatic
+  retention; reverting `49070a1` removes render coalescing/structured error
+  marking; earlier feature checkpoints remain independently revertible.
+- Completion-group state belongs to an initial run, not permanently to a worker;
+  preserve that boundary when changing continuation/fresh-rerun behavior.
+- Do not copy Trellis source. Reimplement future ideas from the observed design
   using Pi public APIs and extension-local types/helpers.
