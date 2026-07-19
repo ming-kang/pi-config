@@ -156,8 +156,82 @@ export function stripJsonComments(input: string): string {
 	return output;
 }
 
+/** Optional path override for focused offline smoke tests. Production always uses getAgentDir(). */
+let modelsJsonPathOverride: string | undefined;
+let modelsJsonParseCount = 0;
+
+interface ModelsJsonCache {
+	path: string;
+	/** File mtime in ms when present; `null` when the file is missing. */
+	mtimeMs: number | null;
+	data: ModelsFile;
+}
+
+let modelsJsonCache: ModelsJsonCache | undefined;
+
 export function getModelsJsonPath(): string {
-	return join(getAgentDir(), "models.json");
+	return modelsJsonPathOverride ?? join(getAgentDir(), "models.json");
+}
+
+/** Test-only: point store APIs at a fixture path and drop any cached parse. */
+export function setModelsJsonPathForTests(path: string | undefined): void {
+	modelsJsonPathOverride = path;
+	modelsJsonCache = undefined;
+}
+
+/** Test-only: clear the in-memory cache without changing the path override. */
+export function resetModelsJsonCacheForTests(): void {
+	modelsJsonCache = undefined;
+}
+
+/** Test-only: how many times models.json text has been parsed since the last reset. */
+export function getModelsJsonParseCountForTests(): number {
+	return modelsJsonParseCount;
+}
+
+/** Test-only: reset the parse counter (does not clear the cache). */
+export function resetModelsJsonParseCountForTests(): void {
+	modelsJsonParseCount = 0;
+}
+
+function rememberCache(path: string, mtimeMs: number | null, data: ModelsFile): ModelsFile {
+	modelsJsonCache = { path, mtimeMs, data };
+	return data;
+}
+
+/**
+ * Load models.json with an mtime-aware in-memory cache. Unchanged files are not
+ * re-read or re-parsed. Callers that mutate the result must clone first; public
+ * helpers either clone or treat the cached object as read-only.
+ */
+async function loadModelsJsonCached(): Promise<ModelsFile> {
+	const path = getModelsJsonPath();
+	try {
+		const fileStat = await stat(path);
+		if (
+			modelsJsonCache &&
+			modelsJsonCache.path === path &&
+			modelsJsonCache.mtimeMs === fileStat.mtimeMs
+		) {
+			return modelsJsonCache.data;
+		}
+		const text = await readFile(path, "utf8");
+		modelsJsonParseCount += 1;
+		return rememberCache(path, fileStat.mtimeMs, parseModelsJsonText(text));
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+			if (modelsJsonCache && modelsJsonCache.path === path && modelsJsonCache.mtimeMs === null) {
+				return modelsJsonCache.data;
+			}
+			modelsJsonParseCount += 1;
+			return rememberCache(path, null, { providers: {} });
+		}
+		throw new Error(`Failed to read ${path}: ${formatError(error)}`);
+	}
+}
+
+function invalidateModelsJsonCache(): void {
+	modelsJsonCache = undefined;
 }
 
 export async function captureModelsJsonSnapshot(): Promise<ModelsFileSnapshot> {
@@ -179,22 +253,17 @@ export async function restoreModelsJsonSnapshot(snapshot: ModelsFileSnapshot): P
 				throw new Error(`Failed to remove ${path} during rollback: ${formatError(error)}`);
 			}
 		}
+		invalidateModelsJsonCache();
 		return;
 	}
 	await writeTextAtomically(path, snapshot.content ?? "");
+	// Atomic restore is an external content change; re-stat on next read.
+	invalidateModelsJsonCache();
 }
 
 export async function readModelsJson(): Promise<ModelsFile> {
-	const path = getModelsJsonPath();
-	let text: string;
-	try {
-		text = await readFile(path, "utf8");
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return { providers: {} };
-		throw new Error(`Failed to read ${path}: ${formatError(error)}`);
-	}
-
-	return parseModelsJsonText(text);
+	// Clone so callers can safely mutate without corrupting the cache.
+	return structuredClone(await loadModelsJsonCached());
 }
 
 export function parseModelsJsonText(text: string): ModelsFile {
@@ -223,26 +292,39 @@ export function parseModelsJsonText(text: string): ModelsFile {
 }
 
 export async function writeModelsJson(data: ModelsFile): Promise<void> {
-	await writeTextAtomically(getModelsJsonPath(), `${JSON.stringify(data, null, 2)}\n`);
+	const path = getModelsJsonPath();
+	await writeTextAtomically(path, `${JSON.stringify(data, null, 2)}\n`);
+	try {
+		const fileStat = await stat(path);
+		rememberCache(path, fileStat.mtimeMs, structuredClone(data));
+	} catch {
+		// Write succeeded; next read will re-stat if mtime is unavailable.
+		invalidateModelsJsonCache();
+	}
 }
 
 export async function writeModelsJsonText(content: string): Promise<void> {
-	await writeTextAtomically(getModelsJsonPath(), content);
+	const path = getModelsJsonPath();
+	await writeTextAtomically(path, content);
+	// Arbitrary text may include comments; invalidate so the next load re-parses.
+	invalidateModelsJsonCache();
 }
 
 export async function listProviders(): Promise<Array<{ id: string; entry: ProviderEntry }>> {
-	const current = await readModelsJson();
+	const current = await loadModelsJsonCached();
 	return Object.entries(current.providers)
 		.sort(([a], [b]) => a.localeCompare(b))
 		.map(([id, entry]) => ({ id, entry: structuredClone(entry) }));
 }
 
+/** Provider IDs only — does not deep-clone provider entries. */
 export async function listProviderIds(): Promise<string[]> {
-	return (await listProviders()).map((provider) => provider.id);
+	const current = await loadModelsJsonCached();
+	return Object.keys(current.providers).sort((a, b) => a.localeCompare(b));
 }
 
 export async function getProvider(id: string): Promise<ProviderEntry | undefined> {
-	const entry = (await readModelsJson()).providers[id];
+	const entry = (await loadModelsJsonCached()).providers[id];
 	return entry === undefined ? undefined : structuredClone(entry);
 }
 
@@ -252,7 +334,7 @@ export async function saveProvider(
 	newId: string,
 	entry: ProviderEntry,
 ): Promise<void> {
-	const current = await readModelsJson();
+	const current = structuredClone(await loadModelsJsonCached());
 	if (originalId !== newId && newId in current.providers) {
 		throw new Error(`Provider "${newId}" already exists.`);
 	}
@@ -382,7 +464,7 @@ function orderFields(
 }
 
 export async function removeProvider(id: string): Promise<boolean> {
-	const current = await readModelsJson();
+	const current = structuredClone(await loadModelsJsonCached());
 	if (!(id in current.providers)) return false;
 	delete current.providers[id];
 	await writeModelsJson(current);

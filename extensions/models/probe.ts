@@ -1,6 +1,7 @@
 /** Bounded, best-effort model catalog probing for supported APIs. */
 
 import { DEFAULTS } from "./constants.ts";
+import { readBodyBounded } from "./http.ts";
 
 export interface ProbeOptions {
 	baseUrl: string;
@@ -138,7 +139,11 @@ interface FetchOutcome {
 async function fetchOnce(url: URL, headers: Record<string, string>, signal: AbortSignal): Promise<FetchOutcome> {
 	try {
 		const response = await fetch(url, { method: "GET", headers, signal });
-		const body = await readBodyBounded(response, DEFAULTS.probeBodyBytes);
+		const body = await readBodyBounded(
+			response,
+			DEFAULTS.probeBodyBytes,
+			`Model catalog exceeds the ${formatBytes(DEFAULTS.probeBodyBytes)} response limit.`,
+		);
 		if (!response.ok) {
 			const detail = body.trim().replace(/\s+/g, " ").slice(0, 240);
 			return {
@@ -152,30 +157,6 @@ async function fetchOnce(url: URL, headers: Record<string, string>, signal: Abor
 	} catch (error) {
 		return { ok: false, status: 0, body: "", error: formatFetchError(error, signal) };
 	}
-}
-
-async function readBodyBounded(response: Response, maxBytes: number): Promise<string> {
-	const declared = Number(response.headers.get("content-length"));
-	if (Number.isFinite(declared) && declared > maxBytes) {
-		throw new Error(`Model catalog exceeds the ${formatBytes(maxBytes)} response limit.`);
-	}
-	if (!response.body) return "";
-
-	const reader = response.body.getReader();
-	const decoder = new TextDecoder();
-	let bytes = 0;
-	let text = "";
-	while (true) {
-		const { done, value } = await reader.read();
-		if (done) break;
-		bytes += value.byteLength;
-		if (bytes > maxBytes) {
-			await reader.cancel();
-			throw new Error(`Model catalog exceeds the ${formatBytes(maxBytes)} response limit.`);
-		}
-		text += decoder.decode(value, { stream: true });
-	}
-	return text + decoder.decode();
 }
 
 function parseOpenAIData(body: string): ProbeModel[] | null {

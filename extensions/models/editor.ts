@@ -1,7 +1,7 @@
 /** Browse-first provider workspace and focused model editors built from Pi-native dialogs. */
 
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { API_CHOICES, isValidProviderId, truncate } from "./constants.ts";
+import { API_CHOICES, isValidProviderId, parseModelIds, truncate } from "./constants.ts";
 import {
 	createLimitsEditor,
 	createModelWorkspace,
@@ -23,6 +23,26 @@ import type {
 } from "./store.ts";
 
 const THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/** Cheap mutable dirty flag for the provider workspace (no full-tree stringify). */
+export interface DirtyFlag {
+	isDirty(): boolean;
+	mark(): void;
+	clear(): void;
+}
+
+export function createDirtyFlag(initial = false): DirtyFlag {
+	let dirty = initial;
+	return {
+		isDirty: () => dirty,
+		mark: () => {
+			dirty = true;
+		},
+		clear: () => {
+			dirty = false;
+		},
+	};
+}
 
 const COMPAT_FIELDS = [
 	"supportsStore",
@@ -201,15 +221,15 @@ export async function editProvider(
 	ctx: ExtensionCommandContext,
 	opts: ProviderEditorOptions,
 ): Promise<ProviderEditorResult> {
-	let baseline = { id: opts.initialId, entry: structuredClone(opts.initialEntry) };
 	let persistedId = opts.initialId;
-	let id = baseline.id;
-	const entry = structuredClone(baseline.entry);
+	let id = opts.initialId;
+	const entry = structuredClone(opts.initialEntry);
 	const knownIds = new Set(opts.existingIds);
 	const providerWorkspaceMemoryKey = `provider-workspace:${opts.initialId}`;
+	const dirty = createDirtyFlag(false);
 
 	const save = async (): Promise<boolean> => {
-		if (jsonEqual(baseline, { id, entry })) return true;
+		if (!dirty.isDirty()) return true;
 		const errors = validateProvider(id, entry, [...knownIds], persistedId);
 		if (errors.length > 0) {
 			ctx.ui.notify(errors.join("\n"), "error");
@@ -223,7 +243,7 @@ export async function editProvider(
 		knownIds.delete(persistedId);
 		knownIds.add(id);
 		persistedId = id;
-		baseline = { id, entry: structuredClone(entry) };
+		dirty.clear();
 		return true;
 	};
 	const openModels = async (): Promise<boolean> => {
@@ -232,7 +252,8 @@ export async function editProvider(
 			return false;
 		}
 		const discover = await editModelsWorkspace(ctx, entry, {
-			dirty: () => !jsonEqual(baseline, { id, entry }),
+			dirty: () => dirty.isDirty(),
+			markDirty: () => dirty.mark(),
 			onSave: save,
 			referenceContext: { providerId: id, baseUrl: entry.baseUrl },
 		});
@@ -245,7 +266,7 @@ export async function editProvider(
 			openModelsOnStart = false;
 			if (await openModels()) return { kind: "discover", id: persistedId };
 		}
-		const dirty = !jsonEqual(baseline, { id, entry });
+		const isDirty = dirty.isDirty();
 		const models = Array.isArray(entry.models) ? entry.models : [];
 		const workspaceOptions: MenuOption<string>[] = [
 			{ key: "models", label: `Models · ${models.length}` },
@@ -257,14 +278,14 @@ export async function editProvider(
 			{ key: "headers", label: `Headers · ${countLabel(entry.headers, "header")}` },
 			{ key: "compat", label: `Compatibility · ${countLabel(entry.compat, "setting")}` },
 			{ key: "overrides", label: `Built-in model overrides · ${countLabel(entry.modelOverrides, "override")}` },
-			{ key: "save", label: dirty ? "Save changes" : "Save changes · up to date" },
+			{ key: "save", label: isDirty ? "Save changes" : "Save changes · up to date" },
 			{ key: "remove", label: "Remove provider" },
 			{ key: "back", label: "Back" },
 		];
-		const choice = await selectProviderWorkspaceKey(ctx, id, providerWorkspaceMemoryKey, dirty, workspaceOptions);
+		const choice = await selectProviderWorkspaceKey(ctx, id, providerWorkspaceMemoryKey, isDirty, workspaceOptions);
 
 		if (choice === undefined || choice === "back") {
-			if (!dirty) return { kind: "closed", id: persistedId };
+			if (!dirty.isDirty()) return { kind: "closed", id: persistedId };
 			const leave = await selectKey(ctx, "Unsaved provider changes", [
 				{ key: "save", label: "Save and leave" },
 				{ key: "discard", label: "Discard and leave" },
@@ -284,40 +305,61 @@ export async function editProvider(
 				const value = await promptText(ctx, "Provider ID", id, "my-provider", (candidate) =>
 					validateProviderId(candidate.trim(), [...knownIds], persistedId),
 				);
-				if (value !== undefined) id = value.trim();
+				if (value !== undefined && value.trim() !== id) {
+					id = value.trim();
+					dirty.mark();
+				}
 				break;
 			}
 			case "baseUrl": {
 				const value = await promptOptionalUrl(ctx, "Provider base URL", entry.baseUrl);
-				if (value.changed) setOptional(entry, "baseUrl", value.value);
+				if (value.changed) {
+					setOptional(entry, "baseUrl", value.value);
+					dirty.mark();
+				}
 				break;
 			}
 			case "api": {
 				const value = await chooseApi(ctx, "Provider default API", entry.api);
-				if (value.changed) setOptional(entry, "api", value.value);
+				if (value.changed) {
+					setOptional(entry, "api", value.value);
+					dirty.mark();
+				}
 				break;
 			}
 			case "apiKey": {
 				const value = await editSecret(ctx, entry.apiKey);
-				if (value.changed) setOptional(entry, "apiKey", value.value);
+				if (value.changed) {
+					setOptional(entry, "apiKey", value.value);
+					dirty.mark();
+				}
 				break;
 			}
 			case "auth":
-				await editProviderAuthentication(ctx, entry);
+				if (await editProviderAuthentication(ctx, entry)) dirty.mark();
 				break;
 			case "headers": {
 				const value = await editHeaders(ctx, "Provider headers", entry.headers);
-				if (value.changed) setOptionalRecord(entry, "headers", value.value);
+				if (value.changed) {
+					setOptionalRecord(entry, "headers", value.value);
+					dirty.mark();
+				}
 				break;
 			}
 			case "compat": {
 				const value = await editCompat(ctx, "Provider compatibility", entry.compat);
-				if (value.changed) setOptionalRecord(entry, "compat", value.value);
+				if (value.changed) {
+					setOptionalRecord(entry, "compat", value.value);
+					dirty.mark();
+				}
 				break;
 			}
 			case "overrides": {
 				const value = await editModelOverrides(ctx, entry.modelOverrides, { providerId: id, baseUrl: entry.baseUrl });
-				if (value.changed) setOptionalRecord(entry, "modelOverrides", value.value);
+				if (value.changed) {
+					setOptionalRecord(entry, "modelOverrides", value.value);
+					dirty.mark();
+				}
 				break;
 			}
 			case "save":
@@ -335,25 +377,35 @@ export async function editProvider(
 	}
 }
 
-async function editProviderAuthentication(ctx: ExtensionCommandContext, entry: ProviderEntry): Promise<void> {
+async function editProviderAuthentication(ctx: ExtensionCommandContext, entry: ProviderEntry): Promise<boolean> {
+	let changed = false;
 	while (true) {
 		const choice = await selectKey(ctx, "Provider authentication", [
 			{ key: "oauth", label: `OAuth · ${entry.oauth ?? "Not set"}` },
 			{ key: "authHeader", label: `Send Bearer auth header · ${formatOptionalBoolean(entry.authHeader)}` },
 			{ key: "back", label: "Back" },
 		]);
-		if (choice === undefined || choice === "back") return;
+		if (choice === undefined || choice === "back") return changed;
 		if (choice === "oauth") {
 			const selected = await selectKey(ctx, "OAuth", [
 				{ key: "unset", label: "Not set" },
 				{ key: "radius", label: "Radius OAuth" },
 			]);
-			if (selected === "unset") delete entry.oauth;
-			if (selected === "radius") entry.oauth = "radius";
+			if (selected === "unset" && entry.oauth !== undefined) {
+				delete entry.oauth;
+				changed = true;
+			}
+			if (selected === "radius" && entry.oauth !== "radius") {
+				entry.oauth = "radius";
+				changed = true;
+			}
 		}
 		if (choice === "authHeader") {
 			const value = await chooseOptionalBoolean(ctx, "Authorization: Bearer <apiKey>", entry.authHeader);
-			if (value.changed) setOptional(entry, "authHeader", value.value);
+			if (value.changed) {
+				setOptional(entry, "authHeader", value.value);
+				changed = true;
+			}
 		}
 	}
 }
@@ -365,6 +417,7 @@ interface ModelReferenceContext {
 
 interface ModelWorkspaceOptions {
 	dirty: () => boolean;
+	markDirty: () => void;
 	onSave: () => Promise<boolean>;
 	referenceContext: ModelReferenceContext;
 }
@@ -406,6 +459,7 @@ async function editModelsWorkspace(
 			const current = models[index];
 			if (!current) continue;
 			const originalId = current.id;
+			const snapshot = structuredClone(current);
 			const updated = await editModel(
 				ctx,
 				current,
@@ -416,27 +470,38 @@ async function editModelsWorkspace(
 				models.splice(index, 1);
 				selectedIds = selectedIds.filter((selected) => selected !== originalId);
 				cursorId = models[index]?.id ?? models[index - 1]?.id;
-			} else if (updated && updated.id !== originalId) {
-				models[index] = updated;
-				selectedIds = selectedIds.map((selected) => (selected === originalId ? updated.id : selected));
-				cursorId = updated.id;
+				opts.markDirty();
+			} else if (updated) {
+				if (updated.id !== originalId) {
+					models[index] = updated;
+					selectedIds = selectedIds.map((selected) => (selected === originalId ? updated.id : selected));
+					cursorId = updated.id;
+				}
+				if (!jsonEqual(snapshot, updated)) opts.markDirty();
 			}
 			continue;
 		}
 		if (result.kind === "discover") return true;
 		if (result.kind === "add") {
 			const added = await addModelIds(ctx, models);
-			selectedIds = [...new Set([...selectedIds, ...added])];
+			if (added.length > 0) {
+				selectedIds = [...new Set([...selectedIds, ...added])];
+				opts.markDirty();
+			}
 			continue;
 		}
 		if (result.kind === "bulk") {
-			await bulkEditModels(ctx, models.filter((model) => selectedIds.includes(model.id)));
+			const targets = models.filter((model) => selectedIds.includes(model.id));
+			const before = structuredClone(targets);
+			await bulkEditModels(ctx, targets);
+			if (!jsonEqual(before, targets)) opts.markDirty();
 			continue;
 		}
 		if (result.kind === "remove") {
 			if (await ctx.ui.confirm("Remove selected models?", `Remove ${selectedIds.length} model${selectedIds.length === 1 ? "" : "s"} from this provider?`)) {
 				cursorId = removeSelectedModels(models, selectedIds, cursorId);
 				selectedIds = [];
+				opts.markDirty();
 			}
 			continue;
 		}
@@ -462,15 +527,22 @@ async function editModelsWorkspace(
 		if (action === "discover") return true;
 		if (action === "add") {
 			const added = await addModelIds(ctx, models);
-			selectedIds = [...new Set([...selectedIds, ...added])];
+			if (added.length > 0) {
+				selectedIds = [...new Set([...selectedIds, ...added])];
+				opts.markDirty();
+			}
 		}
 		if (action === "bulk") {
-			await bulkEditModels(ctx, models.filter((model) => selectedIds.includes(model.id)));
+			const targets = models.filter((model) => selectedIds.includes(model.id));
+			const before = structuredClone(targets);
+			await bulkEditModels(ctx, targets);
+			if (!jsonEqual(before, targets)) opts.markDirty();
 		}
 		if (action === "remove") {
 			if (await ctx.ui.confirm("Remove selected models?", `Remove ${selectedIds.length} model${selectedIds.length === 1 ? "" : "s"} from this provider?`)) {
 				cursorId = removeSelectedModels(models, selectedIds, cursorId);
 				selectedIds = [];
+				opts.markDirty();
 			}
 		}
 		if (action === "clear") selectedIds = [];
@@ -755,7 +827,7 @@ async function editModelOverrides(
 			{ key: "done", label: "Done" },
 			{ key: "cancel", label: "Discard override changes" },
 		);
-		const choice = await selectSearchableKey(ctx, `Model overrides · ${ids.length}`, options);
+		const choice = await selectKey(ctx, `Model overrides · ${ids.length}`, options);
 		if (choice === undefined || choice === "cancel") {
 			if (jsonEqual(original, working) || (await ctx.ui.confirm("Discard override changes?", "Unsaved override changes will be lost."))) {
 				return { changed: false };
@@ -1612,14 +1684,6 @@ async function selectKey<T extends string>(
 	return selected;
 }
 
-async function selectSearchableKey<T extends string>(
-	ctx: ExtensionCommandContext,
-	title: string,
-	options: readonly MenuOption<T>[],
-): Promise<T | undefined> {
-	return selectKey(ctx, title, options);
-}
-
 async function selectProviderWorkspaceKey(
 	ctx: ExtensionCommandContext,
 	providerId: string,
@@ -1872,22 +1936,6 @@ function summarizeModel(model: ModelEntry): string {
 	if (Array.isArray(model.input) && model.input.includes("image")) parts.push("vision");
 	if (model.contextWindow) parts.push(`${compactNumber(model.contextWindow)} ctx`);
 	return parts.length > 0 ? truncate(parts.join(" · "), 70) : "defaults";
-}
-
-function parseModelIds(value: string): string[] {
-	return value
-		.split(/[,\r\n]+/)
-		.map((id) => id.trim())
-		.filter(Boolean);
-}
-
-function formatUrlLabel(value: string): string {
-	try {
-		const url = new URL(value);
-		return `${url.host}${url.pathname.replace(/\/$/, "")}`;
-	} catch {
-		return value;
-	}
 }
 
 function summarizeOverride(override: ModelOverride): string {

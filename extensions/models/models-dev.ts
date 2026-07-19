@@ -6,6 +6,8 @@
  * solely to give users a compact comparison while they set effective limits.
  */
 
+import { readBodyBounded } from "./http.ts";
+
 const CATALOG_URL = "https://models.dev/api.json";
 const CATALOG_TIMEOUT_MS = 15_000;
 const CATALOG_MAX_BYTES = 16 * 1024 * 1024;
@@ -40,7 +42,16 @@ export interface ModelsDevCatalogModel {
 	maxTokens?: number;
 }
 
+interface ModelsDevCatalogIndex {
+	models: readonly ModelsDevCatalogModel[];
+	/** Lowercased raw model IDs → catalog rows. */
+	byRawId: Map<string, ModelsDevCatalogModel[]>;
+	/** Alphanumeric-normalized variants → catalog rows. */
+	byNormalized: Map<string, ModelsDevCatalogModel[]>;
+}
+
 let cachedCatalog: ModelsDevCatalogModel[] | undefined;
+let cachedIndex: ModelsDevCatalogIndex | undefined;
 let catalogRequest: Promise<ModelsDevCatalogModel[]> | undefined;
 
 /**
@@ -53,6 +64,11 @@ export async function findModelsDevReference(query: ModelsDevReferenceQuery): Pr
 	return findBestModelsDevReference(catalog, query);
 }
 
+/**
+ * Prefer exact / normalized ID hits via index lookup. Does not scan the full
+ * catalog with edit-distance: gateway aliases (e.g. `route/model-id`) resolve
+ * through shared normalized suffixes, while unrelated IDs return no reference.
+ */
 export function findBestModelsDevReference(
 	catalog: readonly ModelsDevCatalogModel[],
 	query: ModelsDevReferenceQuery,
@@ -60,24 +76,68 @@ export function findBestModelsDevReference(
 	const cleanId = query.modelId.trim();
 	if (!cleanId) return undefined;
 
-	let best: { model: ModelsDevCatalogModel; score: number; exact: boolean } | undefined;
+	const index =
+		cachedIndex && cachedIndex.models === catalog ? cachedIndex : buildModelsDevCatalogIndex(catalog);
+
+	const left = identifierVariants(cleanId);
+	const candidates = new Map<ModelsDevCatalogModel, { score: number; exact: boolean }>();
+
+	for (const model of index.byRawId.get(left.raw) ?? []) {
+		candidates.set(model, { score: 1, exact: true });
+	}
+
+	for (const variant of left.values) {
+		for (const model of index.byNormalized.get(variant) ?? []) {
+			if (candidates.has(model)) continue;
+			candidates.set(model, { score: 0.97, exact: false });
+		}
+	}
+
+	const best = pickBestCandidate(candidates, query);
+	return best && best.score >= MIN_REFERENCE_SCORE ? toReference(best) : undefined;
+}
+
+function buildModelsDevCatalogIndex(catalog: readonly ModelsDevCatalogModel[]): ModelsDevCatalogIndex {
+	const byRawId = new Map<string, ModelsDevCatalogModel[]>();
+	const byNormalized = new Map<string, ModelsDevCatalogModel[]>();
 	for (const model of catalog) {
-		const idScore = identifierScore(cleanId, model.modelId);
+		const variants = identifierVariants(model.modelId);
+		const rawBucket = byRawId.get(variants.raw);
+		if (rawBucket) rawBucket.push(model);
+		else byRawId.set(variants.raw, [model]);
+		for (const value of variants.values) {
+			const bucket = byNormalized.get(value);
+			if (bucket) bucket.push(model);
+			else byNormalized.set(value, [model]);
+		}
+	}
+	return { models: catalog, byRawId, byNormalized };
+}
+
+function pickBestCandidate(
+	candidates: Map<ModelsDevCatalogModel, { score: number; exact: boolean }>,
+	query: ModelsDevReferenceQuery,
+): { model: ModelsDevCatalogModel; score: number; exact: boolean } | undefined {
+	let best: { model: ModelsDevCatalogModel; score: number; exact: boolean } | undefined;
+	for (const [model, idScore] of candidates) {
 		let score = idScore.score;
 		if (score < MIN_REFERENCE_SCORE) continue;
-
 		// Provider hints only break close ties. They must never turn a gateway
 		// route into an authoritative match for a direct-provider catalog entry.
 		if (sameIdentifier(query.providerId, model.providerId)) score += 0.04;
 		if (sameHost(query.baseUrl, model.providerApi)) score += 0.06;
-
-		const exact = idScore.exact;
-		if (!best || score > best.score || (score === best.score && exact && !best.exact)) {
-			best = { model, score, exact };
+		if (!best || score > best.score || (score === best.score && idScore.exact && !best.exact)) {
+			best = { model, score, exact: idScore.exact };
 		}
 	}
-	if (!best) return undefined;
+	return best;
+}
 
+function toReference(best: {
+	model: ModelsDevCatalogModel;
+	score: number;
+	exact: boolean;
+}): ModelsDevReference {
 	return {
 		providerId: best.model.providerId,
 		providerName: best.model.providerName,
@@ -128,6 +188,7 @@ async function loadCatalog(): Promise<ModelsDevCatalogModel[]> {
 		catalogRequest = fetchCatalog().then(
 			(catalog) => {
 				cachedCatalog = catalog;
+				cachedIndex = buildModelsDevCatalogIndex(catalog);
 				return catalog;
 			},
 			(error) => {
@@ -147,7 +208,11 @@ async function fetchCatalog(): Promise<ModelsDevCatalogModel[]> {
 			headers: { Accept: "application/json" },
 			signal: controller.signal,
 		});
-		const body = await readBodyBounded(response, CATALOG_MAX_BYTES);
+		const body = await readBodyBounded(
+			response,
+			CATALOG_MAX_BYTES,
+			"models.dev catalog exceeds the response limit.",
+		);
 		if (!response.ok) throw new Error(`models.dev returned HTTP ${response.status}.`);
 		let payload: unknown;
 		try {
@@ -161,45 +226,6 @@ async function fetchCatalog(): Promise<ModelsDevCatalogModel[]> {
 	}
 }
 
-async function readBodyBounded(response: Response, maxBytes: number): Promise<string> {
-	const declared = Number(response.headers.get("content-length"));
-	if (Number.isFinite(declared) && declared > maxBytes) {
-		throw new Error("models.dev catalog exceeds the response limit.");
-	}
-	if (!response.body) return "";
-
-	const reader = response.body.getReader();
-	const decoder = new TextDecoder();
-	let bytes = 0;
-	let text = "";
-	while (true) {
-		const { done, value } = await reader.read();
-		if (done) break;
-		bytes += value.byteLength;
-		if (bytes > maxBytes) {
-			await reader.cancel();
-			throw new Error("models.dev catalog exceeds the response limit.");
-		}
-		text += decoder.decode(value, { stream: true });
-	}
-	return text + decoder.decode();
-}
-
-function identifierScore(left: string, right: string): { score: number; exact: boolean } {
-	const leftVariants = identifierVariants(left);
-	const rightVariants = identifierVariants(right);
-	if (leftVariants.raw === rightVariants.raw) return { score: 1, exact: true };
-	if (leftVariants.values.some((value) => rightVariants.values.includes(value))) return { score: 0.97, exact: false };
-
-	let score = 0;
-	for (const leftValue of leftVariants.values) {
-		for (const rightValue of rightVariants.values) {
-			score = Math.max(score, blendedSimilarity(leftValue, rightValue));
-		}
-	}
-	return { score, exact: false };
-}
-
 function identifierVariants(value: string): { raw: string; values: string[] } {
 	const raw = value.trim().toLowerCase();
 	const parts = raw.split("/").filter(Boolean);
@@ -211,37 +237,6 @@ function identifierVariants(value: string): { raw: string; values: string[] } {
 	add(raw);
 	for (let index = 0; index < parts.length; index++) add(parts.slice(index).join("/"));
 	return { raw, values: [...values] };
-}
-
-function blendedSimilarity(left: string, right: string): number {
-	if (!left || !right) return 0;
-	const edit = 1 - levenshteinDistance(left, right) / Math.max(left.length, right.length);
-	const leftTokens = identifierTokens(left);
-	const rightTokens = identifierTokens(right);
-	const shared = leftTokens.filter((token) => rightTokens.includes(token)).length;
-	const dice = leftTokens.length + rightTokens.length > 0 ? (2 * shared) / (leftTokens.length + rightTokens.length) : 0;
-	return edit * 0.65 + dice * 0.35;
-}
-
-function identifierTokens(value: string): string[] {
-	const tokens = value.match(/[a-z]+|\d+/g) ?? [];
-	return [...new Set(tokens)];
-}
-
-function levenshteinDistance(left: string, right: string): number {
-	let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
-	for (let leftIndex = 1; leftIndex <= left.length; leftIndex++) {
-		const current = [leftIndex];
-		for (let rightIndex = 1; rightIndex <= right.length; rightIndex++) {
-			current[rightIndex] = Math.min(
-				current[rightIndex - 1]! + 1,
-				previous[rightIndex]! + 1,
-				previous[rightIndex - 1]! + (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1),
-			);
-		}
-		previous = current;
-	}
-	return previous[right.length]!;
 }
 
 function sameIdentifier(left: string | undefined, right: string | undefined): boolean {

@@ -183,6 +183,7 @@ object order.
 - `index.ts` — command routing, transactional saves, and catalog fetches.
 - `editor.ts` — Provider/model drafts, bulk work, and advanced field editors.
 - `dialog.ts` — browse-first selectors, checklists, Models workspace, and Limits UI.
-- `models-dev.ts` — bounded, session-only models.dev reference lookup and matching.
-- `store.ts` — comment-aware, lossless models.json storage.
+- `models-dev.ts` — bounded, session-only models.dev reference lookup with exact/normalized ID indexes (no full-catalog edit-distance scan).
+- `store.ts` — comment-aware, lossless models.json storage with mtime-aware read cache; ID listing does not deep-clone provider entries.
+- `http.ts` — shared bounded HTTP body reader for probe and models.dev fetches.
 - `probe.ts` — bounded catalog requests and response normalization.

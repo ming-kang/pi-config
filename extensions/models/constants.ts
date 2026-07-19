@@ -52,4 +52,12 @@ export function truncate(value: string, maxLength: number): string {
 	return `${value.slice(0, Math.max(0, maxLength - 1))}…`;
 }
 
+/** Split a user-entered model ID list (comma- or newline-separated). */
+export function parseModelIds(value: string): string[] {
+	return value
+		.split(/[,\r\n]+/)
+		.map((id) => id.trim())
+		.filter(Boolean);
+}
+
 export const NO_UI_WARNING = "/models requires an interactive UI.";

@@ -14,6 +14,7 @@ import {
 	NO_UI_WARNING,
 	SUBCOMMANDS,
 	parseArgs,
+	parseModelIds,
 	truncate,
 } from "./constants.ts";
 import { createProbeChecklist, createSearchableSelector } from "./dialog.ts";
@@ -404,7 +405,7 @@ async function addManualModels(providerId: string, ctx: ExtensionCommandContext)
 	while (true) {
 		value = await ctx.ui.input("Model IDs · comma-separated", "model-a, model-b, model-c");
 		if (value === undefined) return;
-		const ids = parseManualModelIds(value);
+		const ids = parseModelIds(value);
 		const duplicate = ids.find((id, index) => ids.indexOf(id) !== index || existing.has(id));
 		if (ids.length === 0) {
 			ctx.ui.notify("Enter at least one model ID.", "warning");
@@ -443,13 +444,6 @@ async function appendModels(
 		`Added ${additions.length} model${additions.length === 1 ? "" : "s"} to "${providerId}".`,
 	);
 	if (!saved.ok) ctx.ui.notify(saved.error ?? "Models could not be saved.", "error");
-}
-
-function parseManualModelIds(value: string): string[] {
-	return value
-		.split(/[,\r\n]+/)
-		.map((id) => id.trim())
-		.filter(Boolean);
 }
 
 async function commitModelsChange(
