@@ -1,30 +1,14 @@
 /**
  * subagent — isolated background AgentSession workers with parent feedback.
  *
- * Interaction model (closest Pi-native approximation of Claude Code's
- * background-agent UX, deliberately minimal in keys and concepts): a
- * persistent below-editor widget lists workers with a live pulse spinner,
- * elapsed time, and output tokens; the single `/agents` command opens one
- * focused transcript overlay — the widget is the list, the overlay is the
- * interaction. `/agents settings` configures profiles, `/agents limits`
- * configures deployment bounds, and `/agents clear` removes terminal records.
- * The extension registers no global shortcuts, keeping that namespace clean.
- * Inside the overlay only universal keys apply: Enter does the one
- * state-appropriate action, Tab cycles workers, arrows/PgUp/PgDn/Home/End
- * scroll, ctrl+c stops the running worker (or closes when idle), Esc closes.
- * The hint line shows only currently-usable keys.
+ * Interaction model (minimal background UX): a readable statusline chip
+ * (e.g. "3 explorer running") is the only always-on chrome; /agents opens a
+ * right-side panel (type-first title, fixed spawn order). Wire ids are
+ * a + 8 hex. No footer widget, no idle animation. Panel keys: Enter, Tab,
+ * arrows, page up/down, Home/End, ctrl+c stop, Esc close.
  *
  * Security: workers share the parent process OS permissions and credentials.
  * Tool allowlists and cwd bounds reduce accidents; they are not a sandbox.
- * Project agent definitions require interactive confirmation. Skills are not
- * loaded into workers by default.
- *
- * Pi's public TUI API supports focused keyboard overlays plus passive widgets
- * but no footer hit-testing, focus transfer into widgets, or mouse events; Pi
- * renders into the normal terminal screen, so the mouse wheel always scrolls
- * terminal scrollback and panel scrolling is keyboard-only. Pi's generic
- * custom-tool fallback dumps full retained snapshots, so this extension owns a
- * small private call/result renderer with Ctrl+O expansion.
  */
 import type {
 	AgentToolResult,

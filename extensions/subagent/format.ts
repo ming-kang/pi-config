@@ -1,28 +1,42 @@
 /** Shared presentation constants and formatters for the subagent TUI surfaces. */
 
+import { randomBytes } from "node:crypto";
+
 import type {
 	SubagentSnapshot,
 	SubagentStatus,
 	SubagentUsage,
 } from "./types.ts";
 
-/** Pulse-style spinner frames; all surfaces derive the frame from wall-clock time so they animate in sync. */
-export const SPINNER_FRAMES = (() => {
-	const chars = ["·", "✢", "*", "✶", "✻", "✽"];
-	return [...chars, ...[...chars].reverse()];
-})();
+/**
+ * Pi-native braille frames (same family as `@earendil-works/pi-tui` Loader).
+ * Only used while the panel is open and the selected worker is active.
+ */
+export const BRAILLE_FRAMES = [
+	"⠋",
+	"⠙",
+	"⠹",
+	"⠸",
+	"⠼",
+	"⠴",
+	"⠦",
+	"⠧",
+	"⠇",
+	"⠏",
+] as const;
 
-export const SPINNER_INTERVAL_MS = 120;
+export const BRAILLE_INTERVAL_MS = 100;
 
-export function spinnerFrame(now = Date.now()): string {
+export function brailleFrame(now = Date.now()): string {
 	const index =
-		Math.floor(now / SPINNER_INTERVAL_MS) % SPINNER_FRAMES.length;
-	return SPINNER_FRAMES[index] ?? "·";
+		Math.floor(now / BRAILLE_INTERVAL_MS) % BRAILLE_FRAMES.length;
+	return BRAILLE_FRAMES[index] ?? "⠋";
 }
 
+/** Static status glyphs — no decoration spinner when the panel is closed. */
 export const STATUS_ICON: Record<SubagentStatus, string> = {
 	queued: "○",
-	starting: "◌",
+	starting: "●",
 	running: "●",
 	completed: "✓",
 	failed: "✗",
@@ -31,11 +45,11 @@ export const STATUS_ICON: Record<SubagentStatus, string> = {
 
 export const STATUS_COLOR: Record<
 	SubagentStatus,
-	"dim" | "warning" | "success" | "error" | "muted"
+	"dim" | "warning" | "success" | "error" | "muted" | "accent"
 > = {
 	queued: "dim",
-	starting: "warning",
-	running: "warning",
+	starting: "accent",
+	running: "accent",
 	completed: "success",
 	failed: "error",
 	stopped: "muted",
@@ -52,23 +66,38 @@ export function isTerminalStatus(status: SubagentStatus): boolean {
 }
 
 /**
- * Stable list order shared by the footer widget and the panel's Tab cycle:
- * pending/active workers first, finished ones sink below, spawn order within
- * each group. A row moves at most once (when it finishes) and never trades
- * places with its neighbors just because it produced output more recently.
+ * Fixed spawn order for Tab cycle and lists: never re-rank by status so
+ * finished workers do not jump under active ones.
  */
 export function sortSnapshots(
 	snapshots: SubagentSnapshot[],
 ): SubagentSnapshot[] {
-	return [...snapshots].sort((first, second) => {
-		const firstDone = isTerminalStatus(first.status) ? 1 : 0;
-		const secondDone = isTerminalStatus(second.status) ? 1 : 0;
-		return (
-			firstDone - secondDone ||
+	return [...snapshots].sort(
+		(first, second) =>
 			first.createdAt - second.createdAt ||
-			first.id.localeCompare(second.id)
-		);
-	});
+			first.id.localeCompare(second.id),
+	);
+}
+
+/** Wire id: `a` + 8 hex (Claude Code–style short agent id). */
+export function createWorkerId(): string {
+	return `a${randomBytes(4).toString("hex")}`;
+}
+
+/** Display type title: explorer → Explorer. */
+export function formatAgentType(agentName: string): string {
+	const trimmed = agentName.trim();
+	if (!trimmed) return "Worker";
+	return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+}
+
+/** Short type for tight tabs: explorer → Exp, general → Gen. */
+export function shortAgentType(agentName: string): string {
+	const lower = agentName.trim().toLowerCase();
+	if (lower === "explorer") return "Exp";
+	if (lower === "general") return "Gen";
+	if (lower.length <= 4) return formatAgentType(lower);
+	return formatAgentType(lower).slice(0, 3);
 }
 
 export function formatDuration(
@@ -141,4 +170,102 @@ export function formatStats(
 		options?.includeCost && usage.cost ? `$${usage.cost.toFixed(4)}` : "",
 	].filter(Boolean);
 	return parts.join(" · ");
+}
+
+/**
+ * Meta line pieces; drop from the tail when width is tight.
+ * Type lives on the title row, so it is omitted here.
+ */
+export function formatMetaParts(snapshot: SubagentSnapshot): string[] {
+	const elapsed = formatDuration(
+		snapshot.startedAt,
+		snapshot.endedAt ?? Date.now(),
+	);
+	return [
+		elapsed,
+		snapshot.usage.toolUses ? `${snapshot.usage.toolUses} tools` : "",
+		snapshot.usage.output ? `↓${formatTokens(snapshot.usage.output)}` : "",
+		snapshot.model ? oneLine(snapshot.model, 28) : "",
+		snapshot.usage.cost > 0 ? `$${snapshot.usage.cost.toFixed(2)}` : "",
+		snapshot.runCount > 1 ? `run ${snapshot.runCount}` : "",
+	].filter(Boolean);
+}
+
+export interface SnapshotCounts {
+	total: number;
+	active: number;
+	queued: number;
+	done: number;
+	failed: number;
+	unread: number;
+}
+
+export function countSnapshots(
+	snapshots: readonly SubagentSnapshot[],
+): SnapshotCounts {
+	let active = 0;
+	let queued = 0;
+	let done = 0;
+	let failed = 0;
+	let unread = 0;
+	for (const snapshot of snapshots) {
+		if (snapshot.unread) unread++;
+		if (isActiveStatus(snapshot.status)) active++;
+		else if (snapshot.status === "queued") queued++;
+		else if (snapshot.status === "failed") failed++;
+		else if (isTerminalStatus(snapshot.status)) done++;
+	}
+	return {
+		total: snapshots.length,
+		active,
+		queued,
+		done,
+		failed,
+		unread,
+	};
+}
+
+/**
+ * Human-readable statusline chip (no arrow codes).
+ * Examples: "3 explorer running", "2 running, 1 queued", "2 done, unread"
+ */
+export function formatStatuslineSummary(
+	snapshots: readonly SubagentSnapshot[],
+): string | undefined {
+	if (!snapshots.length) return undefined;
+	const counts = countSnapshots(snapshots);
+
+	const live = snapshots.filter(
+		(snapshot) =>
+			isActiveStatus(snapshot.status) || snapshot.status === "queued",
+	);
+	const liveTypes = new Set(live.map((snapshot) => snapshot.agentName));
+	const singleType =
+		liveTypes.size === 1 ? [...liveTypes][0] : undefined;
+
+	if (counts.active || counts.queued) {
+		const parts: string[] = [];
+		if (counts.active) {
+			parts.push(
+				singleType && counts.queued === 0
+					? `${counts.active} ${singleType} running`
+					: `${counts.active} running`,
+			);
+		}
+		if (counts.queued) {
+			parts.push(
+				!counts.active && singleType
+					? `${counts.queued} ${singleType} queued`
+					: `${counts.queued} queued`,
+			);
+		}
+		if (counts.failed) parts.push(`${counts.failed} failed`);
+		return parts.join(", ");
+	}
+
+	const parts: string[] = [];
+	if (counts.failed) parts.push(`${counts.failed} failed`);
+	if (counts.done) parts.push(`${counts.done} done`);
+	if (counts.unread && counts.done) parts.push("unread");
+	return parts.length ? parts.join(", ") : undefined;
 }

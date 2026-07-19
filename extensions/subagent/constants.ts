@@ -5,7 +5,8 @@ export const SUBAGENT_TOOL_LABEL = "Subagent";
 /** Single command surface; no global shortcuts. `settings` is a subcommand. */
 export const AGENTS_COMMAND_NAME = "agents";
 
-export const SUBAGENT_WIDGET_KEY = "subagent";
+/** Key for ctx.ui.setStatus — statusline middle slot when workers exist. */
+export const SUBAGENT_STATUS_KEY = "subagent";
 export const SUBAGENT_CONFIG_ENTRY_TYPE = "pi-config-subagent-config";
 export const SUBAGENT_NOTIFICATION_TYPE = "pi-config-subagent-notification";
 export const SUBAGENT_USER_CONFIG_VERSION = 1;

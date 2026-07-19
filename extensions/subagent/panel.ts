@@ -14,14 +14,15 @@ import {
 
 import { PANEL_FINAL_OUTPUT_CHARS } from "./constants.ts";
 import {
+	BRAILLE_INTERVAL_MS,
+	brailleFrame,
+	formatAgentType,
 	formatDuration,
-	formatStats,
+	formatMetaParts,
 	formatTokens,
 	isActiveStatus,
 	isTerminalStatus,
 	sortSnapshots,
-	SPINNER_INTERVAL_MS,
-	spinnerFrame,
 	STATUS_COLOR,
 	STATUS_ICON,
 	truncateText,
@@ -35,23 +36,50 @@ import type {
 } from "./types.ts";
 
 /**
- * Overlay geometry tiers, chosen once when the panel opens: near-full width on
- * narrow terminals (a split view would cramp both halves), proportional on
- * normal ones, and an absolute cap on very wide ones so transcript lines stay
- * readable. Percent values keep tracking live resizes; reopening re-tiers.
+ * Side-panel geometry: right-center for a docked feel. Narrow terminals go
+ * near-full width; wide ones cap absolute columns so lines stay readable.
  */
 export function panelOverlayOptions(
 	columns: number,
 	rows: number,
 ): OverlayOptions {
-	const base = {
-		anchor: "top-right" as const,
-		maxHeight: (rows < 30 ? "85%" : "72%") as `${number}%`,
-		margin: { top: 1, right: 1 },
+	const maxHeight = (
+		rows < 24 ? "92%" : rows < 36 ? "88%" : "84%"
+	) as `${number}%`;
+	const margin = { top: 1, right: 1, bottom: 1 };
+	if (columns < 90) {
+		return {
+			anchor: "top-right",
+			width: "96%",
+			minWidth: 36,
+			maxHeight,
+			margin,
+		};
+	}
+	if (columns < 120) {
+		return {
+			anchor: "right-center",
+			width: "58%",
+			minWidth: 48,
+			maxHeight,
+			margin,
+		};
+	}
+	if (columns <= 170) {
+		return {
+			anchor: "right-center",
+			width: "46%",
+			minWidth: 56,
+			maxHeight,
+			margin,
+		};
+	}
+	return {
+		anchor: "right-center",
+		width: 96,
+		maxHeight,
+		margin,
 	};
-	if (columns < 100) return { ...base, width: "96%", minWidth: 40 };
-	if (columns <= 170) return { ...base, width: "62%", minWidth: 56 };
-	return { ...base, width: 104 };
 }
 
 function wrapPlainLine(text: string, width: number): string[] {
@@ -267,26 +295,34 @@ export class SubagentPanel implements Component {
 	}
 
 	private halfPage(): number {
-		return Math.max(4, Math.floor(this.heightBudget() / 2));
+		const total = this.host.getSnapshots().length;
+		return Math.max(4, Math.floor(this.heightBudget(total) / 2));
 	}
 
 	/** Height must mirror panelOverlayOptions' maxHeight fraction so the frame never clips. */
 	private heightFraction(): number {
-		return this.tui.terminal.rows < 30 ? 0.85 : 0.72;
+		const rows = this.tui.terminal.rows;
+		if (rows < 24) return 0.92;
+		if (rows < 36) return 0.88;
+		return 0.84;
 	}
 
 	private showMetaLine(): boolean {
-		return this.tui.terminal.rows >= 22;
+		return this.tui.terminal.rows >= 20;
 	}
 
-	private heightBudget(): number {
+	private showWorkerTabs(total: number): boolean {
+		return total > 1 && this.tui.terminal.rows >= 18;
+	}
+
+	private heightBudget(totalWorkers: number): number {
 		const rows = this.tui.terminal.rows;
-		// Worst-case chrome: borders 2, header 1 (+meta), dividers 2, scroll
-		// banner 1, live/error line 1, input 1, hint 1.
-		const chrome = this.showMetaLine() ? 10 : 9;
+		let chrome = 8;
+		if (this.showMetaLine()) chrome += 1;
+		if (this.showWorkerTabs(totalWorkers)) chrome += 1;
 		return Math.max(
 			3,
-			Math.min(30, Math.floor(rows * this.heightFraction()) - chrome),
+			Math.min(40, Math.floor(rows * this.heightFraction()) - chrome),
 		);
 	}
 
@@ -347,14 +383,16 @@ export class SubagentPanel implements Component {
 
 	// ------------------------------------------------------------ animation
 
+	/** Only tick while panel is open and the selected worker is active. */
 	private syncTimer(): void {
-		const needsTick = this.host
-			.getSnapshots()
-			.some((snapshot) => isActiveStatus(snapshot.status));
-		if (needsTick && !this.timer && !this.disposed) {
+		const selected = this.selectedSnapshot();
+		const needsTick = Boolean(
+			selected && isActiveStatus(selected.status) && !this.disposed,
+		);
+		if (needsTick && !this.timer) {
 			this.timer = setInterval(() => {
 				this.tui.requestRender();
-			}, SPINNER_INTERVAL_MS);
+			}, BRAILLE_INTERVAL_MS);
 		} else if (!needsTick && this.timer) {
 			this.stopTimer();
 		}
@@ -369,9 +407,11 @@ export class SubagentPanel implements Component {
 
 	// ------------------------------------------------------------ rendering
 
-	private statusIcon(snapshot: SubagentSnapshot): string {
-		if (isActiveStatus(snapshot.status)) {
-			return this.theme.fg("accent", spinnerFrame());
+	private statusIcon(snapshot: SubagentSnapshot, animate: boolean): string {
+		// Live motion only on the selected active title glyph (accent braille).
+		// Terminal / idle use static semantic glyphs — quiet plate, not a light show.
+		if (animate && isActiveStatus(snapshot.status)) {
+			return this.theme.fg("accent", brailleFrame());
 		}
 		return this.theme.fg(
 			STATUS_COLOR[snapshot.status],
@@ -380,6 +420,7 @@ export class SubagentPanel implements Component {
 	}
 
 	private border(character: string): string {
+		// Always quiet plate edge — never full-frame borderAccent (too loud for bg work).
 		return this.theme.fg("border", character);
 	}
 
@@ -402,7 +443,51 @@ export class SubagentPanel implements Component {
 	}
 
 	private divider(width: number): string {
-		return ` ${this.theme.fg("dim", "─".repeat(Math.max(1, width - 4)))}`;
+		return ` ${this.theme.fg("borderMuted", "─".repeat(Math.max(1, width - 4)))}`;
+	}
+
+	/**
+	 * Quiet tab rail: selected = cream type on selectedBg; unselected = glyph only.
+	 * Spaces only (no pipe bar). Optional 1-based index when many workers.
+	 */
+	private renderWorkerTabs(
+		snapshots: SubagentSnapshot[],
+		selectedId: string,
+		width: number,
+	): string {
+		const budget = Math.max(8, width - 1);
+		const useIndex = snapshots.length >= 3;
+
+		const build = (withIndex: boolean): string => {
+			const parts: string[] = [];
+			for (let i = 0; i < snapshots.length; i++) {
+				const snapshot = snapshots[i]!;
+				const selected = snapshot.id === selectedId;
+				if (selected) {
+					// Type only — status lives in the title row glyph.
+					parts.push(
+						this.theme.bg(
+							"selectedBg",
+							this.theme.fg(
+								"toolTitle",
+								this.theme.bold(` ${formatAgentType(snapshot.agentName)} `),
+							),
+						),
+					);
+					continue;
+				}
+				const glyph = STATUS_ICON[snapshot.status];
+				const color =
+					snapshot.status === "failed" ? "error" : ("muted" as const);
+				const label = withIndex ? `${i + 1}${glyph}` : glyph;
+				parts.push(this.theme.fg(color, ` ${label} `));
+			}
+			return parts.join("");
+		};
+
+		let joined = build(useIndex);
+		if (visibleWidth(joined) > budget) joined = build(false);
+		return truncateToWidth(` ${joined}`, width, this.theme.fg("dim", "…"));
 	}
 
 	private renderTranscriptView(width: number): string[] {
@@ -410,9 +495,11 @@ export class SubagentPanel implements Component {
 		if (!snapshot) {
 			return this.frame(
 				[
-					` ${this.theme.fg("muted", "No background subagents yet.")}`,
-					` ${this.theme.fg("dim", "Ask the model to delegate work with the subagent tool.")}`,
-					` ${this.theme.fg("dim", "/agents settings — set profile model/thinking")}`,
+					` ${this.theme.fg("toolTitle", this.theme.bold("Subagents"))}`,
+					this.divider(width),
+					` ${this.theme.fg("muted", "No background workers yet.")}`,
+					` ${this.theme.fg("dim", "Delegate with the subagent tool, then open /agents.")}`,
+					` ${this.theme.fg("dim", "/agents settings · limits · clear")}`,
 					` ${this.theme.fg("dim", "Esc close")}`,
 				],
 				width,
@@ -425,30 +512,40 @@ export class SubagentPanel implements Component {
 		const innerWidth = Math.max(1, width - 2);
 		const snapshots = sortSnapshots(this.host.getSnapshots());
 		const position = snapshots.findIndex((item) => item.id === snapshot.id);
+		const live = isActiveStatus(snapshot.status);
 
-		const statusText = this.theme.fg(
-			STATUS_COLOR[snapshot.status],
-			snapshot.status,
-		);
-		const elapsed = formatDuration(
-			snapshot.startedAt,
-			snapshot.endedAt ?? Date.now(),
-		);
+		const typeTitle = formatAgentType(snapshot.agentName);
+		// Active workers: glyph already shows live — omit redundant "running" word.
+		// Terminal/queued: show status word in semantic color.
+		const statusWord = live
+			? ""
+			: `  ${this.theme.fg(STATUS_COLOR[snapshot.status], snapshot.status)}`;
 
 		const lines: string[] = [
-			` ${this.statusIcon(snapshot)} ${this.theme.fg("toolTitle", this.theme.bold(snapshot.label))} ${this.theme.fg("dim", snapshot.id)}  ${statusText}`,
+			` ${this.statusIcon(snapshot, live)} ${this.theme.fg("toolTitle", this.theme.bold(typeTitle))}${snapshot.unread ? this.theme.fg("warning", "*") : ""} ${this.theme.fg("dim", snapshot.id)}${statusWord}`,
 		];
+		if (this.showWorkerTabs(snapshots.length)) {
+			lines.push(
+				this.renderWorkerTabs(
+					snapshots,
+					snapshot.id,
+					Math.max(8, innerWidth - 1),
+				),
+			);
+		}
 		if (this.showMetaLine()) {
-			// Ordered by importance so narrow-width truncation drops the tail first.
-			const metaParts = [
-				snapshot.agentName,
-				snapshot.model,
-				elapsed,
-				formatStats(snapshot.usage),
-				snapshot.usage.cost ? `$${snapshot.usage.cost.toFixed(2)}` : "",
-				snapshot.runCount > 1 ? `run ${snapshot.runCount}` : "",
-			].filter(Boolean);
-			lines.push(` ${this.theme.fg("dim", metaParts.join(" · "))}`);
+			const metaBudget = Math.max(12, innerWidth - 2);
+			let metaParts = formatMetaParts(snapshot);
+			let meta = metaParts.join(" · ");
+			while (metaParts.length > 1 && visibleWidth(meta) > metaBudget) {
+				metaParts = metaParts.slice(0, -1);
+				meta = metaParts.join(" · ");
+			}
+			if (meta) {
+				lines.push(
+					` ${this.theme.fg("dim", truncateToWidth(meta, metaBudget, "…"))}`,
+				);
+			}
 		}
 		lines.push(this.divider(width));
 
@@ -457,8 +554,8 @@ export class SubagentPanel implements Component {
 			Math.max(8, innerWidth - 2),
 		);
 		const bodyRows = Math.min(
-			this.heightBudget(),
-			Math.max(transcript.length, 3),
+			this.heightBudget(snapshots.length),
+			Math.max(transcript.length, 4),
 		);
 		this.scrollable = transcript.length > bodyRows;
 		const maxOffset = Math.max(0, transcript.length - bodyRows);
@@ -476,18 +573,27 @@ export class SubagentPanel implements Component {
 		}
 
 		lines.push(this.divider(width));
-		if (isActiveStatus(snapshot.status)) {
+		if (live) {
 			const activity = snapshot.currentActivity ?? "Working...";
+			const elapsed = formatDuration(
+				snapshot.startedAt,
+				snapshot.endedAt ?? Date.now(),
+			);
 			const liveStats = [
 				elapsed,
 				snapshot.usage.output
-					? `↓ ${formatTokens(snapshot.usage.output)}`
+					? `↓${formatTokens(snapshot.usage.output)}`
 					: "",
 			]
 				.filter(Boolean)
 				.join(" · ");
+			const activityBudget = Math.max(
+				8,
+				innerWidth - visibleWidth(liveStats) - 6,
+			);
+			// Accent bullet for pulse; muted text (not warning gold) for routine progress.
 			lines.push(
-				` ${this.theme.fg("accent", spinnerFrame())} ${this.theme.fg("warning", truncateToWidth(activity, Math.max(8, innerWidth - 18), "…"))} ${this.theme.fg("dim", `(${liveStats})`)}`,
+				` ${this.theme.fg("accent", "●")} ${this.theme.fg("muted", truncateToWidth(activity, activityBudget, "…"))} ${this.theme.fg("dim", liveStats)}`,
 			);
 		} else if (snapshot.error) {
 			lines.push(
@@ -548,9 +654,12 @@ export class SubagentPanel implements Component {
 
 		const parts = [action];
 		if (this.scrollable) parts.push("↑↓ scroll");
-		if (total > 1) parts.push(`Tab next (${position + 1}/${total})`);
+		if (total > 1) {
+			const index = position >= 0 ? position + 1 : 1;
+			parts.push(`Tab ${index}/${total}`);
+		}
 		if (isActiveStatus(snapshot.status)) parts.push("^C stop");
-		parts.push("Esc close");
+		parts.push("Esc");
 		return { label, hint: parts.join(" · ") };
 	}
 
@@ -585,7 +694,7 @@ export class SubagentPanel implements Component {
 
 	private activityIcon(activity: ToolActivity): string {
 		if (activity.status === "running") {
-			return this.theme.fg("accent", spinnerFrame());
+			return this.theme.fg("accent", "●");
 		}
 		if (activity.status === "failed") return this.theme.fg("error", "✗");
 		return this.theme.fg("success", "✓");

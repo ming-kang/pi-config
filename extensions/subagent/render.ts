@@ -68,21 +68,28 @@ function summarizeDetails(
 		return `${active} active · ${queued} queued · ${agents.length}/${details.config.maxAgents} retained`;
 	}
 	if (details.action === "spawn") {
-		const ids = agents
-			.slice(0, 3)
-			.map((agent) => `${agent.id} ${agent.status}`)
-			.join(" · ");
-		return `${agents.length} background worker${agents.length === 1 ? "" : "s"} started${ids ? ` · ${ids}` : ""}`;
+		const types = new Map<string, number>();
+		for (const agent of agents) {
+			types.set(agent.agent, (types.get(agent.agent) ?? 0) + 1);
+		}
+		const typeSummary = [...types.entries()]
+			.map(([name, count]) => (count === 1 ? name : `${count} ${name}`))
+			.join(", ");
+		return `${agents.length} worker${agents.length === 1 ? "" : "s"} started${typeSummary ? ` · ${typeSummary}` : ""}`;
 	}
 	const agent = agents[0];
 	if (agent) {
 		const stats = [
-			`${agent.toolUses} tool use${agent.toolUses === 1 ? "" : "s"}`,
-			agent.outputTokens ? `↓${formatTokens(agent.outputTokens)} tokens` : "",
+			agent.status,
+			agent.agent,
+			agent.toolUses
+				? `${agent.toolUses} tool use${agent.toolUses === 1 ? "" : "s"}`
+				: "",
+			agent.outputTokens ? `↓${formatTokens(agent.outputTokens)}` : "",
 		]
 			.filter(Boolean)
 			.join(" · ");
-		return `${agent.id} ${agent.status} · ${oneLine(agent.label, 72)} · ${stats}`;
+		return `${agent.id} · ${stats}`;
 	}
 	return oneLine(firstLine(fallback), 180);
 }

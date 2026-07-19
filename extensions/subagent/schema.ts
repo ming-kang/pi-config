@@ -88,7 +88,7 @@ export const SubagentParamsSchema = Type.Object({
 	id: Type.Optional(
 		Type.String({
 			description:
-				"For read/send/stop: stable id from spawn (e.g. sa-01). Omit on read to list workers.",
+				"For read/send/stop: stable worker id from spawn (e.g. a7c3e91f). Omit on read to list workers.",
 		}),
 	),
 	message: Type.Optional(

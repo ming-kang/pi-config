@@ -1,8 +1,8 @@
 # subagent — background Pi workers
 
-Adds a model-callable `subagent` tool backed by isolated in-memory Pi `AgentSession` instances. Workers run in the background, surface in a persistent footer widget with live progress, stream into a keyboard-driven manager overlay, and send a bounded completion message back to the parent conversation.
+Adds a model-callable `subagent` tool backed by isolated in-memory Pi `AgentSession` instances. Workers run in the background, announce with a readable statusline chip, stream into `/agents` side panel, and send a bounded completion follow-up to the parent.
 
-The interaction model follows Claude Code's background-agent UX as closely as Pi's public extension API allows, with some ideas borrowed from Grok Build's unified tasks pane (running-first ordering, single-key stop, auto-appearing list).
+Background by default needs no user intervention: no footer list, no idle animation.
 
 **Security note:** workers share the parent process credentials and OS permissions. Tool allowlists and cwd bounds reduce accidents; they are **not** a sandbox. For untrusted repositories, run Pi inside a container (see Pi's security docs).
 
@@ -52,20 +52,37 @@ Deployment limits (`maxConcurrency` / `maxAgents`) are **not** tool parameters �
 
 ## TUI
 
-Two surfaces, no redundancy: the footer widget is the passive live list, and one focused transcript overlay is where all interaction happens. The design goal is a minimal key set — inside the overlay only universal keys apply (Enter, Esc, Tab, arrows, ctrl+c), and the hint line teaches exactly the keys that are currently usable.
+Always-on chrome is only a **statusline chip**. Open **`/agents`** for detail (transcript, steer, stop).
 
-### Footer widget (always visible while workers exist)
+### Worker identity
 
-A below-editor widget appears automatically on the first spawn and disappears when the last record is cleared. Rows keep a stable order — pending/active workers first, finished ones sink below, spawn order within each group — so a row moves at most once, when it finishes, and never trades places because a neighbor produced output more recently. The panel's Tab cycle uses the same order. Each row shows a pulse spinner (running), status icon, id, label, agent profile, a semantic current activity such as `Reading code` or `Running verification` (wide terminals), and right-aligned `elapsed · ↓ tokens`. Completed-but-unviewed workers carry a `*` mark. The spinner and elapsed times animate only while a worker is active. At most 5 rows are shown, with a `… +N more (/agents)` overflow line. Until the panel is opened for the first time in a session, a one-time `/agents to view` onboarding line is appended; it disappears the moment the panel is first opened.
+| Layer | Format | Example |
+|---|---|---|
+| **id** (tool wire) | `a` + 8 hex | `a7c3e91f` |
+| **type** (primary UI) | profile | Explorer / General |
+| **label** | optional task summary | secondary only |
 
-The footer widget is the single source of live status, so the extension no longer publishes a separate `ctx.ui.setStatus()` summary into the bundled `statusline` extension — that slot is intentionally left empty pending a future redesign.
+### Statusline chip
+
+While workers exist, `ctx.ui.setStatus` fills the statusline middle slot (line 2 with the bundled `statusline` extension):
+
+| Chip | Meaning |
+|---|---|
+| `3 explorer running` | three explorers active |
+| `2 running, 1 queued` | mixed activity |
+| `2 done, unread` | finished; open `/agents` to review |
+
+No arrow codes. Narrow terminals may drop the middle slot first so CTX/usage stay readable. **No** below-editor multi-line list.
 
 ### Transcript overlay
 
-- `/agents` opens the most relevant worker (unread first, then running, then most recently updated); `/agents <id>` targets a specific worker, and an unknown id shows a one-line usage hint. Arguments tab-complete worker ids and the `settings`, `limits`, and `clear` subcommands (including profiles/terminal ids where applicable). The extension registers no global shortcuts. The collapsed spawn result in the main transcript also names `/agents`.
-- `Tab` cycles between workers (`shift+Tab` reverses); the hint line shows `Tab next (n/total)` whenever more than one worker exists.
-- `↑`/`↓` scroll by line, `PgUp`/`PgDn` by half page, `Home`/`End` jump to top/tail. The view follows the tail until scrolled, then shows `▾ N newer lines · End to follow`. Mouse wheel scrolling cannot work here: Pi renders into the normal terminal screen without mouse tracking, so the wheel always scrolls the terminal's own scrollback.
-- The header is one line (status, label, id, state) plus a metadata line (profile, model, elapsed, tool uses, tokens, cost) that is dropped on short terminals. While running, a live status line above the input shows the current tool activity, including `Thinking...` while a reasoning model works pre-response and explicit retry start/end transitions.
+- Geometry: right-center side panel; near-full width only on narrow terminals.
+- `/agents` opens the most relevant worker; `/agents <id>` targets one. Tab-complete ids and `settings` / `limits` / `clear`.
+- **Order is fixed by spawn time** — finishing does not reorder Tab list.
+- `Tab` cycles; multi-worker tab strip is **type-first** with static status glyphs.
+- Header: **Explorer** / **General** + short id + status. Meta drops cost/model first when narrow.
+- Braille spinner only while panel is open and the selected worker is active; otherwise static glyphs.
+- Live activity line shows tool text without an extra spinner.
 - Tool events render as a bounded `Activity` section with status icons and compact semantic rows such as `Read controller.ts`, `Search "completionGroup"`, `Edit schema.ts · 2 changes`, and `Run git diff --check`; short result summaries appear beneath the corresponding row. User instructions, retry/compaction notices, and errors remain in the chronological conversation updates.
 - A terminal worker renders its latest assistant answer separately under `Result` as Markdown with the same theme as the main session (headings, code blocks with syntax highlighting, lists, inline code), reusing Pi's `Markdown` component and `getMarkdownTheme()`. The streaming tail stays plain text until the message completes, since half-written fences and tables re-render unstably. Extremely large panel results are bounded with an explicit omission notice; model-facing completion and `read` retain their smaller documented budgets.
 - `ctrl+c` follows terminal convention: it stops the worker being viewed if it is active, and closes the overlay otherwise. `Esc` always closes.
@@ -87,9 +104,7 @@ Pressing Enter with an empty input (outside `[rerun]`) shows a short explanation
 
 ### Main-transcript rendering
 
-Tool calls use a compact private renderer because Pi's generic custom-tool fallback prints the entire retained snapshot. Collapsed results show the CC stats phrasing (`sa-01 completed · label · 5 tool uses · ↓12.3k tokens`); `ctrl+o` expands the full model-visible result.
-
-Pi's public extension Component API exposes keyboard focus for overlays and passive widgets but no mouse events or footer hit-testing, so the widget is informational and the transcript lives in a focused overlay rather than a split pane.
+Tool calls use a compact private renderer. Collapsed results prefer type + status (`a7c3e91f · completed · explorer`); `ctrl+o` expands the full result.
 
 ## Agent definitions
 
@@ -125,12 +140,11 @@ Active workers are session-process resources. `/reload`, `/new`, `/resume`, and 
 ## Files
 
 - `index.ts` — tool/command registration and lifecycle hooks
-- `controller.ts` — scheduling, AgentSession lifecycle, parent notifications, tool actions, and widget lifecycle
-- `activity.ts` — semantic, bounded summaries for tool calls and results
-- `panel.ts` — manager overlay: activity/conversation/result view with the state-aware instruction input
-- `widget.ts` — persistent below-editor live worker list
-- `render.ts` — compact tool call/result UI with Ctrl+O expansion
-- `format.ts` — shared spinner frames, status icons, duration/token/stat formatting
+- `controller.ts` — scheduling, lifecycle, notifications, statusline chip
+- `activity.ts` — semantic tool activity summaries
+- `panel.ts` — `/agents` side panel
+- `render.ts` — compact tool call/result UI
+- `format.ts` — ids, type labels, statusline copy, fixed sort
 - `agents.ts` — built-in profiles and Markdown discovery
-- `config.ts` — user profile model/thinking preferences
-- `schema.ts` / `types.ts` / `constants.ts` — model-facing contract and local types/defaults
+- `config.ts` — profile preferences
+- `schema.ts` / `types.ts` / `constants.ts` — contracts and defaults

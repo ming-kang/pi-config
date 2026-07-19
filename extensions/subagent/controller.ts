@@ -36,13 +36,15 @@ import {
 	READ_OUTPUT_CHARS,
 	SUBAGENT_CONFIG_ENTRY_TYPE,
 	SUBAGENT_NOTIFICATION_TYPE,
+	SUBAGENT_STATUS_KEY,
 	SUBAGENT_USER_CONFIG_VERSION,
-	SUBAGENT_WIDGET_KEY,
 	TIMELINE_MAX_CHARS,
 	TIMELINE_MAX_ITEMS,
 } from "./constants.ts";
 import {
+	createWorkerId,
 	formatDuration,
+	formatStatuslineSummary,
 	formatTokens,
 	isTerminalStatus,
 	oneLine,
@@ -73,7 +75,6 @@ import type {
 	ToolActivity,
 	TimelineKind,
 } from "./types.ts";
-import { SubagentFooterWidget } from "./widget.ts";
 
 const BUILTIN_TOOLS = new Set([
 	"read",
@@ -181,20 +182,15 @@ export class SubagentController implements SubagentPanelHost {
 		maxAgents: DEFAULT_MAX_AGENTS,
 	};
 	private ctx: ExtensionContext | undefined;
-	private nextId = 1;
 	private nextCompletionGroupId = 1;
 	private readonly completionGroups = new Map<string, CompletionGroup>();
 	private activeRuns = 0;
 	private pumping = false;
 	private disposed = false;
 	private panelOpen = false;
-	/** Once true, the widget's one-time "/agents to view" onboarding line disappears. */
-	private panelOpenedThisSession = false;
 	private panel: SubagentPanel | undefined;
 	private panelRenderTimer: ReturnType<typeof setTimeout> | undefined;
 	private lastPanelRenderAt = 0;
-	private widget: SubagentFooterWidget | undefined;
-	private widgetVisible = false;
 	private preferencesLoaded = false;
 	private userConfig: SubagentUserConfig = {
 		version: SUBAGENT_USER_CONFIG_VERSION,
@@ -221,12 +217,14 @@ export class SubagentController implements SubagentPanelHost {
 	): void {
 		this.ctx = ctx;
 		this.disposed = false;
-		// A revived session re-mounts the widget; drop any stale cached snapshots
-		// so the first render reflects current records (applyConfig may not fire
-		// stateChanged when persistedConfig is unchanged).
+		// Drop any stale snapshot cache so statusline reflects current records.
 		this.invalidateSnapshots();
 		if (persistedConfig) this.applyConfig(persistedConfig, false);
-		this.syncWidget();
+		// Drop legacy below-editor widget if a previous session build left one.
+		if (ctx.mode === "tui") {
+			ctx.ui.setWidget(SUBAGENT_STATUS_KEY, undefined);
+		}
+		this.syncStatusline();
 	}
 
 	getConfig(): SubagentConfig {
@@ -481,8 +479,6 @@ export class SubagentController implements SubagentPanelHost {
 		}
 
 		this.panelOpen = true;
-		this.panelOpenedThisSession = true;
-		this.widget?.requestRender(); // drop the one-time /agents onboarding line
 		try {
 			const startId = initialId ?? this.mostRelevantId();
 			let overlayTui: TUI | undefined;
@@ -651,11 +647,11 @@ export class SubagentController implements SubagentPanelHost {
 		this.queue.length = 0;
 		this.completionGroups.clear();
 		this.cancelPanelRenderTimer();
-		if (this.ctx?.mode === "tui") {
-			if (this.widgetVisible) {
-				this.widgetVisible = false;
-				this.widget = undefined;
-				this.ctx.ui.setWidget(SUBAGENT_WIDGET_KEY, undefined);
+		if (this.ctx?.hasUI) {
+			this.ctx.ui.setStatus(SUBAGENT_STATUS_KEY, undefined);
+			// Clear any legacy below-editor widget from earlier versions.
+			if (this.ctx.mode === "tui") {
+				this.ctx.ui.setWidget(SUBAGENT_STATUS_KEY, undefined);
 			}
 		}
 
@@ -735,7 +731,7 @@ export class SubagentController implements SubagentPanelHost {
 
 		const spawned: SubagentRecord[] = [];
 		for (const preparedSpec of prepared.specs) {
-			const id = `sa-${String(this.nextId++).padStart(2, "0")}`;
+			const id = createWorkerId();
 			const now = Date.now();
 			const record: SubagentRecord = {
 				...preparedSpec.spec,
@@ -1888,7 +1884,7 @@ export class SubagentController implements SubagentPanelHost {
 			return this.errorResult(
 				"send",
 				"invalid_parameters",
-				'send requires id. Example: { action:"send", id:"sa-01", message:"..." }',
+				'send requires id. Example: { action:"send", id:"a7c3e91f", message:"..." }',
 			);
 		}
 		try {
@@ -1910,7 +1906,7 @@ export class SubagentController implements SubagentPanelHost {
 			return this.errorResult(
 				"stop",
 				"invalid_parameters",
-				'stop requires id. Example: { action:"stop", id:"sa-01" }',
+				'stop requires id. Example: { action:"stop", id:"a7c3e91f" }',
 			);
 		try {
 			const text = await this.stopAgent(id);
@@ -2040,38 +2036,24 @@ export class SubagentController implements SubagentPanelHost {
 
 	private stateChanged(): void {
 		this.requestPanelRender(true);
-		this.syncWidget();
+		this.syncStatusline();
 	}
 
-	/** Show the footer widget while records exist; remove it when the session has none. */
-	private syncWidget(): void {
+	/**
+	 * Compact centered statusline chip only — no below-editor widget.
+	 * Open /agents for per-worker detail. Plain text (statusline recolors it).
+	 */
+	private syncStatusline(): void {
 		const ctx = this.ctx;
-		if (!ctx || ctx.mode !== "tui") return;
-		const shouldShow = !this.disposed && this.records.size > 0;
-		if (shouldShow === this.widgetVisible) {
-			this.widget?.requestRender();
+		if (!ctx?.hasUI) return;
+		if (this.disposed || this.records.size === 0) {
+			ctx.ui.setStatus(SUBAGENT_STATUS_KEY, undefined);
 			return;
 		}
-		this.widgetVisible = shouldShow;
-		if (shouldShow) {
-			ctx.ui.setWidget(
-				SUBAGENT_WIDGET_KEY,
-				(tui, theme) => {
-					const widget = new SubagentFooterWidget(
-						tui,
-						theme,
-						() => this.getSnapshots(),
-						() => !this.panelOpenedThisSession,
-					);
-					this.widget = widget;
-					return widget;
-				},
-				{ placement: "belowEditor" },
-			);
-		} else {
-			this.widget = undefined;
-			ctx.ui.setWidget(SUBAGENT_WIDGET_KEY, undefined);
-		}
+		ctx.ui.setStatus(
+			SUBAGENT_STATUS_KEY,
+			formatStatuslineSummary(this.getSnapshots()),
+		);
 	}
 
 	private cancelPanelRenderTimer(): void {
