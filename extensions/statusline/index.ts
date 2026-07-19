@@ -237,13 +237,19 @@ function formatUsageSummary(
 	return theme.fg("dim", usageParts.join(" "));
 }
 
+/** True when the string already carries SGR color codes from an extension. */
+function hasAnsiColor(text: string): boolean {
+	return text.includes("\x1b[");
+}
+
 function formatExtensionStatuses(statuses: ReadonlyMap<string, string>, theme: Theme): string {
-	const statusText = Array.from(statuses.entries())
+	const parts = Array.from(statuses.entries())
 		.sort(([firstKey], [secondKey]) => firstKey.localeCompare(secondKey))
 		.map(([, text]) => sanitizeStatus(text))
 		.filter(Boolean)
-		.join("  ");
-	return statusText ? theme.fg("muted", statusText) : "";
+		// Extensions may pre-color (e.g. subagent fleet chip). Don't re-wrap those.
+		.map((text) => (hasAnsiColor(text) ? text : theme.fg("muted", text)));
+	return parts.join("  ");
 }
 
 /** Left-align `left`, right-align `right`, filling the gap with spaces. */

@@ -22,6 +22,8 @@ import {
 	formatTokens,
 	isActiveStatus,
 	isTerminalStatus,
+	oneLine,
+	shortAgentType,
 	sortSnapshots,
 	STATUS_COLOR,
 	STATUS_ICON,
@@ -35,16 +37,21 @@ import type {
 	ToolActivity,
 } from "./types.ts";
 
+/** How many recent tools stay expanded in the rail. */
+const TOOLS_VISIBLE = 6;
+/** Cap body rows so the modal stays a card, not a full-screen dump. */
+const BODY_ROWS_CAP = 16;
+
 /**
- * Centered modal geometry. Narrow terminals go near-full width; wide ones
- * cap absolute columns so transcript lines stay readable.
+ * Compact centered card. Lower maxHeight than earlier builds — the fleet
+ * panel should skim, not scroll like a second session transcript.
  */
 export function panelOverlayOptions(
 	columns: number,
 	rows: number,
 ): OverlayOptions {
 	const maxHeight = (
-		rows < 24 ? "92%" : rows < 36 ? "88%" : "84%"
+		rows < 24 ? "78%" : rows < 36 ? "68%" : "60%"
 	) as `${number}%`;
 	const margin = { top: 1, right: 2, bottom: 1, left: 2 };
 	if (columns < 90) {
@@ -59,7 +66,7 @@ export function panelOverlayOptions(
 	if (columns < 120) {
 		return {
 			anchor: "center",
-			width: "72%",
+			width: "70%",
 			minWidth: 52,
 			maxHeight,
 			margin,
@@ -68,7 +75,7 @@ export function panelOverlayOptions(
 	if (columns <= 170) {
 		return {
 			anchor: "center",
-			width: "58%",
+			width: "56%",
 			minWidth: 60,
 			maxHeight,
 			margin,
@@ -76,7 +83,7 @@ export function panelOverlayOptions(
 	}
 	return {
 		anchor: "center",
-		width: 100,
+		width: 96,
 		maxHeight,
 		margin,
 	};
@@ -109,26 +116,6 @@ function wrapPlainLine(text: string, width: number): string[] {
 	return result;
 }
 
-function timelineColor(
-	kind: TimelineKind,
-): "text" | "accent" | "muted" | "dim" | "error" | "toolOutput" {
-	if (kind === "assistant") return "text";
-	if (kind === "user") return "accent";
-	if (kind === "error") return "error";
-	if (kind === "tool") return "toolOutput";
-	if (kind === "toolResult") return "dim";
-	return "muted";
-}
-
-function timelinePrefix(kind: TimelineKind): string {
-	if (kind === "user") return "› ";
-	if (kind === "tool") return "→ ";
-	if (kind === "toolResult") return "  ⎿ ";
-	if (kind === "error") return "! ";
-	if (kind === "system") return "• ";
-	return "  ";
-}
-
 export class SubagentPanel implements Component {
 	focused = false;
 
@@ -148,6 +135,9 @@ export class SubagentPanel implements Component {
 		string,
 		{ text: string; component: Markdown }
 	>();
+	/** Streaming reply — updated via setText so partial Markdown reflows. */
+	private liveMarkdown: Markdown | undefined;
+	private liveMarkdownText = "";
 	private selectedId: string | undefined;
 	private scrollFromBottom = 0;
 	/** True when the last render had more transcript than fits; drives the scroll hint. */
@@ -189,8 +179,6 @@ export class SubagentPanel implements Component {
 			this.close();
 			return;
 		}
-		// Terminal convention: ctrl+c interrupts the running work. When nothing
-		// is running it falls back to "get me out" and closes like Esc.
 		if (matchesKey(data, "ctrl+c")) {
 			const selected = this.selectedSnapshot();
 			if (selected && isActiveStatus(selected.status)) this.stopSelected();
@@ -225,7 +213,7 @@ export class SubagentPanel implements Component {
 			return;
 		}
 		if (matchesKey(data, "home")) {
-			this.scrollFromBottom = Number.MAX_SAFE_INTEGER; // render clamps to top
+			this.scrollFromBottom = Number.MAX_SAFE_INTEGER;
 			this.requestRender();
 			return;
 		}
@@ -234,13 +222,14 @@ export class SubagentPanel implements Component {
 			this.requestRender();
 			return;
 		}
-		this.feedback = ""; // typing resumes the contextual hint
+		this.feedback = "";
 		this.input.handleInput(data);
 		this.requestRender();
 	}
 
 	invalidate(): void {
 		this.input.invalidate();
+		this.liveMarkdown?.invalidate();
 		for (const entry of this.finalMarkdownCache.values()) {
 			entry.component.invalidate();
 		}
@@ -296,33 +285,34 @@ export class SubagentPanel implements Component {
 
 	private halfPage(): number {
 		const total = this.host.getSnapshots().length;
-		return Math.max(4, Math.floor(this.heightBudget(total) / 2));
+		return Math.max(3, Math.floor(this.heightBudget(total) / 2));
 	}
 
-	/** Height must mirror panelOverlayOptions' maxHeight fraction so the frame never clips. */
+	/** Must mirror panelOverlayOptions maxHeight so the frame never clips. */
 	private heightFraction(): number {
 		const rows = this.tui.terminal.rows;
-		if (rows < 24) return 0.92;
-		if (rows < 36) return 0.88;
-		return 0.84;
+		if (rows < 24) return 0.78;
+		if (rows < 36) return 0.68;
+		return 0.6;
 	}
 
 	private showMetaLine(): boolean {
-		return this.tui.terminal.rows >= 20;
+		return this.tui.terminal.rows >= 16;
 	}
 
 	private showWorkerTabs(total: number): boolean {
-		return total > 1 && this.tui.terminal.rows >= 18;
+		return total > 1 && this.tui.terminal.rows >= 14;
 	}
 
 	private heightBudget(totalWorkers: number): number {
 		const rows = this.tui.terminal.rows;
-		let chrome = 8;
+		// Frame + dividers + pulse + input + hint ≈ 7.
+		let chrome = 7;
 		if (this.showMetaLine()) chrome += 1;
 		if (this.showWorkerTabs(totalWorkers)) chrome += 1;
 		return Math.max(
 			3,
-			Math.min(40, Math.floor(rows * this.heightFraction()) - chrome),
+			Math.min(BODY_ROWS_CAP, Math.floor(rows * this.heightFraction()) - chrome),
 		);
 	}
 
@@ -342,7 +332,6 @@ export class SubagentPanel implements Component {
 			});
 	}
 
-	/** Enter always does the one thing the mode label announces. */
 	private submitPrimary(): void {
 		const selected = this.selectedSnapshot();
 		if (!selected) return;
@@ -383,7 +372,6 @@ export class SubagentPanel implements Component {
 
 	// ------------------------------------------------------------ animation
 
-	/** Only tick while panel is open and the selected worker is active. */
 	private syncTimer(): void {
 		const selected = this.selectedSnapshot();
 		const needsTick = Boolean(
@@ -405,11 +393,54 @@ export class SubagentPanel implements Component {
 		}
 	}
 
-	// ------------------------------------------------------------ rendering
+	// ------------------------------------------------------------ chrome
+
+	private edge(character: string): string {
+		return this.theme.fg("borderAccent", character);
+	}
+
+	private frameTop(left: string, right: string, width: number): string {
+		const leftPart = left
+			? `${this.edge("─")} ${left} `
+			: this.edge("─");
+		const rightPart = right ? ` ${right} ${this.edge("─")}` : "";
+		const fill = Math.max(
+			1,
+			width - 2 - visibleWidth(leftPart) - visibleWidth(rightPart),
+		);
+		return `${this.edge("╭")}${leftPart}${this.edge("─".repeat(fill))}${rightPart}${this.edge("╮")}`;
+	}
+
+	private frameBottom(width: number): string {
+		return this.edge(`╰${"─".repeat(Math.max(0, width - 2))}╯`);
+	}
+
+	private frameSide(text: string, innerWidth: number): string {
+		const clipped = truncateToWidth(text, innerWidth, this.theme.fg("dim", "…"));
+		const pad = Math.max(0, innerWidth - visibleWidth(clipped));
+		return `${this.edge("│")}${clipped}${" ".repeat(pad)}${this.edge("│")}`;
+	}
+
+	private frame(
+		contentLines: string[],
+		width: number,
+		topLeft: string,
+		topRight = "",
+	): string[] {
+		const innerWidth = Math.max(1, width - 2);
+		return [
+			this.frameTop(topLeft, topRight, width),
+			...contentLines.map((line) => this.frameSide(line, innerWidth)),
+			this.frameBottom(width),
+		];
+	}
+
+	private divider(innerWidth: number): string {
+		const rule = Math.max(1, innerWidth - 2);
+		return ` ${this.theme.fg("border", "─".repeat(rule))}`;
+	}
 
 	private statusIcon(snapshot: SubagentSnapshot, animate: boolean): string {
-		// Live motion only on the selected active title glyph (accent braille).
-		// Terminal / idle use static semantic glyphs — quiet plate, not a light show.
 		if (animate && isActiveStatus(snapshot.status)) {
 			return this.theme.fg("accent", brailleFrame());
 		}
@@ -419,144 +450,127 @@ export class SubagentPanel implements Component {
 		);
 	}
 
-	/** Outer frame — accent so the modal reads clearly over wallpaper. */
-	private border(character: string): string {
-		return this.theme.fg("borderAccent", character);
-	}
-
-	private pad(text: string, width: number): string {
-		const clipped = truncateToWidth(text, width, this.theme.fg("dim", "…"));
-		return `${clipped}${" ".repeat(Math.max(0, width - visibleWidth(clipped)))}`;
-	}
-
-	private row(text: string, innerWidth: number): string {
-		return `${this.border("║")}${this.pad(text, innerWidth)}${this.border("║")}`;
-	}
-
-	private frame(lines: string[], width: number): string[] {
-		const innerWidth = Math.max(1, width - 2);
-		return [
-			this.border(`╔${"═".repeat(innerWidth)}╗`),
-			...lines.map((line) => this.row(line, innerWidth)),
-			this.border(`╚${"═".repeat(innerWidth)}╝`),
-		];
-	}
-
-	private divider(width: number): string {
-		// Inner rule still softer than the outer accent frame.
-		return ` ${this.theme.fg("border", "─".repeat(Math.max(1, width - 4)))}`;
-	}
-
 	/**
-	 * Quiet tab rail: selected = cream type on selectedBg; unselected = glyph only.
-	 * Spaces only (no pipe bar). Optional 1-based index when many workers.
+	 * Tab label: prefer spawn description so same-type workers stay distinct.
+	 * All chips share the same naming style.
 	 */
+	private tabName(snapshot: SubagentSnapshot, compact: boolean): string {
+		const label = snapshot.label?.trim();
+		if (
+			label &&
+			label.toLowerCase() !== snapshot.agentName.trim().toLowerCase()
+		) {
+			return compact ? oneLine(label, 12) : oneLine(label, 18);
+		}
+		return compact
+			? shortAgentType(snapshot.agentName)
+			: formatAgentType(snapshot.agentName);
+	}
+
 	private renderWorkerTabs(
 		snapshots: SubagentSnapshot[],
 		selectedId: string,
 		width: number,
 	): string {
 		const budget = Math.max(8, width - 1);
-		const useIndex = snapshots.length >= 3;
 
-		const build = (withIndex: boolean): string => {
+		const build = (compact: boolean): string => {
 			const parts: string[] = [];
-			for (let i = 0; i < snapshots.length; i++) {
-				const snapshot = snapshots[i]!;
+			for (const snapshot of snapshots) {
 				const selected = snapshot.id === selectedId;
+				const name = this.tabName(snapshot, compact);
 				if (selected) {
-					// Type only — status lives in the title row glyph.
 					parts.push(
 						this.theme.bg(
 							"selectedBg",
-							this.theme.fg(
-								"toolTitle",
-								this.theme.bold(` ${formatAgentType(snapshot.agentName)} `),
-							),
+							this.theme.fg("toolTitle", this.theme.bold(` ${name} `)),
 						),
 					);
 					continue;
 				}
-				const glyph = STATUS_ICON[snapshot.status];
-				const color =
-					snapshot.status === "failed" ? "error" : ("muted" as const);
-				const label = withIndex ? `${i + 1}${glyph}` : glyph;
-				parts.push(this.theme.fg(color, ` ${label} `));
+				const glyph = this.theme.fg(
+					STATUS_COLOR[snapshot.status],
+					isActiveStatus(snapshot.status)
+						? brailleFrame()
+						: STATUS_ICON[snapshot.status],
+				);
+				parts.push(`${this.theme.fg("muted", ` ${name} `)}${glyph} `);
 			}
 			return parts.join("");
 		};
 
-		let joined = build(useIndex);
-		if (visibleWidth(joined) > budget) joined = build(false);
+		let joined = build(false);
+		if (visibleWidth(joined) > budget) joined = build(true);
 		return truncateToWidth(` ${joined}`, width, this.theme.fg("dim", "…"));
 	}
+
+	// ------------------------------------------------------------ rendering
 
 	private renderTranscriptView(width: number): string[] {
 		const snapshot = this.selectedSnapshot();
 		if (!snapshot) {
 			return this.frame(
 				[
-					` ${this.theme.fg("toolTitle", this.theme.bold("Subagents"))}`,
-					this.divider(width),
+					"",
 					` ${this.theme.fg("muted", "No background workers yet.")}`,
-					` ${this.theme.fg("dim", "Delegate with the subagent tool, then open /agents.")}`,
-					` ${this.theme.fg("dim", "/agents settings · limits · clear")}`,
+					` ${this.theme.fg("dim", "Spawn with the subagent tool, then Alt+O.")}`,
+					"",
 					` ${this.theme.fg("dim", "Esc close")}`,
 				],
 				width,
+				this.theme.fg("toolTitle", this.theme.bold("Subagents")),
 			);
 		}
 		this.selectedId = snapshot.id;
-		// Seeing the transcript counts as reading a completion that lands mid-view.
 		if (snapshot.unread) this.host.markViewed(snapshot.id);
 
 		const innerWidth = Math.max(1, width - 2);
+		const contentWidth = Math.max(8, innerWidth - 2);
 		const snapshots = sortSnapshots(this.host.getSnapshots());
 		const position = snapshots.findIndex((item) => item.id === snapshot.id);
 		const live = isActiveStatus(snapshot.status);
-
+		const multi = this.showWorkerTabs(snapshots.length);
 		const typeTitle = formatAgentType(snapshot.agentName);
-		// Active workers: glyph already shows live — omit redundant "running" word.
-		// Terminal/queued: show status word in semantic color.
-		const statusWord = live
-			? ""
-			: `  ${this.theme.fg(STATUS_COLOR[snapshot.status], snapshot.status)}`;
 
-		const lines: string[] = [
-			` ${this.statusIcon(snapshot, live)} ${this.theme.fg("toolTitle", this.theme.bold(typeTitle))}${snapshot.unread ? this.theme.fg("warning", "*") : ""} ${this.theme.fg("dim", snapshot.id)}${statusWord}`,
-		];
-		if (this.showWorkerTabs(snapshots.length)) {
+		const topLeft = multi
+			? `${this.theme.fg("toolTitle", this.theme.bold("Subagents"))}${this.theme.fg("dim", ` · ${snapshots.length}`)}`
+			: `${this.statusIcon(snapshot, live)} ${this.theme.fg("toolTitle", this.theme.bold(typeTitle))}${snapshot.unread ? this.theme.fg("warning", "*") : ""}`;
+		const topRight = multi
+			? ""
+			: live
+				? ""
+				: this.theme.fg(STATUS_COLOR[snapshot.status], snapshot.status);
+
+		const lines: string[] = [];
+
+		if (multi) {
 			lines.push(
-				this.renderWorkerTabs(
-					snapshots,
-					snapshot.id,
-					Math.max(8, innerWidth - 1),
-				),
+				this.renderWorkerTabs(snapshots, snapshot.id, contentWidth + 1),
 			);
 		}
+
+		// One dim meta line: id · optional task label · stats.
 		if (this.showMetaLine()) {
-			const metaBudget = Math.max(12, innerWidth - 2);
-			let metaParts = formatMetaParts(snapshot);
-			let meta = metaParts.join(" · ");
-			while (metaParts.length > 1 && visibleWidth(meta) > metaBudget) {
-				metaParts = metaParts.slice(0, -1);
-				meta = metaParts.join(" · ");
-			}
+			const label = this.oneLineTask(snapshot);
+			const bits = [
+				snapshot.id,
+				label,
+				...formatMetaParts(snapshot),
+			].filter(Boolean);
+			const meta = bits.join(" · ");
 			if (meta) {
 				lines.push(
-					` ${this.theme.fg("dim", truncateToWidth(meta, metaBudget, "…"))}`,
+					` ${this.theme.fg("dim", truncateToWidth(meta, contentWidth, "…"))}`,
 				);
 			}
 		}
-		lines.push(this.divider(width));
 
-		const transcript = this.renderTranscript(
-			snapshot,
-			Math.max(8, innerWidth - 2),
-		);
+		lines.push(this.divider(innerWidth));
+
+		const transcript = this.renderBody(snapshot, contentWidth);
 		const bodyRows = Math.min(
 			this.heightBudget(snapshots.length),
-			Math.max(transcript.length, 4),
+			Math.max(transcript.length, 3),
 		);
 		this.scrollable = transcript.length > bodyRows;
 		const maxOffset = Math.max(0, transcript.length - bodyRows);
@@ -566,14 +580,17 @@ export class SubagentPanel implements Component {
 		const visible = transcript.slice(start, end);
 		while (visible.length < bodyRows) visible.unshift("");
 		for (const line of visible) lines.push(` ${line}`);
+
 		if (this.scrollFromBottom > 0) {
 			const noun = this.scrollFromBottom === 1 ? "newer line" : "newer lines";
 			lines.push(
-				` ${this.theme.fg("warning", `▾ ${this.scrollFromBottom} ${noun} · End to follow`)}`,
+				` ${this.theme.fg("warning", `▾ ${this.scrollFromBottom} ${noun} · End`)}`,
 			);
 		}
 
-		lines.push(this.divider(width));
+		lines.push(this.divider(innerWidth));
+
+		// Status row above input — Pi Loader braille, never a solid ●.
 		if (live) {
 			const activity = snapshot.currentActivity ?? "Working...";
 			const elapsed = formatDuration(
@@ -588,27 +605,29 @@ export class SubagentPanel implements Component {
 			]
 				.filter(Boolean)
 				.join(" · ");
+			const spinner = this.theme.fg("accent", brailleFrame());
 			const activityBudget = Math.max(
 				8,
-				innerWidth - visibleWidth(liveStats) - 6,
+				contentWidth - visibleWidth(liveStats) - 4,
 			);
-			// Accent bullet for pulse; muted text (not warning gold) for routine progress.
 			lines.push(
-				` ${this.theme.fg("accent", "●")} ${this.theme.fg("muted", truncateToWidth(activity, activityBudget, "…"))} ${this.theme.fg("dim", liveStats)}`,
+				` ${spinner} ${this.theme.fg("muted", truncateToWidth(activity, activityBudget, "…"))}${liveStats ? this.theme.fg("dim", ` ${liveStats}`) : ""}`,
 			);
 		} else if (snapshot.error) {
 			lines.push(
-				` ${this.theme.fg("error", truncateToWidth(`✗ ${snapshot.error.replace(/[\r\n\t]+/g, " ")}`, Math.max(8, innerWidth - 2), "…"))}`,
+				` ${this.theme.fg("error", truncateToWidth(`✗ ${snapshot.error.replace(/[\r\n\t]+/g, " ")}`, contentWidth, "…"))}`,
 			);
+		} else {
+			lines.push("");
 		}
 
 		const mode = this.inputModeLabel(snapshot, position, snapshots.length);
 		this.input.focused = this.focused;
-		const modeWidth = visibleWidth(mode.label) + 3;
+		const modeWidth = visibleWidth(mode.label) + 1;
 		const [inputLine = ""] = this.input.render(
-			Math.max(1, innerWidth - modeWidth),
+			Math.max(1, contentWidth - modeWidth + 1),
 		);
-		lines.push(` ${mode.label} ${inputLine}`);
+		lines.push(` ${mode.label}${inputLine}`);
 		lines.push(
 			` ${
 				this.feedback
@@ -619,13 +638,10 @@ export class SubagentPanel implements Component {
 					: this.theme.fg("dim", mode.hint)
 			}`,
 		);
-		return this.frame(lines, width);
+		return this.frame(lines, width, topLeft, topRight);
 	}
 
-	/**
-	 * The label names what Enter does; the hint lists only currently-usable
-	 * keys so guidance appears exactly when an action becomes available.
-	 */
+	/** Mode word only — Input owns the `> ` glyph. */
 	private inputModeLabel(
 		snapshot: SubagentSnapshot,
 		position: number,
@@ -634,25 +650,31 @@ export class SubagentPanel implements Component {
 		label: string;
 		hint: string;
 	} {
-		let label: string;
+		let word: string;
+		let color: "accent" | "dim" | "success" | "warning";
 		let action: string;
 		if (snapshot.status === "running") {
-			label = this.theme.fg("accent", "[send]");
+			word = "send";
+			color = "accent";
 			action = "Enter send";
 		} else if (
 			snapshot.status === "starting" ||
 			snapshot.status === "queued"
 		) {
-			label = this.theme.fg("dim", "[on start]");
+			word = "on start";
+			color = "dim";
 			action = "Enter attach";
 		} else if (snapshot.status === "completed") {
-			label = this.theme.fg("success", "[continue]");
+			word = "continue";
+			color = "success";
 			action = "Enter continue";
 		} else {
-			label = this.theme.fg("warning", "[rerun]");
+			word = "rerun";
+			color = "warning";
 			action = "Enter rerun (typed text = new task)";
 		}
 
+		const label = `${this.theme.fg(color, word)} `;
 		const parts = [action];
 		if (this.scrollable) parts.push("↑↓ scroll");
 		if (total > 1) {
@@ -664,6 +686,171 @@ export class SubagentPanel implements Component {
 		return { label, hint: parts.join(" · ") };
 	}
 
+	// ------------------------------------------------------- body sections
+
+	/**
+	 * Compact narrative:
+	 *   tools (last few) → reply stream / final result
+	 * Task lives on the meta line, not as a multi-line dump.
+	 */
+	private renderBody(snapshot: SubagentSnapshot, width: number): string[] {
+		const lines: string[] = [];
+
+		const tools = this.renderTools(snapshot, width);
+		if (tools.length) lines.push(...tools);
+
+		const result = this.renderResult(snapshot, width);
+		if (result.length) {
+			if (lines.length) lines.push("");
+			lines.push(...result);
+		}
+
+		if (!lines.length) {
+			return [this.theme.fg("muted", "(waiting for output)")];
+		}
+		return lines;
+	}
+
+	/** One-line task label for the meta row (never a multi-line brief). */
+	private oneLineTask(snapshot: SubagentSnapshot): string {
+		const label = snapshot.label?.trim();
+		if (
+			label &&
+			label.toLowerCase() !== snapshot.agentName.trim().toLowerCase()
+		) {
+			return oneLine(label, 36);
+		}
+		const task = snapshot.task?.trim();
+		return task ? oneLine(task, 36) : "";
+	}
+
+	/**
+	 * Tool rail — last N tools, one line each. No success footnotes (those
+	 * doubled height for every read). Errors still show a dim note.
+	 */
+	private renderTools(snapshot: SubagentSnapshot, width: number): string[] {
+		const visible = snapshot.activities.slice(-TOOLS_VISIBLE);
+		const omitted =
+			snapshot.omittedActivities +
+			Math.max(0, snapshot.activities.length - visible.length);
+		if (!visible.length && !omitted) return [];
+
+		const lines: string[] = [];
+		if (omitted) {
+			lines.push(this.theme.fg("dim", `… +${omitted} tools`));
+		}
+		for (const activity of visible) {
+			const icon = this.activityIcon(activity);
+			const prefix = `${icon} `;
+			const summaryColor =
+				activity.status === "failed"
+					? "error"
+					: activity.status === "running"
+						? "text"
+						: "toolOutput";
+			// Single truncated line — wrap only if the first wrap is still short.
+			const text = truncateToWidth(
+				activity.summary,
+				Math.max(1, width - visibleWidth(prefix)),
+				"…",
+			);
+			lines.push(`${prefix}${this.theme.fg(summaryColor, text)}`);
+			if (activity.status === "failed" && activity.resultSummary) {
+				lines.push(
+					this.theme.fg(
+						"error",
+						truncateToWidth(`  ${activity.resultSummary}`, width, "…"),
+					),
+				);
+			}
+		}
+		return lines;
+	}
+
+	/**
+	 * Reply / result block.
+	 * While live: streaming Markdown only (skip intermediate plan chatter).
+	 * When terminal: final result Markdown only.
+	 * Steers always show when present.
+	 */
+	private renderResult(snapshot: SubagentSnapshot, width: number): string[] {
+		const terminal = isTerminalStatus(snapshot.status);
+		const lines: string[] = [];
+
+		// Steers (user messages after the initial spawn).
+		for (const item of this.steerMessages(snapshot)) {
+			const prefix = this.theme.fg("dim", "› ");
+			const text = truncateToWidth(
+				oneLine(item.text, 400),
+				Math.max(1, width - visibleWidth("› ")),
+				"…",
+			);
+			lines.push(`${prefix}${this.theme.fg("muted", text)}`);
+		}
+
+		if (snapshot.liveText) {
+			if (lines.length) lines.push("");
+			for (const line of this.liveMarkdownLines(snapshot.liveText, width)) {
+				lines.push(line);
+			}
+			return lines;
+		}
+
+		if (terminal && snapshot.lastOutput) {
+			if (lines.length) lines.push("");
+			for (const line of this.finalMarkdownLines(snapshot, width)) {
+				lines.push(line);
+			}
+			return lines;
+		}
+
+		// Settled mid-turn without live text: show last intermediate assistant
+		// only (not the whole plan history).
+		if (!terminal) {
+			const lastAssistant = this.lastAssistantItem(snapshot);
+			if (lastAssistant) {
+				if (lines.length) lines.push("");
+				for (const line of this.markdownLines(lastAssistant, width)) {
+					lines.push(line);
+				}
+			}
+		}
+
+		return lines;
+	}
+
+	private steerMessages(snapshot: SubagentSnapshot): TimelineItem[] {
+		const task = snapshot.task?.trim() ?? "";
+		let skippedInitial = false;
+		const steers: TimelineItem[] = [];
+		for (const item of snapshot.timeline) {
+			if (item.kind !== "user") continue;
+			if (!skippedInitial) {
+				skippedInitial = true;
+				if (
+					!task ||
+					item.text.trim() === task ||
+					item.text.includes(task.slice(0, 80))
+				) {
+					continue;
+				}
+			}
+			steers.push(item);
+		}
+		// Keep the rail short — last two steers only.
+		return steers.slice(-2);
+	}
+
+	private lastAssistantItem(
+		snapshot: SubagentSnapshot,
+	): TimelineItem | undefined {
+		for (let i = snapshot.timeline.length - 1; i >= 0; i--) {
+			const item = snapshot.timeline[i];
+			if (item?.kind === "assistant") return item;
+		}
+		return undefined;
+	}
+
 	private markdownLines(item: TimelineItem, width: number): string[] {
 		let component = this.markdownCache.get(item);
 		if (!component) {
@@ -671,6 +858,18 @@ export class SubagentPanel implements Component {
 			this.markdownCache.set(item, component);
 		}
 		return component.render(Math.max(1, width));
+	}
+
+	/** Streaming Markdown — same path Pi uses for partial assistant text. */
+	private liveMarkdownLines(text: string, width: number): string[] {
+		if (!this.liveMarkdown) {
+			this.liveMarkdown = new Markdown(text, 0, 0, getMarkdownTheme());
+			this.liveMarkdownText = text;
+		} else if (this.liveMarkdownText !== text) {
+			this.liveMarkdown.setText(text);
+			this.liveMarkdownText = text;
+		}
+		return this.liveMarkdown.render(Math.max(1, width));
 	}
 
 	private finalMarkdownLines(
@@ -695,126 +894,10 @@ export class SubagentPanel implements Component {
 
 	private activityIcon(activity: ToolActivity): string {
 		if (activity.status === "running") {
-			return this.theme.fg("accent", "●");
+			// Same braille family as Pi Loader — not a solid disc.
+			return this.theme.fg("accent", brailleFrame());
 		}
 		if (activity.status === "failed") return this.theme.fg("error", "✗");
 		return this.theme.fg("success", "✓");
-	}
-
-	private renderActivities(
-		snapshot: SubagentSnapshot,
-		width: number,
-	): string[] {
-		const maxVisible = 12;
-		const visible = snapshot.activities.slice(-maxVisible);
-		const omitted =
-			snapshot.omittedActivities +
-			Math.max(0, snapshot.activities.length - visible.length);
-		if (!visible.length && !omitted) return [];
-
-		const lines = [this.theme.fg("muted", this.theme.bold("Activity"))];
-		if (omitted) {
-			lines.push(
-				this.theme.fg("dim", `… ${omitted} earlier tool activities omitted`),
-			);
-		}
-		for (const activity of visible) {
-			const prefix = `${this.activityIcon(activity)} `;
-			const wrapped = wrapPlainLine(
-				activity.summary,
-				Math.max(1, width - visibleWidth(prefix)),
-			);
-			for (let index = 0; index < wrapped.length; index++) {
-				const actualPrefix =
-					index === 0 ? prefix : " ".repeat(visibleWidth(prefix));
-				lines.push(
-					`${actualPrefix}${this.theme.fg(activity.status === "failed" ? "error" : "toolOutput", wrapped[index] ?? "")}`,
-				);
-			}
-			if (activity.resultSummary) {
-				const resultPrefix = "  ⎿ ";
-				const resultLines = wrapPlainLine(
-					activity.resultSummary,
-					Math.max(1, width - visibleWidth(resultPrefix)),
-				);
-				for (let index = 0; index < resultLines.length; index++) {
-					const actualPrefix =
-						index === 0
-							? resultPrefix
-							: " ".repeat(visibleWidth(resultPrefix));
-					lines.push(
-						`${this.theme.fg("dim", actualPrefix)}${this.theme.fg(activity.status === "failed" ? "error" : "dim", resultLines[index] ?? "")}`,
-					);
-				}
-			}
-		}
-		return lines;
-	}
-
-	private renderTranscript(
-		snapshot: SubagentSnapshot,
-		width: number,
-	): string[] {
-		const terminal = isTerminalStatus(snapshot.status);
-		const items: TimelineItem[] = snapshot.timeline
-			.slice(-100)
-			.filter(
-				(item) =>
-					item.kind !== "tool" &&
-					item.kind !== "toolResult" &&
-					!(terminal && item.kind === "assistant" && item.text === snapshot.lastOutput),
-			);
-		const lines = this.renderActivities(snapshot, width);
-		let previousKind: TimelineKind | undefined;
-		for (const item of items) {
-			if (
-				lines.length &&
-				(item.kind === "user" ||
-					(item.kind === "assistant" && previousKind !== "assistant"))
-			) {
-				lines.push("");
-			}
-			if (item.kind === "assistant") {
-				for (const line of this.markdownLines(item, Math.max(1, width - 2))) {
-					lines.push(`  ${line}`);
-				}
-			} else {
-				const prefix = timelinePrefix(item.kind);
-				const wrapped = wrapPlainLine(
-					item.text,
-					Math.max(1, width - visibleWidth(prefix)),
-				);
-				for (let index = 0; index < wrapped.length; index++) {
-					const actualPrefix =
-						index === 0 ? prefix : " ".repeat(visibleWidth(prefix));
-					lines.push(
-						`${this.theme.fg("dim", actualPrefix)}${this.theme.fg(timelineColor(item.kind), wrapped[index] ?? "")}`,
-					);
-				}
-			}
-			previousKind = item.kind;
-		}
-		if (snapshot.liveText) {
-			// The streaming tail stays plain text: half-written markdown (open
-			// fences, partial tables) re-renders unstably frame to frame.
-			if (lines.length) lines.push("");
-			for (const line of wrapPlainLine(
-				snapshot.liveText,
-				Math.max(1, width - 2),
-			)) {
-				lines.push(`  ${this.theme.fg("text", line)}`);
-			}
-		}
-		if (terminal && snapshot.lastOutput) {
-			if (lines.length) lines.push("");
-			lines.push(this.theme.fg("muted", this.theme.bold("Result")));
-			for (const line of this.finalMarkdownLines(snapshot, width)) {
-				lines.push(line);
-			}
-		}
-		if (!lines.length) {
-			return [this.theme.fg("muted", "(waiting for output)")];
-		}
-		return lines;
 	}
 }

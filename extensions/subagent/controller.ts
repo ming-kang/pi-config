@@ -46,6 +46,7 @@ import {
 	createWorkerId,
 	formatDuration,
 	formatStatuslineSummary,
+	statuslineTone,
 	formatTokens,
 	isTerminalStatus,
 	oneLine,
@@ -2161,10 +2162,18 @@ export class SubagentController implements SubagentPanelHost {
 			ctx.ui.setStatus(SUBAGENT_STATUS_KEY, undefined);
 			return;
 		}
-		const summary = formatStatuslineSummary(this.getSnapshots());
+		const snapshots = this.getSnapshots();
+		const summary = formatStatuslineSummary(snapshots);
+		if (!summary) {
+			ctx.ui.setStatus(SUBAGENT_STATUS_KEY, undefined);
+			return;
+		}
+		const theme = ctx.ui.theme;
+		const tone = statuslineTone(snapshots);
+		// Pre-colored so statusline can pass ANSI through (see formatExtensionStatuses).
 		ctx.ui.setStatus(
 			SUBAGENT_STATUS_KEY,
-			summary ? `${summary} · Alt+O` : undefined,
+			`${theme.fg(tone, summary)}${theme.fg("dim", " · Alt+O")}`,
 		);
 	}
 

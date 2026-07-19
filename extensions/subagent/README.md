@@ -36,31 +36,36 @@ Completion arrives as a parent follow-up — do not poll.
 
 ### Statusline chip
 
-While workers exist, `ctx.ui.setStatus` fills the statusline middle slot (with the bundled `statusline` extension):
+While workers exist, `ctx.ui.setStatus` fills the statusline middle slot (with the bundled `statusline` extension). The chip is pre-colored by state (accent while live, warning when unread, success when done, error on failure):
 
 | Chip | Meaning |
 |---|---|
-| `3 explorer running · Alt+O` | three explorers active |
-| `2 running, 1 queued · Alt+O` | mixed activity |
-| `2 done, unread · Alt+O` | finished; open panel to review |
+| `2 explorer · Alt+O` | explorers active (accent) |
+| `1 running · 1 queued · Alt+O` | mixed activity |
+| `2 done · unread · Alt+O` | finished; open panel to review |
 
 No always-on floating card (avoids scroll / layout fights).
 
 ### `Alt+O` — fleet panel (interactive)
 
-Capturing overlay (**centered**, adaptive width, accent double-line frame) — like inspecting a focused session:
+Capturing overlay (**centered** card — ~60% height on tall terminals, not a full-screen dump). Title rides in the top border. Multi-worker fleets use a chip rail labeled by spawn `description`.
+
+Body stays short:
+
+1. **meta** — id · task label · stats (one dim line; no multi-line brief)  
+2. **tools** — last 6 tool lines only (`… +N tools` for the rest); no success footnotes  
+3. **reply** — streaming Markdown while live; final Markdown when done (intermediate plan chatter dropped)  
+4. **status + input** — Pi Loader braille spinner + mode word + `Input` (`send >` / …)
 
 | Key | Action |
 |---|---|
 | `Tab` / `Shift+Tab` | Cycle workers (spawn order) |
-| `↑↓` / `PgUp`/`PgDn` / `Home`/`End` | Scroll transcript |
+| `↑↓` / `PgUp`/`PgDn` / `Home`/`End` | Scroll body |
 | `Enter` | Context action: send / attach on start / continue / rerun |
 | `ctrl+c` | Stop active worker (or close if idle) |
 | `Esc` | Close panel |
 
-Input line mode labels: `[send]` · `[on start]` · `[continue]` · `[rerun]`.
-
-Transcript shows timeline (tools, assistant Markdown results when complete). Paths use `~` for the home directory.
+Paths use `~` for the home directory.
 
 ### `/agents` settings
 

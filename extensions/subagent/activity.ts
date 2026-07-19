@@ -151,12 +151,25 @@ function extractToolResultText(result: unknown): string {
 		.trim();
 }
 
+/**
+ * Compact result footnote for the fleet panel. Prefer size over a noisy first
+ * line (JSON braces, code openers, fence markers) so the rail stays scannable.
+ */
 export function summarizeToolResult(result: unknown): string {
 	const text = extractToolResultText(result);
 	if (!text) return "";
-	const lines = text.split("\n").filter((line) => line.trim().length > 0);
-	const first = oneLine(lines[0] ?? "", 140);
-	return lines.length > 1 ? `${first} (+${lines.length - 1} lines)` : first;
+	const lines = text.replace(/\r\n?/g, "\n").split("\n");
+	const nonEmpty = lines.filter((line) => line.trim().length > 0);
+	if (lines.length >= 2) {
+		return `${lines.length} line${lines.length === 1 ? "" : "s"}`;
+	}
+	const first = oneLine(nonEmpty[0] ?? "", 100);
+	if (!first) return "";
+	// Single-line payloads that look like structure, not a human summary.
+	if (/^[\{\[\`<(|]/.test(first) || /^[\s]*[{[]/.test(first)) {
+		return "1 line";
+	}
+	return first;
 }
 
 function isSearchTool(activity: ToolActivity): boolean {

@@ -25,7 +25,8 @@ export const BRAILLE_FRAMES = [
 	"⠏",
 ] as const;
 
-export const BRAILLE_INTERVAL_MS = 100;
+/** Match `@earendil-works/pi-tui` Loader default interval. */
+export const BRAILLE_INTERVAL_MS = 80;
 
 export function brailleFrame(now = Date.now()): string {
 	const index =
@@ -270,8 +271,8 @@ export function countSnapshots(
 }
 
 /**
- * Human-readable statusline chip (no arrow codes).
- * Examples: "3 explorer running", "2 running, 1 queued", "2 done, unread"
+ * Plain statusline summary (no ANSI).
+ * Examples: "2 explorer", "1 running · 1 queued", "2 done · unread"
  */
 export function formatStatuslineSummary(
 	snapshots: readonly SubagentSnapshot[],
@@ -290,9 +291,10 @@ export function formatStatuslineSummary(
 	if (counts.active || counts.queued) {
 		const parts: string[] = [];
 		if (counts.active) {
+			// Color carries "running"; keep the chip short.
 			parts.push(
 				singleType && counts.queued === 0
-					? `${counts.active} ${singleType} running`
+					? `${counts.active} ${singleType}`
 					: `${counts.active} running`,
 			);
 		}
@@ -304,12 +306,31 @@ export function formatStatuslineSummary(
 			);
 		}
 		if (counts.failed) parts.push(`${counts.failed} failed`);
-		return parts.join(", ");
+		return parts.join(" · ");
 	}
 
 	const parts: string[] = [];
 	if (counts.failed) parts.push(`${counts.failed} failed`);
 	if (counts.done) parts.push(`${counts.done} done`);
 	if (counts.unread && counts.done) parts.push("unread");
-	return parts.length ? parts.join(", ") : undefined;
+	return parts.length ? parts.join(" · ") : undefined;
+}
+
+export type StatuslineTone =
+	| "accent"
+	| "success"
+	| "warning"
+	| "error"
+	| "muted";
+
+/** Semantic tone for the statusline chip based on fleet state. */
+export function statuslineTone(
+	snapshots: readonly SubagentSnapshot[],
+): StatuslineTone {
+	const counts = countSnapshots(snapshots);
+	if (counts.active || counts.queued) return "accent";
+	if (counts.failed) return "error";
+	if (counts.unread) return "warning";
+	if (counts.done) return "success";
+	return "muted";
 }
