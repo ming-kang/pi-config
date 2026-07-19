@@ -51,7 +51,7 @@ This file governs work on the code here: cross-cutting conventions live in this 
 
 ## Per-extension design notes
 
-[`deepwiki`](extensions/deepwiki/README.md) · [`question`](extensions/question/README.md) · [`todo`](extensions/todo/README.md) · [`rewind`](extensions/rewind/README.md) · [`read-before-edit`](extensions/read-before-edit/README.md) · [`statusline`](extensions/statusline/README.md) · [`subagent`](extensions/subagent/README.md)
+[`deepwiki`](extensions/deepwiki/README.md) · [`question`](extensions/question/README.md) · [`todo`](extensions/todo/README.md) · [`rewind`](extensions/rewind/README.md) · [`read-before-edit`](extensions/read-before-edit/README.md) · [`statusline`](extensions/statusline/README.md) · [`subagent`](extensions/subagent/README.md) · [`router`](extensions/router/README.md)
 
 ## Compact Instructions
 
