@@ -38,10 +38,13 @@ const BUILTIN_AGENTS: AgentDefinition[] = [
 		name: "general",
 		description:
 			"General-purpose worker that may inspect and modify the workspace",
+		toolGuideline:
+			"- Use general when the task needs file edits or shell writes.",
 		systemPrompt: [
 			"Complete the delegated task end to end. Prefer editing existing files over creating new ones.",
 			"Do not create documentation files unless the task explicitly asks for them.",
 			"When finished, respond with a concise report for the parent agent: what changed (paths), key findings, and any blockers — essentials only.",
+			"Do not spawn additional subagents; you are already the delegated execution context.",
 		].join(" "),
 		tools: [...GENERAL_TOOLS],
 		source: "builtin",
@@ -49,11 +52,14 @@ const BUILTIN_AGENTS: AgentDefinition[] = [
 	{
 		name: "explorer",
 		description: "Read-only codebase reconnaissance and compressed findings",
+		toolGuideline:
+			"- Use explorer for codebase searches and read-only understanding (no bash/edit/write).",
 		systemPrompt: [
 			"READ-ONLY reconnaissance. You must not create, modify, delete, or move files, or run any command that changes system state.",
 			"You have only read, grep, find, and ls — no bash, edit, or write.",
 			"Search efficiently (parallel tool calls when useful). Return concise findings with exact paths, symbols, and line references the parent can act on.",
 			"If project conventions matter, read AGENTS.md or README yourself; do not invent structure.",
+			"Do not spawn additional subagents; you are already the delegated execution context.",
 		].join(" "),
 		tools: [...EXPLORER_TOOLS],
 		// Cheap default for recon; parent/settings/spawn can still override.
@@ -170,4 +176,49 @@ export function discoverAgents(
 		),
 		projectAgentsDir,
 	};
+}
+
+/** Model-facing Available agents block for the subagent tool description. */
+export function buildAgentTypeListText(cwd: string): string {
+	const { agents } = discoverAgents(cwd, "both");
+	const builtins = agents.filter((a) => a.source === "builtin");
+	const custom = agents.filter((a) => a.source !== "builtin");
+	const lines: string[] = [];
+	if (builtins.length) {
+		lines.push("Default agents:");
+		for (const agent of builtins) {
+			lines.push(`- ${agent.name}: ${agent.description}`);
+		}
+	}
+	if (custom.length) {
+		if (lines.length) lines.push("");
+		lines.push("Custom agents:");
+		for (const agent of custom) {
+			lines.push(
+				`- ${agent.name}: ${agent.description} (${agent.source})`,
+			);
+		}
+	}
+	const guidelines = builtins
+		.map((a) => a.toolGuideline)
+		.filter((line): line is string => Boolean(line));
+	if (guidelines.length) {
+		lines.push("", "Guidelines:", ...guidelines);
+	}
+	return lines.join("\n");
+}
+
+/** Full tool description with dynamic agent list. */
+export function buildSubagentToolDescription(cwd?: string): string {
+	const intro = [
+		"Launch a specialized background worker that runs in-process and reports back when done.",
+		"Workers share the parent process permissions (tool allowlists reduce accidents; they are not a sandbox).",
+		"Default action is spawn. Also: read (list or snapshot by id), send (steer/continue), stop (abort).",
+		"Completion arrives automatically as a parent follow-up — do not poll with sleep or repeated read.",
+	].join(" ");
+	if (!cwd) return intro;
+	const list = buildAgentTypeListText(cwd);
+	return list
+		? `${intro}\n\nAvailable agents:\n${list}\n\nWrite each prompt as a full briefing (workers have no parent conversation context). Set description to a short 3–8 word UI label.`
+		: intro;
 }

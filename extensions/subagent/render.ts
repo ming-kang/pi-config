@@ -14,7 +14,7 @@ import {
 } from "@earendil-works/pi-tui";
 
 import { SUBAGENT_TOOL_LABEL } from "./constants.ts";
-import { formatTokens, oneLine } from "./format.ts";
+import { formatAgentType, formatTokens, oneLine } from "./format.ts";
 import type { SubagentParams } from "./schema.ts";
 import type { SubagentDetails } from "./types.ts";
 
@@ -38,16 +38,30 @@ export function renderSubagentCall(
 	args: SubagentParams,
 	theme: Theme,
 ): Component {
-	let line = theme.fg("toolTitle", theme.bold(`${SUBAGENT_TOOL_LABEL} `));
-	line += theme.fg("muted", args.action);
+	const action = args.action ?? "spawn";
+	let line = theme.fg("toolTitle", theme.bold(`${SUBAGENT_TOOL_LABEL}`));
+	if (action !== "spawn") {
+		line += ` ${theme.fg("muted", action)}`;
+	}
 	if (args.id) line += ` ${theme.fg("accent", args.id)}`;
-	if (args.action === "spawn") {
+	if (action === "spawn") {
 		const count = args.tasks?.length ?? 1;
 		const agent = args.agent ?? args.tasks?.[0]?.agent ?? "general";
-		line += ` ${theme.fg("accent", count > 1 ? `${count} workers` : agent)}`;
-		const task = args.task ?? args.tasks?.[0]?.task;
-		if (task) line += ` ${theme.fg("dim", oneLine(task, 72))}`;
-	} else if (args.action === "send") {
+		const display =
+			count > 1 ? `${count} workers` : formatAgentType(agent);
+		line += ` ${theme.fg("accent", display)}`;
+		const desc =
+			args.description ??
+			args.label ??
+			args.tasks?.[0]?.description ??
+			args.tasks?.[0]?.label;
+		if (desc) line += ` ${theme.fg("muted", oneLine(desc, 48))}`;
+		else {
+			const task =
+				args.prompt ?? args.task ?? args.tasks?.[0]?.prompt ?? args.tasks?.[0]?.task;
+			if (task) line += ` ${theme.fg("dim", oneLine(task, 56))}`;
+		}
+	} else if (action === "send") {
 		if (args.fresh) line += ` ${theme.fg("accent", "fresh")}`;
 		if (args.message) line += ` ${theme.fg("dim", oneLine(args.message, 72))}`;
 	}
@@ -111,7 +125,7 @@ export function renderSubagentResult(
 ): Component {
 	const text = firstText(result);
 	if (options.isPartial) {
-		return new Text(theme.fg("warning", "Working..."), 0, 0);
+		return new Text(theme.fg("warning", "Working…"), 0, 0);
 	}
 	if (isError || result.details?.errorCode) {
 		return new Text(theme.fg("error", oneLine(firstLine(text), 220)), 0, 0);
@@ -119,10 +133,6 @@ export function renderSubagentResult(
 	if (options.expanded) return expandedMarkdown(text);
 
 	const summary = theme.fg("accent", summarizeDetails(result.details, text));
-	const viewHint =
-		result.details?.action === "spawn" || result.details?.action === "send"
-			? theme.fg("dim", "/agents view · ")
-			: "";
-	const hint = `${theme.fg("muted", "(")}${viewHint}${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+	const hint = `${theme.fg("muted", "(")}${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
 	return new Text(`${summary}\n${hint}`, 0, 0);
 }

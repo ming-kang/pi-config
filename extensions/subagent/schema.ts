@@ -7,7 +7,7 @@ export const SubagentActionSchema = StringEnum(
 	["spawn", "read", "send", "stop"] as const,
 	{
 		description:
-			'spawn: start work; read: list or one snapshot; send: instruct/continue; stop: abort (notifies parent)',
+			'spawn (default): start work; read: list or one snapshot; send: steer/continue; stop: abort (notifies parent)',
 	},
 );
 
@@ -15,7 +15,7 @@ export const AgentScopeSchema = StringEnum(
 	["user", "project", "both"] as const,
 	{
 		description:
-			'For spawn: where to load Markdown agent definitions. Default "user" (built-ins + ~/.pi/agent/agents). Use "project" or "both" only when you intentionally need repository .pi/agents definitions (interactive confirm required).',
+			'Where to load Markdown agent definitions. Default "user" (built-ins + ~/.pi/agent/agents). Use "project"/"both" only when you intentionally need repository .pi/agents (interactive confirm required).',
 		default: "user",
 	},
 );
@@ -26,22 +26,40 @@ export const ThinkingLevelSchema = StringEnum(
 );
 
 export const SubagentTaskSchema = Type.Object({
-	task: Type.String({
-		description:
-			"Concrete briefing for the worker: goal, constraints, paths, expected report shape",
-		minLength: 1,
-		maxLength: 20_000,
-	}),
+	/** Preferred name for the worker briefing (alias of task). */
+	prompt: Type.Optional(
+		Type.String({
+			description:
+				"Concrete briefing for the worker: goal, constraints, paths, expected report shape",
+			minLength: 1,
+			maxLength: 20_000,
+		}),
+	),
+	task: Type.Optional(
+		Type.String({
+			description:
+				"Alias of prompt (legacy). Concrete briefing for the worker.",
+			minLength: 1,
+			maxLength: 20_000,
+		}),
+	),
 	agent: Type.Optional(
 		Type.String({
 			description:
 				'Profile name. Default "general" (may edit). Use "explorer" for read-only recon.',
 		}),
 	),
-	label: Type.Optional(
+	/** Short UI summary (preferred). */
+	description: Type.Optional(
 		Type.String({
 			description:
-				"Short 3–8 word summary shown in the TUI and notifications (strongly recommended)",
+				"Short 3–8 word summary shown in the live preview (strongly recommended)",
+			maxLength: 80,
+		}),
+	),
+	label: Type.Optional(
+		Type.String({
+			description: "Alias of description (legacy)",
 			maxLength: 80,
 		}),
 	),
@@ -57,23 +75,31 @@ export const SubagentTaskSchema = Type.Object({
 				"Working directory relative to the parent session cwd (must stay inside that tree)",
 		}),
 	),
-	thinkingLevel: Type.Optional(
+	thinking: Type.Optional(
 		Type.Union([ThinkingLevelSchema, Type.Literal("inherit")], {
 			description:
 				'Optional reasoning override. Prefer omit. "inherit" uses the parent level.',
 		}),
 	),
+	thinkingLevel: Type.Optional(
+		Type.Union([ThinkingLevelSchema, Type.Literal("inherit")], {
+			description: "Alias of thinking (legacy)",
+		}),
+	),
 });
 
 export const SubagentParamsSchema = Type.Object({
-	action: SubagentActionSchema,
+	action: Type.Optional(SubagentActionSchema),
 
-	// spawn: single-task shorthand. Use tasks for a batch.
+	// spawn: single-task fields
+	prompt: Type.Optional(SubagentTaskSchema.properties.prompt),
 	task: Type.Optional(SubagentTaskSchema.properties.task),
 	agent: Type.Optional(SubagentTaskSchema.properties.agent),
+	description: Type.Optional(SubagentTaskSchema.properties.description),
 	label: Type.Optional(SubagentTaskSchema.properties.label),
 	model: Type.Optional(SubagentTaskSchema.properties.model),
 	cwd: Type.Optional(SubagentTaskSchema.properties.cwd),
+	thinking: Type.Optional(SubagentTaskSchema.properties.thinking),
 	thinkingLevel: Type.Optional(SubagentTaskSchema.properties.thinkingLevel),
 	tasks: Type.Optional(
 		Type.Array(SubagentTaskSchema, {
@@ -106,7 +132,6 @@ export const SubagentParamsSchema = Type.Object({
 		}),
 	),
 
-	// Optional discovery scope (defaults to user-level definitions only).
 	agentScope: Type.Optional(AgentScopeSchema),
 });
 

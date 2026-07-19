@@ -36,6 +36,7 @@ import {
 	READ_OUTPUT_CHARS,
 	SUBAGENT_CONFIG_ENTRY_TYPE,
 	SUBAGENT_NOTIFICATION_TYPE,
+	SUBAGENT_PREVIEW_KEY,
 	SUBAGENT_STATUS_KEY,
 	SUBAGENT_USER_CONFIG_VERSION,
 	TIMELINE_MAX_CHARS,
@@ -217,14 +218,27 @@ export class SubagentController implements SubagentPanelHost {
 	): void {
 		this.ctx = ctx;
 		this.disposed = false;
-		// Drop any stale snapshot cache so statusline reflects current records.
 		this.invalidateSnapshots();
 		if (persistedConfig) this.applyConfig(persistedConfig, false);
-		// Drop legacy below-editor widget if a previous session build left one.
-		if (ctx.mode === "tui") {
+		// Clear legacy always-on preview widgets from earlier builds.
+		if (ctx.hasUI && ctx.mode === "tui") {
 			ctx.ui.setWidget(SUBAGENT_STATUS_KEY, undefined);
+			ctx.ui.setWidget(SUBAGENT_PREVIEW_KEY, undefined);
 		}
 		this.syncStatusline();
+	}
+
+	/** Worker the user most likely wants to inspect first. */
+	mostRelevantId(): string | undefined {
+		const records = [...this.records.values()];
+		const score = (record: SubagentRecord): number =>
+			(record.unread ? 2 : 0) +
+			(record.status === "running" || record.status === "starting" ? 1 : 0);
+		records.sort(
+			(first, second) =>
+				score(second) - score(first) || second.updatedAt - first.updatedAt,
+		);
+		return records[0]?.id;
 	}
 
 	getConfig(): SubagentConfig {
@@ -268,19 +282,6 @@ export class SubagentController implements SubagentPanelHost {
 		return this.ctx?.cwd;
 	}
 
-	/** The worker the user most likely wants to open: unread first, then active, then most recent. */
-	mostRelevantId(): string | undefined {
-		const records = [...this.records.values()];
-		const score = (record: SubagentRecord): number =>
-			(record.unread ? 2 : 0) +
-			(record.status === "running" || record.status === "starting" ? 1 : 0);
-		records.sort(
-			(first, second) =>
-				score(second) - score(first) || second.updatedAt - first.updatedAt,
-		);
-		return records[0]?.id;
-	}
-
 	async loadPreferences(ctx?: ExtensionContext): Promise<void> {
 		if (this.preferencesLoaded) return;
 		this.preferencesLoaded = true;
@@ -293,6 +294,75 @@ export class SubagentController implements SubagentPanelHost {
 					`Could not load subagent settings: ${error instanceof Error ? error.message : String(error)}`,
 					"warning",
 				);
+			}
+		}
+	}
+
+	/** Root `/agents` menu: profiles, limits, clear, stop-all. */
+	async openSettingsRoot(ctx: ExtensionContext): Promise<void> {
+		if (!ctx.hasUI) {
+			ctx.ui.notify("/agents requires an interactive UI.", "warning");
+			return;
+		}
+		this.bindContext(ctx);
+		await this.loadPreferences(ctx);
+		while (true) {
+			const profilesItem = "Profile settings…";
+			const limitsItem = `Limits… (concurrency ${this.config.maxConcurrency}, retain ${this.config.maxAgents})`;
+			const clearItem = "Clear finished workers…";
+			const stopItem = "Stop all running";
+			const doneItem = "Done";
+			const action = await ctx.ui.select("Subagent settings", [
+				profilesItem,
+				limitsItem,
+				clearItem,
+				stopItem,
+				doneItem,
+			]);
+			if (!action || action === doneItem) return;
+			if (action === profilesItem) {
+				await this.openSettingsMenu(ctx);
+				continue;
+			}
+			if (action === limitsItem) {
+				await this.openLimitsMenu(ctx);
+				continue;
+			}
+			if (action === clearItem) {
+				try {
+					ctx.ui.notify(this.clearAgents(undefined), "info");
+				} catch (error) {
+					ctx.ui.notify(
+						error instanceof Error ? error.message : String(error),
+						"warning",
+					);
+				}
+				continue;
+			}
+			if (action === stopItem) {
+				const active = [...this.records.values()].filter(
+					(r) =>
+						r.status === "queued" ||
+						r.status === "starting" ||
+						r.status === "running",
+				);
+				if (!active.length) {
+					ctx.ui.notify("No running or queued workers.", "info");
+					continue;
+				}
+				const ok = await ctx.ui.confirm(
+					"Stop all subagents?",
+					`Stops ${active.length} worker${active.length === 1 ? "" : "s"} and notifies the parent.`,
+				);
+				if (!ok) continue;
+				for (const record of active) {
+					try {
+						await this.stopAgent(record.id);
+					} catch {
+						// Best-effort.
+					}
+				}
+				ctx.ui.notify(`Stopped ${active.length} worker(s).`, "info");
 			}
 		}
 	}
@@ -455,6 +525,11 @@ export class SubagentController implements SubagentPanelHost {
 		}
 	}
 
+	/** Whether an id maps to a retained record. */
+	hasAgent(id: string): boolean {
+		return this.records.has(id);
+	}
+
 	markViewed(id: string): void {
 		const record = this.records.get(id);
 		if (!record || !record.unread) return;
@@ -462,19 +537,30 @@ export class SubagentController implements SubagentPanelHost {
 		this.stateChanged();
 	}
 
-	/** Whether an id maps to a retained record; gates the /agents usage hint. */
-	hasAgent(id: string): boolean {
-		return this.records.has(id);
+	async sendInstruction(
+		id: string,
+		message: string | undefined,
+		fresh = false,
+	): Promise<string> {
+		return this.sendAgent(id, message, fresh);
 	}
 
+	/**
+	 * Open the interactive fleet panel (transcript + steer/stop).
+	 * Used by Alt+O — capturing overlay like a focused Pi session view.
+	 */
 	async openPanel(ctx: ExtensionContext, initialId?: string): Promise<void> {
 		this.bindContext(ctx);
 		if (ctx.mode !== "tui") {
-			ctx.ui.notify("/agents requires the Pi TUI.", "warning");
+			ctx.ui.notify("Subagent panel requires the Pi TUI.", "warning");
+			return;
+		}
+		if (this.records.size === 0) {
+			ctx.ui.notify("No subagents running. Spawn one first.", "info");
 			return;
 		}
 		if (this.panelOpen) {
-			ctx.ui.notify("The subagent panel is already open.", "info");
+			ctx.ui.notify("Subagent panel is already open.", "info");
 			return;
 		}
 
@@ -489,7 +575,7 @@ export class SubagentController implements SubagentPanelHost {
 						tui,
 						theme,
 						host: this,
-						done,
+						done: () => done(undefined),
 						...(startId ? { initialId: startId } : {}),
 					});
 					this.panel = panel;
@@ -497,11 +583,11 @@ export class SubagentController implements SubagentPanelHost {
 				},
 				{
 					overlay: true,
-					// Evaluated after the factory runs, so overlayTui is set; the
-					// tier is chosen for the terminal size at open time.
 					overlayOptions: () =>
 						panelOverlayOptions(
-							overlayTui?.terminal.columns ?? process.stdout.columns ?? 80,
+							overlayTui?.terminal.columns ??
+								process.stdout.columns ??
+								80,
 							overlayTui?.terminal.rows ?? process.stdout.rows ?? 24,
 						),
 				},
@@ -520,7 +606,8 @@ export class SubagentController implements SubagentPanelHost {
 	): Promise<AgentToolResult<SubagentDetails>> {
 		this.bindContext(ctx);
 		await this.loadPreferences(ctx);
-		switch (params.action) {
+		const action = params.action ?? "spawn";
+		switch (action) {
 			case "spawn":
 				return this.spawn(params, ctx);
 			case "read":
@@ -530,14 +617,6 @@ export class SubagentController implements SubagentPanelHost {
 			case "stop":
 				return this.stopResult(params.id);
 		}
-	}
-
-	async sendInstruction(
-		id: string,
-		message: string | undefined,
-		fresh = false,
-	): Promise<string> {
-		return this.sendAgent(id, message, fresh);
 	}
 
 	private async sendAgent(
@@ -647,11 +726,13 @@ export class SubagentController implements SubagentPanelHost {
 		this.queue.length = 0;
 		this.completionGroups.clear();
 		this.cancelPanelRenderTimer();
+		this.panel = undefined;
+		this.panelOpen = false;
 		if (this.ctx?.hasUI) {
 			this.ctx.ui.setStatus(SUBAGENT_STATUS_KEY, undefined);
-			// Clear any legacy below-editor widget from earlier versions.
 			if (this.ctx.mode === "tui") {
 				this.ctx.ui.setWidget(SUBAGENT_STATUS_KEY, undefined);
+				this.ctx.ui.setWidget(SUBAGENT_PREVIEW_KEY, undefined);
 			}
 		}
 
@@ -676,7 +757,6 @@ export class SubagentController implements SubagentPanelHost {
 		this.modelRuntimePromise = undefined;
 		this.replayedProviderIds.clear();
 		this.snapshotsCache = undefined;
-		this.panel = undefined;
 	}
 
 	private async spawn(
@@ -797,27 +877,53 @@ export class SubagentController implements SubagentPanelHost {
 		params: SubagentParams,
 	): SubagentTaskParams[] | { error: string } {
 		const hasBatch = Boolean(params.tasks?.length);
-		const singleTask = params.task?.trim();
-		const hasSingle = Boolean(singleTask);
+		const singlePrompt =
+			params.prompt?.trim() || params.task?.trim() || "";
+		const hasSingle = Boolean(singlePrompt);
 		if (hasBatch === hasSingle) {
 			return {
 				error:
-					'spawn requires exactly one of task (single) or tasks (batch). Example: { action:"spawn", agent:"explorer", label:"auth map", task:"..." }',
+					'spawn requires exactly one of prompt/task (single) or tasks (batch). Example: { agent:"explorer", description:"auth map", prompt:"..." }',
 			};
 		}
-		if (params.tasks) return params.tasks;
+		if (params.tasks) {
+			return params.tasks.map((task) => this.normalizeTaskEntry(task));
+		}
 		return [
-			{
-				task: singleTask ?? "",
+			this.normalizeTaskEntry({
+				prompt: singlePrompt,
+				task: singlePrompt,
 				...(params.agent ? { agent: params.agent } : {}),
-				...(params.label ? { label: params.label } : {}),
+				...(params.description
+					? { description: params.description }
+					: params.label
+						? { label: params.label }
+						: {}),
 				...(params.model ? { model: params.model } : {}),
 				...(params.cwd ? { cwd: params.cwd } : {}),
-				...(params.thinkingLevel
-					? { thinkingLevel: params.thinkingLevel }
-					: {}),
-			},
+				...(params.thinking
+					? { thinking: params.thinking }
+					: params.thinkingLevel
+						? { thinkingLevel: params.thinkingLevel }
+						: {}),
+			}),
 		];
+	}
+
+	/** Normalize prompt/description/thinking aliases onto task + label + thinkingLevel. */
+	private normalizeTaskEntry(task: SubagentTaskParams): SubagentTaskParams {
+		const prompt = task.prompt?.trim() || task.task?.trim() || "";
+		const description = task.description?.trim() || task.label?.trim();
+		const thinking = task.thinking ?? task.thinkingLevel;
+		return {
+			task: prompt,
+			prompt,
+			...(task.agent ? { agent: task.agent } : {}),
+			...(description ? { description, label: description } : {}),
+			...(task.model ? { model: task.model } : {}),
+			...(task.cwd ? { cwd: task.cwd } : {}),
+			...(thinking ? { thinking, thinkingLevel: thinking } : {}),
+		};
 	}
 
 	private prepareLaunchSpecs(
@@ -920,9 +1026,10 @@ export class SubagentController implements SubagentPanelHost {
 			const hasPreferredThinking = Boolean(
 				preference && Object.hasOwn(preference, "thinkingLevel"),
 			);
+			const taskThinking = task.thinkingLevel ?? task.thinking;
 			let thinkingLevel: ThinkingLevelName;
-			if (task.thinkingLevel === "inherit") thinkingLevel = parentThinking;
-			else if (task.thinkingLevel) thinkingLevel = task.thinkingLevel;
+			if (taskThinking === "inherit") thinkingLevel = parentThinking;
+			else if (taskThinking) thinkingLevel = taskThinking;
 			else if (hasPreferredThinking) {
 				const preferredThinking = preference?.thinkingLevel;
 				thinkingLevel =
@@ -933,8 +1040,12 @@ export class SubagentController implements SubagentPanelHost {
 				thinkingLevel = agentDefinition.thinkingLevel ?? parentThinking;
 			}
 
-			const taskText = task.task.trim();
-			const label = oneLine(task.label?.trim() || taskText, 48) || agentName;
+			const taskText = (task.task ?? task.prompt ?? "").trim();
+			const label =
+				oneLine(
+					task.description?.trim() || task.label?.trim() || taskText,
+					48,
+				) || agentName;
 			specs.push({
 				spec: {
 					task: taskText,
@@ -1839,9 +1950,12 @@ export class SubagentController implements SubagentPanelHost {
 				"not_found",
 				`Unknown subagent id: ${id}. Use read without id to list workers.`,
 			);
-		this.markViewed(record.id);
+		if (record.unread) {
+			record.unread = false;
+			this.stateChanged();
+		}
 
-		// Compact snapshot for the model — full activity/timeline stay in the panel.
+		// Compact snapshot for the model — full activity stays in the live preview.
 		const recentTools = record.activities
 			.slice(-5)
 			.map((activity) => `[${activity.status}] ${activity.summary}`)
@@ -2039,10 +2153,7 @@ export class SubagentController implements SubagentPanelHost {
 		this.syncStatusline();
 	}
 
-	/**
-	 * Compact centered statusline chip only — no below-editor widget.
-	 * Open /agents for per-worker detail. Plain text (statusline recolors it).
-	 */
+	/** Compact statusline chip; open Alt+O for the interactive panel. */
 	private syncStatusline(): void {
 		const ctx = this.ctx;
 		if (!ctx?.hasUI) return;
@@ -2050,9 +2161,10 @@ export class SubagentController implements SubagentPanelHost {
 			ctx.ui.setStatus(SUBAGENT_STATUS_KEY, undefined);
 			return;
 		}
+		const summary = formatStatuslineSummary(this.getSnapshots());
 		ctx.ui.setStatus(
 			SUBAGENT_STATUS_KEY,
-			formatStatuslineSummary(this.getSnapshots()),
+			summary ? `${summary} · Alt+O` : undefined,
 		);
 	}
 
@@ -2063,8 +2175,6 @@ export class SubagentController implements SubagentPanelHost {
 	}
 
 	private requestPanelRender(immediate = false): void {
-		// State remains current immediately; only TUI repaint requests are
-		// coalesced. Panel-internal scrolling bypasses the controller entirely.
 		this.invalidateSnapshots();
 		if (!this.panel) return;
 

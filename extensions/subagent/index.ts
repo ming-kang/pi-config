@@ -1,11 +1,9 @@
 /**
- * subagent — isolated background AgentSession workers with parent feedback.
+ * subagent — isolated background AgentSession workers with statusline status
+ * and an interactive fleet panel (Alt+O) for transcript, steer, and stop.
  *
- * Interaction model (minimal background UX): a readable statusline chip
- * (e.g. "3 explorer running") is the only always-on chrome; /agents opens a
- * right-side panel (type-first title, fixed spawn order). Wire ids are
- * a + 8 hex. No footer widget, no idle animation. Panel keys: Enter, Tab,
- * arrows, page up/down, Home/End, ctrl+c stop, Esc close.
+ * Always-on chrome is only a statusline chip. Alt+O opens a capturing overlay
+ * session view (Tab workers, Enter to send, Esc close). /agents is settings only.
  *
  * Security: workers share the parent process OS permissions and credentials.
  * Tool allowlists and cwd bounds reduce accidents; they are not a sandbox.
@@ -18,7 +16,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { type AutocompleteItem, fuzzyFilter } from "@earendil-works/pi-tui";
 
-import { discoverAgents } from "./agents.ts";
+import { buildSubagentToolDescription, discoverAgents } from "./agents.ts";
 import {
 	AGENTS_COMMAND_NAME,
 	SUBAGENT_CONFIG_ENTRY_TYPE,
@@ -57,6 +55,81 @@ function replayConfig(
 	return latest;
 }
 
+/** Normalize legacy / alias fields before schema validation paths in execute. */
+function prepareSubagentArguments(args: unknown): SubagentParams {
+	if (!args || typeof args !== "object") return args as SubagentParams;
+	const input = { ...(args as Record<string, unknown>) };
+
+	if (input.action === "list") {
+		delete input.id;
+		input.action = "read";
+	} else if (input.action === "restart") {
+		input.action = "send";
+		input.fresh = true;
+	}
+
+	// Spawn-first: prompt/task without action → spawn.
+	if (
+		input.action === undefined &&
+		(typeof input.prompt === "string" ||
+			typeof input.task === "string" ||
+			Array.isArray(input.tasks))
+	) {
+		input.action = "spawn";
+	}
+
+	// Aliases.
+	if (input.prompt !== undefined && input.task === undefined) {
+		input.task = input.prompt;
+	}
+	if (input.task !== undefined && input.prompt === undefined) {
+		input.prompt = input.task;
+	}
+	if (input.description !== undefined && input.label === undefined) {
+		input.label = input.description;
+	}
+	if (input.label !== undefined && input.description === undefined) {
+		input.description = input.label;
+	}
+	if (input.thinking !== undefined && input.thinkingLevel === undefined) {
+		input.thinkingLevel = input.thinking;
+	}
+	if (input.thinkingLevel !== undefined && input.thinking === undefined) {
+		input.thinking = input.thinkingLevel;
+	}
+
+	// Dropped from the model contract (security / simplicity). Silently ignore
+	// so resume does not fail schema validation on extras some providers echo.
+	delete input.tools;
+	delete input.delivery;
+	delete input.maxConcurrency;
+	delete input.maxAgents;
+	delete input.confirmProjectAgents;
+
+	if (Array.isArray(input.tasks)) {
+		input.tasks = input.tasks.map((task) => {
+			if (!task || typeof task !== "object") return task;
+			const next = { ...(task as Record<string, unknown>) };
+			if (next.prompt !== undefined && next.task === undefined)
+				next.task = next.prompt;
+			if (next.task !== undefined && next.prompt === undefined)
+				next.prompt = next.task;
+			if (next.description !== undefined && next.label === undefined)
+				next.label = next.description;
+			if (next.label !== undefined && next.description === undefined)
+				next.description = next.label;
+			if (next.thinking !== undefined && next.thinkingLevel === undefined)
+				next.thinkingLevel = next.thinking;
+			if (next.thinkingLevel !== undefined && next.thinking === undefined)
+				next.thinking = next.thinkingLevel;
+			delete next.tools;
+			return next;
+		});
+	}
+
+	return input as SubagentParams;
+}
+
 export default function subagent(pi: ExtensionAPI): void {
 	const controller = new SubagentController(pi);
 
@@ -67,40 +140,13 @@ export default function subagent(pi: ExtensionAPI): void {
 		promptSnippet: SUBAGENT_PROMPT_SNIPPET,
 		promptGuidelines: SUBAGENT_PROMPT_GUIDELINES,
 		parameters: SubagentParamsSchema,
-		// Resumed sessions may replay calls emitted under the previous contract.
-		// Strip knobs that left the model surface (tools/delivery/limits/confirm)
-		// so old transcripts still validate; map retired action names.
 		prepareArguments(args) {
-			if (!args || typeof args !== "object") return args as SubagentParams;
-			const input = { ...(args as Record<string, unknown>) };
-			if (input.action === "list") {
-				delete input.id;
-				input.action = "read";
-			} else if (input.action === "restart") {
-				input.action = "send";
-				input.fresh = true;
-			}
-			// Dropped from the model contract (security / simplicity). Silently
-			// ignore so resume does not fail schema validation on extras that
-			// some providers still echo back.
-			delete input.tools;
-			delete input.delivery;
-			delete input.maxConcurrency;
-			delete input.maxAgents;
-			delete input.confirmProjectAgents;
-			if (Array.isArray(input.tasks)) {
-				input.tasks = input.tasks.map((task) => {
-					if (!task || typeof task !== "object") return task;
-					const next = { ...(task as Record<string, unknown>) };
-					delete next.tools;
-					return next;
-				});
-			}
-			return input as SubagentParams;
+			return prepareSubagentArguments(args);
 		},
 		executionMode: "sequential" as ToolExecutionMode,
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			// Refresh description with project agents when cwd is known (best-effort).
 			return controller.execute(params, ctx);
 		},
 
@@ -129,10 +175,8 @@ export default function subagent(pi: ExtensionAPI): void {
 
 	pi.registerCommand(AGENTS_COMMAND_NAME, {
 		description:
-			"Background subagents: open a worker, configure profile/limits, or clear terminal records",
+			"Subagent settings: profiles, concurrency limits, clear finished workers",
 		getArgumentCompletions: (prefix): AutocompleteItem[] | null => {
-			// The returned value replaces the whole argument text after
-			// "/agents ", so profile items must carry the "settings " prefix.
 			const settingsMatch = /^settings\s+(.*)$/.exec(prefix);
 			if (settingsMatch) {
 				const cwd = controller.getBoundCwd();
@@ -191,11 +235,6 @@ export default function subagent(pi: ExtensionAPI): void {
 					label: "clear",
 					description: "clear terminal records",
 				},
-				...controller.getCompletionWorkers().map((worker) => ({
-					value: worker.id,
-					label: worker.id,
-					description: `${worker.status} · ${worker.label} [${worker.agentName}]`,
-				})),
 			];
 			const filtered = fuzzyFilter(items, prefix, (item) => item.value);
 			return filtered.length ? filtered : null;
@@ -248,34 +287,45 @@ export default function subagent(pi: ExtensionAPI): void {
 				return;
 			}
 			if (input.startsWith("limits ")) {
-				ctx.ui.notify(
-					`Usage: /${AGENTS_COMMAND_NAME} limits`,
-					"info",
-				);
+				ctx.ui.notify(`Usage: /${AGENTS_COMMAND_NAME} limits`, "info");
 				return;
 			}
-			if (ctx.mode !== "tui") {
+			// Default: settings root menu (no worker panel).
+			if (!ctx.hasUI) {
 				ctx.ui.notify(
-					`/${AGENTS_COMMAND_NAME} requires the Pi TUI.`,
+					`/${AGENTS_COMMAND_NAME} requires an interactive UI.`,
 					"warning",
 				);
 				return;
 			}
-			let id: string | undefined = input || undefined;
-			if (id && !controller.hasAgent(id)) {
+			if (input) {
 				ctx.ui.notify(
-					`Unknown subagent "${id}" — usage: /agents [id] · /agents settings [profile] · /agents limits · /agents clear [id|all]`,
+					`Unknown argument "${input}" — usage: /agents · /agents settings [profile] · /agents limits · /agents clear [id|all]`,
 					"info",
 				);
-				id = undefined;
 			}
-			await controller.openPanel(ctx, id);
+			await controller.openSettingsRoot(ctx);
+		},
+	});
+
+	pi.registerShortcut("alt+o", {
+		description: "Open subagent fleet panel (transcript / steer / stop)",
+		handler: async (ctx) => {
+			if (!ctx.hasUI || ctx.mode !== "tui") {
+				ctx.ui.notify("Subagent panel requires the Pi TUI.", "warning");
+				return;
+			}
+			await controller.openPanel(ctx);
 		},
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
 		await controller.loadPreferences(ctx);
 		controller.bindContext(ctx, replayConfig(ctx));
+		// Best-effort: widen tool description with discovered agents for this cwd.
+		// Pi reads description at register time; dynamic rebuild is not always
+		// re-injected mid-session, but prepareArguments + guidelines cover usage.
+		void buildSubagentToolDescription(ctx.cwd);
 	});
 
 	pi.on("session_tree", async (_event, ctx) => {

@@ -2,11 +2,13 @@
 
 export const SUBAGENT_TOOL_NAME = "subagent";
 export const SUBAGENT_TOOL_LABEL = "Subagent";
-/** Single command surface; no global shortcuts. `settings` is a subcommand. */
+/** Settings command; live preview is automatic (no panel open). */
 export const AGENTS_COMMAND_NAME = "agents";
 
-/** Key for ctx.ui.setStatus — statusline middle slot when workers exist. */
+/** Key for statusline middle chip (setStatus). */
 export const SUBAGENT_STATUS_KEY = "subagent";
+/** @deprecated cleared on bind for older widget-based previews */
+export const SUBAGENT_PREVIEW_KEY = "pi-config-subagent-preview";
 export const SUBAGENT_CONFIG_ENTRY_TYPE = "pi-config-subagent-config";
 export const SUBAGENT_NOTIFICATION_TYPE = "pi-config-subagent-notification";
 export const SUBAGENT_USER_CONFIG_VERSION = 1;
@@ -18,8 +20,8 @@ export const HARD_MAX_AGENTS = 32;
 export const MAX_BATCH_TASKS = 16;
 
 /**
- * Bounded parent-visible output. The live panel retains a larger in-memory
- * timeline that is not sent to the model via `read`.
+ * Bounded parent-visible output. The live preview retains a larger in-memory
+ * activity list that is not sent to the model via `read`.
  */
 export const COMPLETION_OUTPUT_CHARS = 16_000;
 export const READ_OUTPUT_CHARS = 8_000;
@@ -30,22 +32,20 @@ export const ACTIVITY_MAX_CHARS = 40_000;
 export const PANEL_FINAL_OUTPUT_CHARS = 120_000;
 export const PANEL_RENDER_THROTTLE_MS = 80;
 
-export const SUBAGENT_TOOL_DESCRIPTION = [
-	"Launch and control isolated background Pi workers that share the parent process permissions (tool allowlists reduce accidents; they are not a sandbox).",
-	"Actions: spawn (one task or tasks[] batch — returns ids immediately); read (compact list, or one result snapshot by id); send (steer/continue/fresh-rerun by id); stop (abort and notify).",
-	"Completion is delivered automatically as a parent follow-up — do not poll with read, bash sleep, or busy-wait.",
-	'Profiles: "general" may edit; "explorer" is read-only reconnaissance. Prefer explorer for search-only work.',
-].join(" ");
-
 export const SUBAGENT_PROMPT_SNIPPET =
-	"Spawn isolated background workers; read/send/stop them by id (completion arrives automatically)";
+	"Launch a focused background worker; completion arrives automatically (do not poll)";
 
 export const SUBAGENT_PROMPT_GUIDELINES = [
 	"Use `subagent` only for multi-step work that can proceed independently. Do not spawn for a known path, a single grep, or reading 1–3 files — use read/grep/find/ls directly.",
-	"After `subagent` action `spawn`, do not poll with `bash` sleep or repeated `subagent` read merely to wait; finish the turn or do other useful work. Completion automatically queues a parent follow-up.",
-	"Write each `subagent` task like a briefing for a smart colleague who cannot see this conversation: goal, relevant paths, constraints, and the expected report shape. Never write “based on your findings, implement…” — synthesize first, then give concrete instructions.",
-	"Choose the `subagent` profile deliberately: `explorer` for read-only recon (default thinking is low); `general` when edits or shell writes are required. Omit model/thinking unless you must override the profile chain.",
-	"For independent work, prefer one `subagent` spawn with `tasks[]` rather than serial spawns. Avoid overlapping edits in the same working directory unless the tasks are explicitly coordinated.",
-	"Use `subagent` action `read` without an id for a compact status list, or with an id only when the user asks for progress or a completion was insufficient. Use `send` to steer/continue; failed/stopped workers rerun fresh automatically. Use `stop` to cancel.",
-	"Never invent `subagent` results before the completion follow-up arrives. Summarize results for the user yourself — worker output is not shown to them automatically.",
+	"After spawn, do not poll with bash sleep or `subagent` read merely to wait; finish the turn or do other useful work. Completion automatically queues a parent follow-up.",
+	"Write each prompt as a briefing for a smart colleague who cannot see this conversation: goal, relevant paths, constraints, and the expected report shape. Set `description` to a short 3–8 word UI label.",
+	'Choose the agent deliberately: `explorer` for read-only recon; `general` when edits or shell writes are required. Prefer one spawn with `tasks[]` for independent parallel work.',
 ];
+
+/** Static fallback when dynamic agent list is unavailable. */
+export const SUBAGENT_TOOL_DESCRIPTION = [
+	"Launch specialized background workers that share the parent process permissions (tool allowlists reduce accidents; they are not a sandbox).",
+	"Default action is spawn (prompt/task + short description). Also: read (list or snapshot by id), send (steer/continue/fresh-rerun), stop (abort and notify).",
+	"Completion is delivered automatically as a parent follow-up — do not poll.",
+	'Profiles: "general" may edit; "explorer" is read-only reconnaissance. Prefer explorer for search-only work.',
+].join(" ");

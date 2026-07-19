@@ -10,7 +10,7 @@ import type {
 
 /**
  * Pi-native braille frames (same family as `@earendil-works/pi-tui` Loader).
- * Only used while the panel is open and the selected worker is active.
+ * Used by the top-right preview while workers are active.
  */
 export const BRAILLE_FRAMES = [
 	"⠋",
@@ -33,7 +33,7 @@ export function brailleFrame(now = Date.now()): string {
 	return BRAILLE_FRAMES[index] ?? "⠋";
 }
 
-/** Static status glyphs — no decoration spinner when the panel is closed. */
+/** Static status glyphs for terminal / idle workers. */
 export const STATUS_ICON: Record<SubagentStatus, string> = {
 	queued: "○",
 	starting: "●",
@@ -155,6 +155,50 @@ export function formatTokens(value: number): string {
 	if (value < 10_000) return `${(value / 1000).toFixed(1)}k`;
 	if (value < 1_000_000) return `${Math.round(value / 1000)}k`;
 	return `${(value / 1_000_000).toFixed(1)}M`;
+}
+
+/**
+ * Shorten a filesystem path to `~` relative to the user home directory.
+ * Same algorithm as the statusline extension (Windows-safe, `/` separators).
+ */
+export function formatHomePath(filePath: string): string {
+	const rawHome =
+		process.env.USERPROFILE || process.env.HOME || "";
+	const homeDirectory = rawHome.replace(/[\\/]+$/, "");
+	if (!homeDirectory || !filePath) return filePath;
+
+	const normalize = (p: string) =>
+		p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+	const homeNorm = normalize(homeDirectory);
+	const pathNorm = normalize(filePath);
+	if (pathNorm === homeNorm) return "~";
+	if (pathNorm.startsWith(`${homeNorm}/`)) {
+		// Preserve original casing from the input for the suffix.
+		const withSlashes = filePath.replace(/\\/g, "/");
+		const homeWithSlashes = homeDirectory.replace(/\\/g, "/").replace(/\/+$/, "");
+		// Case-insensitive prefix strip for Windows.
+		if (withSlashes.toLowerCase().startsWith(homeWithSlashes.toLowerCase())) {
+			return `~${withSlashes.slice(homeWithSlashes.length)}`;
+		}
+		return `~${withSlashes.slice(homeDirectory.length)}`;
+	}
+	return filePath;
+}
+
+/** When still too long after `~`, keep `~/…/basename`. */
+export function shortenHomePath(filePath: string, maxChars: number): string {
+	const display = formatHomePath(filePath);
+	if (display.length <= maxChars) return display;
+	const normalized = display.replace(/\\/g, "/").replace(/\/+$/, "");
+	const slash = normalized.lastIndexOf("/");
+	const base = slash >= 0 ? normalized.slice(slash + 1) : normalized;
+	if (normalized.startsWith("~/") || normalized === "~") {
+		const short = `~/${base}`;
+		return short.length <= maxChars
+			? short
+			: oneLine(short, maxChars);
+	}
+	return oneLine(base, maxChars);
 }
 
 /** Uniform stats phrasing used by list rows, detail headers, and completion summaries. */

@@ -14,6 +14,8 @@ export interface AgentDefinition {
 	thinkingLevel?: ThinkingLevelName;
 	/** When true, skip AGENTS.md / CLAUDE.md injection into the worker system prompt. */
 	omitContextFiles?: boolean;
+	/** One-line guideline appended to the model-facing tool description. */
+	toolGuideline?: string;
 	source: AgentDefinitionSource;
 	filePath?: string;
 }
@@ -175,6 +177,7 @@ export interface SubagentDetails {
 	errorCode?: string;
 }
 
+/** Host surface for the interactive Alt+O management panel. */
 export interface SubagentPanelHost {
 	getConfig(): SubagentConfig;
 	getSnapshots(): SubagentSnapshot[];

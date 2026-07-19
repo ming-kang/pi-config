@@ -36,8 +36,8 @@ import type {
 } from "./types.ts";
 
 /**
- * Side-panel geometry: right-center for a docked feel. Narrow terminals go
- * near-full width; wide ones cap absolute columns so lines stay readable.
+ * Centered modal geometry. Narrow terminals go near-full width; wide ones
+ * cap absolute columns so transcript lines stay readable.
  */
 export function panelOverlayOptions(
 	columns: number,
@@ -46,11 +46,11 @@ export function panelOverlayOptions(
 	const maxHeight = (
 		rows < 24 ? "92%" : rows < 36 ? "88%" : "84%"
 	) as `${number}%`;
-	const margin = { top: 1, right: 1, bottom: 1 };
+	const margin = { top: 1, right: 2, bottom: 1, left: 2 };
 	if (columns < 90) {
 		return {
-			anchor: "top-right",
-			width: "96%",
+			anchor: "center",
+			width: "94%",
 			minWidth: 36,
 			maxHeight,
 			margin,
@@ -58,25 +58,25 @@ export function panelOverlayOptions(
 	}
 	if (columns < 120) {
 		return {
-			anchor: "right-center",
-			width: "58%",
-			minWidth: 48,
+			anchor: "center",
+			width: "72%",
+			minWidth: 52,
 			maxHeight,
 			margin,
 		};
 	}
 	if (columns <= 170) {
 		return {
-			anchor: "right-center",
-			width: "46%",
-			minWidth: 56,
+			anchor: "center",
+			width: "58%",
+			minWidth: 60,
 			maxHeight,
 			margin,
 		};
 	}
 	return {
-		anchor: "right-center",
-		width: 96,
+		anchor: "center",
+		width: 100,
 		maxHeight,
 		margin,
 	};
@@ -419,9 +419,9 @@ export class SubagentPanel implements Component {
 		);
 	}
 
+	/** Outer frame — accent so the modal reads clearly over wallpaper. */
 	private border(character: string): string {
-		// Always quiet plate edge — never full-frame borderAccent (too loud for bg work).
-		return this.theme.fg("border", character);
+		return this.theme.fg("borderAccent", character);
 	}
 
 	private pad(text: string, width: number): string {
@@ -430,20 +430,21 @@ export class SubagentPanel implements Component {
 	}
 
 	private row(text: string, innerWidth: number): string {
-		return `${this.border("│")}${this.pad(text, innerWidth)}${this.border("│")}`;
+		return `${this.border("║")}${this.pad(text, innerWidth)}${this.border("║")}`;
 	}
 
 	private frame(lines: string[], width: number): string[] {
 		const innerWidth = Math.max(1, width - 2);
 		return [
-			this.border(`╭${"─".repeat(innerWidth)}╮`),
+			this.border(`╔${"═".repeat(innerWidth)}╗`),
 			...lines.map((line) => this.row(line, innerWidth)),
-			this.border(`╰${"─".repeat(innerWidth)}╯`),
+			this.border(`╚${"═".repeat(innerWidth)}╝`),
 		];
 	}
 
 	private divider(width: number): string {
-		return ` ${this.theme.fg("borderMuted", "─".repeat(Math.max(1, width - 4)))}`;
+		// Inner rule still softer than the outer accent frame.
+		return ` ${this.theme.fg("border", "─".repeat(Math.max(1, width - 4)))}`;
 	}
 
 	/**

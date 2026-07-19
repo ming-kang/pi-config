@@ -12,7 +12,7 @@ This Pi package contains commonly used extensions and themes, maintained for per
 | [`rewind`](extensions/rewind/README.md) | Per-edit file backups; restore via `/tree`, settings & storage via `/rewind` |
 | [`read-before-edit`](extensions/read-before-edit/README.md) | Blocks edit/write of a file that wasn't read first (or changed since read) |
 | [`todo`](extensions/todo/README.md) | Conversation-backed task list tool with `/todos` and a live above-editor overlay |
-| [`subagent`](extensions/subagent/README.md) | Isolated background workers with profile inheritance, statusline progress, completion feedback, and a right-side control panel |
+| [`subagent`](extensions/subagent/README.md) | Isolated background workers with statusline chip, Alt+O fleet panel, completion feedback, and `/agents` settings |
 | [`router`](extensions/router/README.md) | Codex-style API relays: base URL + key, fetch/select models, 272k GPT defaults, transparent-gateway friendly stream |
 
 Each extension's behavior and design notes live in its own README, linked above.

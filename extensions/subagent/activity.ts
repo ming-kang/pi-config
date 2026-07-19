@@ -1,4 +1,5 @@
-import { oneLine } from "./format.ts";
+import { formatHomePath, oneLine, shortenHomePath } from "./format.ts";
+import type { SubagentSnapshot, ToolActivity } from "./types.ts";
 
 export interface ToolActivityDescription {
 	headline: string;
@@ -26,8 +27,17 @@ function quote(value: string, maxChars = 80): string {
 	return `"${oneLine(value, maxChars)}"`;
 }
 
+function displayPath(filePath: string, maxChars = 120): string {
+	if (!filePath || filePath === "…") return filePath || "…";
+	const withHome = formatHomePath(filePath);
+	return withHome.length > maxChars
+		? shortenHomePath(filePath, maxChars)
+		: withHome;
+}
+
 function pathWithRange(record: Record<string, unknown>): string {
-	const filePath = firstString(record, "path", "file_path", "filePath") || "…";
+	const raw = firstString(record, "path", "file_path", "filePath") || "…";
+	const filePath = displayPath(raw);
 	const offset =
 		typeof record.offset === "number" && Number.isFinite(record.offset)
 			? Math.max(1, Math.floor(record.offset))
@@ -73,7 +83,7 @@ export function describeToolCall(
 			const searchPath = firstString(record, "path");
 			return {
 				headline: "Searching the workspace",
-				summary: `Search ${quote(pattern)}${searchPath ? ` in ${oneLine(searchPath, 100)}` : ""}`,
+				summary: `Search ${quote(pattern)}${searchPath ? ` in ${oneLine(displayPath(searchPath), 100)}` : ""}`,
 			};
 		}
 		case "find": {
@@ -81,20 +91,23 @@ export function describeToolCall(
 			const searchPath = firstString(record, "path") || ".";
 			return {
 				headline: "Searching the workspace",
-				summary: `Find ${quote(pattern)} in ${oneLine(searchPath, 100)}`,
+				summary: `Find ${quote(pattern)} in ${oneLine(displayPath(searchPath), 100)}`,
 			};
 		}
 		case "ls": {
 			const listPath = firstString(record, "path") || ".";
 			return {
 				headline: "Inspecting the workspace",
-				summary: `List ${oneLine(listPath, 160)}`,
+				summary: `List ${oneLine(displayPath(listPath), 160)}`,
 			};
 		}
 		case "bash":
 			return describeBash(firstString(record, "command", "cmd"));
 		case "edit": {
-			const filePath = firstString(record, "path", "file_path", "filePath") || "…";
+			const filePath =
+				displayPath(
+					firstString(record, "path", "file_path", "filePath") || "…",
+				);
 			const edits = Array.isArray(record.edits) ? record.edits.length : undefined;
 			return {
 				headline: "Applying changes",
@@ -102,7 +115,10 @@ export function describeToolCall(
 			};
 		}
 		case "write": {
-			const filePath = firstString(record, "path", "file_path", "filePath") || "…";
+			const filePath =
+				displayPath(
+					firstString(record, "path", "file_path", "filePath") || "…",
+				);
 			const content = typeof record.content === "string" ? record.content : "";
 			const lines = content ? content.split(/\r?\n/).length : undefined;
 			return {
@@ -141,4 +157,84 @@ export function summarizeToolResult(result: unknown): string {
 	const lines = text.split("\n").filter((line) => line.trim().length > 0);
 	const first = oneLine(lines[0] ?? "", 140);
 	return lines.length > 1 ? `${first} (+${lines.length - 1} lines)` : first;
+}
+
+function isSearchTool(activity: ToolActivity): boolean {
+	return (
+		activity.toolName === "read" ||
+		activity.toolName === "grep" ||
+		activity.toolName === "find" ||
+		activity.toolName === "ls"
+	);
+}
+
+function isMutationTool(activity: ToolActivity): boolean {
+	return activity.toolName === "edit" || activity.toolName === "write";
+}
+
+function isVerificationHeadline(activity: ToolActivity): boolean {
+	return /verif|test|lint|typecheck|build/i.test(
+		`${activity.headline} ${activity.summary}`,
+	);
+}
+
+function isInspectionHeadline(activity: ToolActivity): boolean {
+	return /inspect|list|search/i.test(`${activity.headline} ${activity.summary}`);
+}
+
+/**
+ * Trellis-style one-line intent for the always-on preview card.
+ * Prefers live tool state, then recent tool mix, then currentActivity / streaming text.
+ */
+export function behaviorSummary(snapshot: SubagentSnapshot): string {
+	if (snapshot.status === "completed")
+		return "Task completed and result returned";
+	if (snapshot.status === "failed")
+		return snapshot.error
+			? oneLine(`Failed: ${snapshot.error}`, 80)
+			: "Task failed";
+	if (snapshot.status === "stopped") return "Stopped";
+	if (snapshot.status === "queued") return "Waiting for a free slot";
+	if (snapshot.status === "starting") return "Starting worker session";
+
+	let running: ToolActivity | undefined;
+	for (let i = snapshot.activities.length - 1; i >= 0; i--) {
+		const a = snapshot.activities[i];
+		if (a?.status === "running") {
+			running = a;
+			break;
+		}
+	}
+	if (running) {
+		if (isMutationTool(running)) return "Applying the plan to code";
+		if (running.toolName === "bash" && isVerificationHeadline(running))
+			return "Verifying whether the implementation passes";
+		if (running.toolName === "bash" && isInspectionHeadline(running))
+			return "Inspecting current code state";
+		if (isSearchTool(running)) return "Locating relevant code and context";
+		if (running.toolName === "bash") return "Validating assumptions with commands";
+		return oneLine(running.headline || "Using tools to advance the task", 72);
+	}
+
+	const recent = snapshot.activities.slice(-5);
+	if (recent.some((a) => a.status === "failed"))
+		return "Investigating tool or command failure";
+	if (recent.some(isMutationTool)) return "Reviewing recent changes";
+	if (recent.some((a) => a.toolName === "bash" && isVerificationHeadline(a)))
+		return "Analyzing verification results";
+	if (
+		recent.length >= 2 &&
+		recent.every(
+			(a) =>
+				isSearchTool(a) ||
+				(a.toolName === "bash" && isInspectionHeadline(a)),
+		)
+	) {
+		return "Mapping code structure and impact";
+	}
+
+	if (snapshot.currentActivity) return oneLine(snapshot.currentActivity, 72);
+	if (snapshot.liveText.trim()) return "Writing response…";
+	if (!snapshot.activities.length) return "Understanding the task and planning";
+	return "Advancing the task";
 }
