@@ -1,5 +1,8 @@
 /**
  * /router interactive flows: list, add, edit, fetch, thinking map.
+ *
+ * Relay edits auto-save to router.json (no separate Save step). Nested multi-select
+ * and thinking editors require Ctrl+S to apply, and warn on Esc when dirty.
  */
 
 import { BorderedLoader, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
@@ -47,13 +50,8 @@ async function openMainMenu(ctx: ExtensionCommandContext, pi: ExtensionAPI, init
 	let query = initialQuery;
 	while (true) {
 		const file = await loadRouterFile();
+		// Relays first (primary content), actions at the bottom.
 		const items = [
-			{
-				value: "action:add",
-				label: "+ Add relay",
-				description: "Name · Base URL · API key · fetch models",
-				searchText: "add create new relay gateway",
-			},
 			...file.relays.map((relay) => ({
 				value: `relay:${relay.id}`,
 				label: relay.id,
@@ -61,8 +59,14 @@ async function openMainMenu(ctx: ExtensionCommandContext, pi: ExtensionAPI, init
 				searchText: `${relay.id} ${relay.baseUrl}`,
 			})),
 			{
+				value: "action:add",
+				label: "+ Add relay",
+				description: "Name · base URL · API key · fetch models",
+				searchText: "add create new relay gateway",
+			},
+			{
 				value: "action:reload",
-				label: "Reload relays",
+				label: "Reload from disk",
 				description: "Re-register providers from router.json",
 				searchText: "reload refresh",
 			},
@@ -75,8 +79,8 @@ async function openMainMenu(ctx: ExtensionCommandContext, pi: ExtensionAPI, init
 							title: "API relays",
 							subtitle:
 								file.relays.length === 0
-									? "No relays yet. Add a base URL + API key."
-									: `${file.relays.length} relay${file.relays.length === 1 ? "" : "s"} · Enter opens`,
+									? "No relays yet — add a base URL + API key."
+									: `${file.relays.length} relay${file.relays.length === 1 ? "" : "s"} · Enter opens · Esc closes`,
 							items,
 							initialValue: cursor,
 							initialQuery: query,
@@ -122,7 +126,7 @@ async function addRelayFlow(ctx: ExtensionCommandContext, pi: ExtensionAPI): Pro
 	const file = await loadRouterFile();
 	const existing = new Set(file.relays.map((relay) => relay.id));
 
-	const id = await promptText(ctx, "Relay name (provider id)", "my-relay", (value) => {
+	const id = await promptText(ctx, "New relay · name (provider id)", "my-relay", (value) => {
 		const trimmed = value.trim();
 		if (!trimmed) return "Name is required.";
 		if (!isValidRelayId(trimmed)) return "Name cannot be empty or contain '/'.";
@@ -131,7 +135,7 @@ async function addRelayFlow(ctx: ExtensionCommandContext, pi: ExtensionAPI): Pro
 	});
 	if (id === undefined) return undefined;
 
-	const baseUrl = await promptText(ctx, "Base URL", "https://relay.example/v1", (value) => {
+	const baseUrl = await promptText(ctx, `New relay · ${id.trim()} · base URL`, "https://relay.example/v1", (value) => {
 		const trimmed = value.trim();
 		if (!trimmed) return "Base URL is required.";
 		try {
@@ -144,7 +148,7 @@ async function addRelayFlow(ctx: ExtensionCommandContext, pi: ExtensionAPI): Pro
 	});
 	if (baseUrl === undefined) return undefined;
 
-	const apiKey = await promptText(ctx, "API key (literal or $ENV)", "sk-… or $RELAY_KEY", (value) => {
+	const apiKey = await promptText(ctx, `New relay · ${id.trim()} · API key`, "sk-… or $RELAY_KEY", (value) => {
 		if (!value.trim()) return "API key is required.";
 		return undefined;
 	});
@@ -159,48 +163,56 @@ async function addRelayFlow(ctx: ExtensionCommandContext, pi: ExtensionAPI): Pro
 
 	const models = await fetchAndSelectModels(ctx, relay, new Set());
 	if (models === undefined) {
-		// User cancelled fetch/select — still allow saving connection-only for later.
 		const keep = await ctx.ui.confirm(
 			"Save relay without models?",
-			"You can fetch models later from the relay editor.",
+			"You can fetch models later from the relay editor. Changes auto-save after that.",
 		);
 		if (!keep) return undefined;
 	} else {
 		relay.models = models;
 	}
 
-	await upsertRelay(relay);
-	registerOneRelay(pi, relay);
-	await ctx.modelRegistry.refresh();
-	ctx.ui.notify(
-		relay.models.length > 0
-			? `Saved relay "${relay.id}" with ${relay.models.length} model(s).`
-			: `Saved relay "${relay.id}" (no models yet).`,
-		"info",
-	);
+	await persistRelay(ctx, pi, relay, {
+		notify:
+			relay.models.length > 0
+				? `Saved "${relay.id}" with ${relay.models.length} model(s).`
+				: `Saved "${relay.id}" (no models yet).`,
+	});
 	return relay.id;
 }
 
+/**
+ * Relay editor — flat menu. Every mutation writes router.json immediately.
+ * Hierarchy: list → relay → (models list | connection field | fetch | remove).
+ */
 async function editRelayFlow(ctx: ExtensionCommandContext, pi: ExtensionAPI, initial: RelayConfig): Promise<void> {
 	let relay = structuredClone(initial);
 	while (true) {
+		const modelSummary =
+			relay.models.length === 0
+				? "none yet — fetch catalog"
+				: relay.models.length <= 3
+					? relay.models.map((m) => displayModelLabel(m)).join(", ")
+					: `${relay.models.length} models · ${relay.models
+							.slice(0, 2)
+							.map((m) => displayModelLabel(m))
+							.join(", ")}…`;
+
 		const choice = await selectNative(ctx, `Relay · ${relay.id}`, [
 			{
 				value: "models",
 				label: "Models",
-				description: `${relay.models.length} configured · fetch / select / customize`,
+				description: modelSummary,
 			},
 			{ value: "baseUrl", label: "Base URL", description: relay.baseUrl },
 			{ value: "apiKey", label: "API key", description: maskKey(relay.apiKey) },
-			{ value: "fetch", label: "Fetch models", description: "Pull catalog and select" },
-			{ value: "save", label: "Save", description: "Write router.json and re-register" },
 			{ value: "remove", label: "Remove relay", description: "Delete from router.json" },
-			{ value: "back", label: "Back" },
+			{ value: "back", label: "Back", description: "All edits already saved" },
 		]);
 		if (choice === undefined || choice === "back") return;
 
 		if (choice === "baseUrl") {
-			const next = await promptText(ctx, "Base URL", relay.baseUrl, (value) => {
+			const next = await promptText(ctx, `Relay · ${relay.id} · base URL`, relay.baseUrl, (value) => {
 				try {
 					const url = new URL(value.trim());
 					if (url.protocol !== "http:" && url.protocol !== "https:") return "Use http or https.";
@@ -209,53 +221,31 @@ async function editRelayFlow(ctx: ExtensionCommandContext, pi: ExtensionAPI, ini
 				}
 				return undefined;
 			});
-			if (next !== undefined) relay.baseUrl = next.trim().replace(/\/+$/, "");
+			if (next === undefined) continue;
+			const normalized = next.trim().replace(/\/+$/, "");
+			if (normalized === relay.baseUrl) continue;
+			relay.baseUrl = normalized;
+			await persistRelay(ctx, pi, relay, { notify: `Saved base URL for "${relay.id}".` });
 			continue;
 		}
 
 		if (choice === "apiKey") {
-			const next = await promptText(ctx, "API key", relay.apiKey, (value) =>
+			const next = await promptText(ctx, `Relay · ${relay.id} · API key`, relay.apiKey, (value) =>
 				value.trim() ? undefined : "API key is required.",
 			);
-			if (next !== undefined) relay.apiKey = next.trim();
+			if (next === undefined) continue;
+			const trimmed = next.trim();
+			if (trimmed === relay.apiKey) continue;
+			relay.apiKey = trimmed;
+			await persistRelay(ctx, pi, relay, { notify: `Saved API key for "${relay.id}".` });
 			continue;
 		}
 
-		if (choice === "fetch" || choice === "models") {
-			if (choice === "models" && relay.models.length > 0) {
-				const modelAction = await selectNative(ctx, `Models · ${relay.id}`, [
-					{ value: "fetch", label: "Fetch & select from server" },
-					{ value: "customize", label: "Customize models", description: "Display name · thinking levels" },
-					{
-						value: "list",
-						label: "Show configured",
-						description: relay.models.map((m) => displayModelLabel(m)).join(", "),
-					},
-					{ value: "back", label: "Back" },
-				]);
-				if (modelAction === "fetch") {
-					const selected = await fetchAndSelectModels(
-						ctx,
-						relay,
-						new Set(relay.models.map((model) => model.id)),
-					);
-					if (selected) relay.models = mergeModelSelection(relay.models, selected);
-				} else if (modelAction === "customize") {
-					await customizeModelsFlow(ctx, relay);
-				}
-			} else {
-				const selected = await fetchAndSelectModels(ctx, relay, new Set(relay.models.map((m) => m.id)));
-				if (selected) relay.models = mergeModelSelection(relay.models, selected);
-			}
+		if (choice === "models") {
+			// Always open the models screen (fetch lives only here). Empty list still
+			// shows Fetch so the path is Relay → Models → Fetch, not a top-level shortcut.
+			await manageModelsFlow(ctx, pi, relay);
 			continue;
-		}
-
-		if (choice === "save") {
-			await upsertRelay(relay);
-			registerOneRelay(pi, relay);
-			await ctx.modelRegistry.refresh();
-			ctx.ui.notify(`Saved relay "${relay.id}".`, "info");
-			return;
 		}
 
 		if (choice === "remove") {
@@ -270,61 +260,103 @@ async function editRelayFlow(ctx: ExtensionCommandContext, pi: ExtensionAPI, ini
 	}
 }
 
-async function customizeModelsFlow(ctx: ExtensionCommandContext, relay: RelayConfig): Promise<void> {
-	if (relay.models.length === 0) {
-		ctx.ui.notify("No models configured.", "warning");
-		return;
-	}
-	const modelId = await selectNative(
-		ctx,
-		"Customize model",
-		relay.models.map((model) => {
-			const resolved = resolveModelConfig(model);
-			const label = displayModelLabel(resolved);
-			return {
-				value: model.id,
-				label: model.id,
-				description:
-					label !== model.id
-						? `${label} · ${summarizeThinkingMap(resolved.thinkingLevelMap)}`
-						: summarizeThinkingMap(resolved.thinkingLevelMap),
-			};
-		}),
-	);
-	if (!modelId) return;
-	const model = relay.models.find((entry) => entry.id === modelId);
-	if (!model) return;
+/**
+ * Models screen: flat list of configured models + fetch. Selecting a model opens
+ * its editor (name / thinking). No extra "customize vs list" intermediate menu.
+ */
+async function manageModelsFlow(
+	ctx: ExtensionCommandContext,
+	pi: ExtensionAPI,
+	relay: RelayConfig,
+): Promise<void> {
+	while (true) {
+		const empty = relay.models.length === 0;
+		const items: Array<{ value: string; label: string; description?: string }> = [
+			{
+				value: "action:fetch",
+				label: "Fetch catalog",
+				description: empty
+					? "GET /models · multi-select · auto-saves"
+					: "Refresh from server (keeps name/thinking for kept ids)",
+			},
+			...relay.models.map((model) => {
+				const resolved = resolveModelConfig(model);
+				const label = displayModelLabel(resolved);
+				const thinking = summarizeThinkingMap(resolved.thinkingLevelMap);
+				return {
+					value: `model:${model.id}`,
+					label: model.id,
+					description: label !== model.id ? `${label} · ${thinking}` : thinking,
+				};
+			}),
+			{ value: "action:back", label: "Back", description: "Return to relay" },
+		];
 
+		const choice = await selectNative(
+			ctx,
+			`Relay · ${relay.id} · models`,
+			items,
+		);
+		if (choice === undefined || choice === "action:back") return;
+
+		if (choice === "action:fetch") {
+			const selected = await fetchAndSelectModels(ctx, relay, new Set(relay.models.map((m) => m.id)));
+			if (!selected) continue;
+			relay.models = mergeModelSelection(relay.models, selected);
+			await persistRelay(ctx, pi, relay, {
+				notify: `Saved "${relay.id}" · ${relay.models.length} model(s).`,
+			});
+			continue;
+		}
+
+		if (choice.startsWith("model:")) {
+			const modelId = choice.slice("model:".length);
+			const model = relay.models.find((entry) => entry.id === modelId);
+			if (!model) continue;
+			await editModelFlow(ctx, pi, relay, model);
+		}
+	}
+}
+
+/** Single-model editor: display name + thinking. Auto-saves each applied change. */
+async function editModelFlow(
+	ctx: ExtensionCommandContext,
+	pi: ExtensionAPI,
+	relay: RelayConfig,
+	model: RelayModelConfig,
+): Promise<void> {
 	while (true) {
 		const resolved = resolveModelConfig(model);
-		const nameDesc = resolved.name ? resolved.name : "(empty · shows id)";
-		const action = await selectNative(ctx, `Customize · ${model.id}`, [
+		const nameDesc = resolved.name ? resolved.name : "(empty · /model shows id)";
+		const action = await selectNative(ctx, `Relay · ${relay.id} · ${model.id}`, [
 			{ value: "name", label: "Display name", description: nameDesc },
 			{
 				value: "thinking",
 				label: "Thinking levels",
 				description: summarizeThinkingMap(resolved.thinkingLevelMap),
 			},
-			{ value: "back", label: "Back" },
+			{ value: "back", label: "Back", description: "Edits auto-save when applied" },
 		]);
 		if (action === undefined || action === "back") return;
 
 		if (action === "name") {
 			const next = await promptText(
 				ctx,
-				`Display name for ${model.id} (empty = show id)`,
+				`Display name · ${model.id} (empty = show id)`,
 				resolved.name ?? "",
 			);
 			if (next === undefined) continue;
 			const trimmed = next.trim();
-			if (!trimmed || trimmed === model.id) delete model.name;
-			else model.name = trimmed;
-			ctx.ui.notify(
-				model.name
-					? `Display name set to "${model.name}" (save relay to persist).`
-					: `Display name cleared; /model shows id (save relay to persist).`,
-				"info",
-			);
+			const nextName = !trimmed || trimmed === model.id ? undefined : trimmed;
+			const prevName = model.name?.trim() && model.name.trim() !== model.id ? model.name.trim() : undefined;
+			if (nextName === prevName) continue;
+			if (nextName) model.name = nextName;
+			else delete model.name;
+			await persistRelay(ctx, pi, relay, {
+				notify: model.name
+					? `Saved display name "${model.name}" for ${model.id}.`
+					: `Cleared display name for ${model.id}; /model shows id.`,
+			});
 			continue;
 		}
 
@@ -333,7 +365,7 @@ async function customizeModelsFlow(ctx: ExtensionCommandContext, relay: RelayCon
 				ctx.mode === "tui"
 					? await ctx.ui.custom(
 							createThinkingMapEditor({
-								title: `Thinking levels · ${model.id}`,
+								title: `Thinking · ${relay.id} / ${model.id}`,
 								map: resolved.thinkingLevelMap,
 							}),
 						)
@@ -341,7 +373,9 @@ async function customizeModelsFlow(ctx: ExtensionCommandContext, relay: RelayCon
 			if (!nextMap) continue;
 			model.thinkingLevelMap = nextMap;
 			model.reasoning = true;
-			ctx.ui.notify(`Updated thinking map for ${model.id} (save relay to persist).`, "info");
+			await persistRelay(ctx, pi, relay, {
+				notify: `Saved thinking levels for ${model.id}.`,
+			});
 		}
 	}
 }
@@ -356,9 +390,10 @@ async function editThinkingMapNative(
 			...(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const).map((level) => ({
 				value: level,
 				label: level,
-				description: working[level] === null ? "hidden" : working[level] === undefined ? "default" : String(working[level]),
+				description:
+					working[level] === null ? "hidden" : working[level] === undefined ? "default" : String(working[level]),
 			})),
-			{ value: "done", label: "Done" },
+			{ value: "done", label: "Apply" },
 			{ value: "cancel", label: "Cancel" },
 		]);
 		if (choice === undefined || choice === "cancel") return undefined;
@@ -381,7 +416,7 @@ async function fetchAndSelectModels(
 	const result =
 		ctx.mode === "tui"
 			? await ctx.ui.custom<Awaited<ReturnType<typeof probeRelayModels>> | undefined>((tui, theme, _kb, done) => {
-					const loader = new BorderedLoader(tui, theme, `Fetching models from ${relay.baseUrl}`, {
+					const loader = new BorderedLoader(tui, theme, `Fetching models · ${relay.id}`, {
 						cancellable: true,
 					});
 					let settled = false;
@@ -404,11 +439,11 @@ async function fetchAndSelectModels(
 		ctx.ui.notify(`Fetch failed: ${result.error}`, "error");
 		const manual = await ctx.ui.confirm("Add model IDs manually?", "Comma-separated ids.");
 		if (!manual) return undefined;
-		return manualModelEntry(ctx, initiallySelected);
+		return manualModelEntry(ctx);
 	}
 	if (result.models.length === 0) {
 		ctx.ui.notify("Server returned an empty model list.", "warning");
-		return manualModelEntry(ctx, initiallySelected);
+		return manualModelEntry(ctx);
 	}
 	if (result.truncated) {
 		ctx.ui.notify("Catalog truncated to 2,000 models.", "warning");
@@ -419,7 +454,7 @@ async function fetchAndSelectModels(
 		const choice = await ctx.ui.custom(
 			createModelChecklist({
 				title: `Select models · ${relay.id}`,
-				subtitle: "Space toggle · Ctrl+S save · Ctrl+A all · Ctrl+X none",
+				subtitle: "Space toggle · Ctrl+S apply · Esc warns if unsaved",
 				models: result.models,
 				initiallySelected,
 			}),
@@ -445,10 +480,7 @@ async function fetchAndSelectModels(
 	return selectedIds.map((id) => createDefaultModelConfig(id));
 }
 
-async function manualModelEntry(
-	ctx: ExtensionCommandContext,
-	existing: ReadonlySet<string>,
-): Promise<RelayModelConfig[] | undefined> {
+async function manualModelEntry(ctx: ExtensionCommandContext): Promise<RelayModelConfig[] | undefined> {
 	const value = await ctx.ui.input("Model IDs (comma-separated)", "gpt-5.6-sol, gpt-5.6-luna");
 	if (value === undefined) return undefined;
 	const ids = value
@@ -481,6 +513,18 @@ function mergeModelSelection(previous: RelayModelConfig[], selected: RelayModelC
 		else delete merged.name;
 		return merged;
 	});
+}
+
+async function persistRelay(
+	ctx: ExtensionCommandContext,
+	pi: ExtensionAPI,
+	relay: RelayConfig,
+	opts?: { notify?: string },
+): Promise<void> {
+	await upsertRelay(relay);
+	registerOneRelay(pi, relay);
+	await ctx.modelRegistry.refresh();
+	if (opts?.notify) ctx.ui.notify(opts.notify, "info");
 }
 
 async function promptText(
@@ -538,4 +582,3 @@ function literalKey(apiKey: string): string | undefined {
 	if (trimmed.includes("$")) return undefined;
 	return trimmed;
 }
-

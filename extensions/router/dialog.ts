@@ -157,6 +157,12 @@ export function createSearchableSelector<T extends string>(opts: {
 	};
 }
 
+function sameIdSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+	if (a.size !== b.size) return false;
+	for (const id of a) if (!b.has(id)) return false;
+	return true;
+}
+
 export function createModelChecklist(opts: {
 	title: string;
 	subtitle?: string;
@@ -173,9 +179,11 @@ export function createModelChecklist(opts: {
 			id: model.id,
 			label: model.name && model.name !== model.id ? `${model.id} · ${model.name}` : model.id,
 		}));
-		const selected = new Set(opts.initiallySelected ?? []);
+		const initialSelected = new Set(opts.initiallySelected ?? []);
+		const selected = new Set(initialSelected);
 		let filter = "";
 		let selectedIndex = 0;
+		let discardArmed = false;
 		const maxVisible = 12;
 		const input = new Input();
 		const list = new Container();
@@ -184,6 +192,8 @@ export function createModelChecklist(opts: {
 			handleInput: (data: string) => void;
 			focused: boolean;
 		};
+
+		const isDirty = () => !sameIdSet(selected, initialSelected);
 
 		const filtered = () => {
 			const q = filter.trim().toLowerCase();
@@ -208,19 +218,35 @@ export function createModelChecklist(opts: {
 			if (rows.length === 0) {
 				list.addChild(new Text(theme.fg("muted", "  No matching models"), 1, 0));
 			}
-			const hints = [
-				rawKeyHint("space", "toggle"),
-				rawKeyHint("ctrl+a", "all"),
-				rawKeyHint("ctrl+x", "none"),
-				rawKeyHint("ctrl+s", "save"),
-				rawKeyHint("type", "filter"),
-				keyHint("tui.select.cancel", filter ? "clear" : "cancel"),
-			];
-			footer.setText(
-				theme.fg("muted", `${selected.size} selected · ${rows.length} shown`) + "\n" + hints.join("  "),
-			);
+
+			const statusParts = [`${selected.size} selected`, `${rows.length} shown`];
+			if (isDirty()) statusParts.push(theme.fg("warning", "unsaved"));
+			const statusLine = theme.fg("muted", statusParts.join(" · "));
+
+			let hints: string[];
+			if (discardArmed && isDirty()) {
+				hints = [
+					theme.fg("warning", "Unsaved selection — Esc again discards"),
+					rawKeyHint("ctrl+s", "apply"),
+				];
+			} else {
+				hints = [
+					rawKeyHint("space", "toggle"),
+					rawKeyHint("ctrl+a", "all"),
+					rawKeyHint("ctrl+x", "none"),
+					rawKeyHint("ctrl+s", "apply"),
+					rawKeyHint("type", "filter"),
+					keyHint("tui.select.cancel", filter ? "clear" : isDirty() ? "warn discard" : "cancel"),
+				];
+			}
+			footer.setText(statusLine + "\n" + hints.join("  "));
 			container.invalidate();
 			tui.requestRender();
+		};
+
+		const markChanged = () => {
+			discardArmed = false;
+			refresh();
 		};
 
 		container.addChild(new DynamicBorder((text) => theme.fg("border", text)));
@@ -250,30 +276,31 @@ export function createModelChecklist(opts: {
 				if (item) {
 					if (selected.has(item.id)) selected.delete(item.id);
 					else selected.add(item.id);
-					refresh();
+					markChanged();
 				}
 				return;
 			}
 			if (data === "\x01") {
 				// ctrl+a
 				for (const item of rows) selected.add(item.id);
-				refresh();
+				markChanged();
 				return;
 			}
 			if (data === "\x18") {
 				// ctrl+x
 				for (const item of rows) selected.delete(item.id);
-				refresh();
+				markChanged();
 				return;
 			}
 			if (data === "\x13") {
-				// ctrl+s
+				// ctrl+s — apply selection to parent (parent auto-saves the relay)
 				done({ kind: "save", selectedIds: [...selected] });
 				return;
 			}
 			if (keybindings.matches(data, "tui.select.up")) {
 				if (rows.length > 0) {
 					selectedIndex = selectedIndex === 0 ? rows.length - 1 : selectedIndex - 1;
+					discardArmed = false;
 					refresh();
 				}
 				return;
@@ -281,6 +308,7 @@ export function createModelChecklist(opts: {
 			if (keybindings.matches(data, "tui.select.down")) {
 				if (rows.length > 0) {
 					selectedIndex = selectedIndex === rows.length - 1 ? 0 : selectedIndex + 1;
+					discardArmed = false;
 					refresh();
 				}
 				return;
@@ -290,6 +318,12 @@ export function createModelChecklist(opts: {
 					filter = "";
 					input.setValue("");
 					selectedIndex = 0;
+					discardArmed = false;
+					refresh();
+					return;
+				}
+				if (isDirty() && !discardArmed) {
+					discardArmed = true;
 					refresh();
 					return;
 				}
@@ -302,6 +336,7 @@ export function createModelChecklist(opts: {
 			if (after !== before) {
 				filter = after;
 				selectedIndex = 0;
+				discardArmed = false;
 				refresh();
 			}
 		};
@@ -309,6 +344,15 @@ export function createModelChecklist(opts: {
 		refresh();
 		return container;
 	};
+}
+
+function thinkingMapsEqual(a: ThinkingLevelMap, b: ThinkingLevelMap): boolean {
+	for (const level of THINKING_LEVELS) {
+		const av = Object.hasOwn(a, level) ? a[level] : undefined;
+		const bv = Object.hasOwn(b, level) ? b[level] : undefined;
+		if (av !== bv) return false;
+	}
+	return true;
 }
 
 export function createThinkingMapEditor(opts: {
@@ -321,14 +365,18 @@ export function createThinkingMapEditor(opts: {
 	done: (result: ThinkingLevelMap | undefined) => void,
 ) => Container {
 	return (tui, theme, keybindings, done) => {
+		const initial: ThinkingLevelMap = { ...opts.map };
 		const working: ThinkingLevelMap = { ...opts.map };
 		let index = 0;
+		let discardArmed = false;
 		const list = new Container();
 		const footer = new Text("", 1, 0);
 		const container = new Container() as Container & {
 			handleInput: (data: string) => void;
 			focused: boolean;
 		};
+
+		const isDirty = () => !thinkingMapsEqual(working, initial);
 
 		const status = (level: ThinkingLevel): string => {
 			const value = working[level];
@@ -348,13 +396,25 @@ export function createThinkingMapEditor(opts: {
 				const color = st === "hidden" ? "muted" : st === "default" ? "dim" : "success";
 				list.addChild(new Text(`${prefix}${label} ${theme.fg(color, st)}`, 1, 0));
 			}
-			footer.setText(
-				[
+
+			const statusLine = isDirty()
+				? theme.fg("warning", "Unsaved changes")
+				: theme.fg("muted", "No changes yet");
+
+			let hints: string[];
+			if (discardArmed && isDirty()) {
+				hints = [
+					theme.fg("warning", "Esc again discards"),
+					rawKeyHint("ctrl+s", "apply"),
+				];
+			} else {
+				hints = [
 					rawKeyHint("space/enter", "toggle on/hidden"),
-					rawKeyHint("ctrl+s", "save"),
-					keyHint("tui.select.cancel", "cancel"),
-				].join("  "),
-			);
+					rawKeyHint("ctrl+s", "apply"),
+					keyHint("tui.select.cancel", isDirty() ? "warn discard" : "back"),
+				];
+			}
+			footer.setText(statusLine + "\n" + hints.join("  "));
 			container.invalidate();
 			tui.requestRender();
 		};
@@ -366,6 +426,7 @@ export function createThinkingMapEditor(opts: {
 			} else {
 				working[level] = null;
 			}
+			discardArmed = false;
 			refresh();
 		};
 
@@ -390,11 +451,13 @@ export function createThinkingMapEditor(opts: {
 		container.handleInput = (data: string) => {
 			if (keybindings.matches(data, "tui.select.up")) {
 				index = index === 0 ? THINKING_LEVELS.length - 1 : index - 1;
+				discardArmed = false;
 				refresh();
 				return;
 			}
 			if (keybindings.matches(data, "tui.select.down")) {
 				index = index === THINKING_LEVELS.length - 1 ? 0 : index + 1;
+				discardArmed = false;
 				refresh();
 				return;
 			}
@@ -403,10 +466,16 @@ export function createThinkingMapEditor(opts: {
 				return;
 			}
 			if (data === "\x13") {
+				// ctrl+s
 				done({ ...working });
 				return;
 			}
 			if (keybindings.matches(data, "tui.select.cancel")) {
+				if (isDirty() && !discardArmed) {
+					discardArmed = true;
+					refresh();
+					return;
+				}
 				done(undefined);
 			}
 		};
