@@ -14,6 +14,11 @@
  * scroll, ctrl+c stops the running worker (or closes when idle), Esc closes.
  * The hint line shows only currently-usable keys.
  *
+ * Security: workers share the parent process OS permissions and credentials.
+ * Tool allowlists and cwd bounds reduce accidents; they are not a sandbox.
+ * Project agent definitions require interactive confirmation. Skills are not
+ * loaded into workers by default.
+ *
  * Pi's public TUI API supports focused keyboard overlays plus passive widgets
  * but no footer hit-testing, focus transfer into widgets, or mouse events; Pi
  * renders into the normal terminal screen, so the mouse wheel always scrolls
@@ -79,18 +84,35 @@ export default function subagent(pi: ExtensionAPI): void {
 		promptGuidelines: SUBAGENT_PROMPT_GUIDELINES,
 		parameters: SubagentParamsSchema,
 		// Resumed sessions may replay calls emitted under the previous contract.
-		// Normalize only aliases whose effects are exactly preserved.
+		// Strip knobs that left the model surface (tools/delivery/limits/confirm)
+		// so old transcripts still validate; map retired action names.
 		prepareArguments(args) {
 			if (!args || typeof args !== "object") return args as SubagentParams;
-			const input = args as Record<string, unknown>;
+			const input = { ...(args as Record<string, unknown>) };
 			if (input.action === "list") {
-				const { id: _legacyIgnoredId, ...rest } = input;
-				return { ...rest, action: "read" } as SubagentParams;
+				delete input.id;
+				input.action = "read";
+			} else if (input.action === "restart") {
+				input.action = "send";
+				input.fresh = true;
 			}
-			if (input.action === "restart") {
-				return { ...input, action: "send", fresh: true } as SubagentParams;
+			// Dropped from the model contract (security / simplicity). Silently
+			// ignore so resume does not fail schema validation on extras that
+			// some providers still echo back.
+			delete input.tools;
+			delete input.delivery;
+			delete input.maxConcurrency;
+			delete input.maxAgents;
+			delete input.confirmProjectAgents;
+			if (Array.isArray(input.tasks)) {
+				input.tasks = input.tasks.map((task) => {
+					if (!task || typeof task !== "object") return task;
+					const next = { ...(task as Record<string, unknown>) };
+					delete next.tools;
+					return next;
+				});
 			}
-			return args as SubagentParams;
+			return input as SubagentParams;
 		},
 		executionMode: "sequential" as ToolExecutionMode,
 

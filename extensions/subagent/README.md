@@ -4,14 +4,16 @@ Adds a model-callable `subagent` tool backed by isolated in-memory Pi `AgentSess
 
 The interaction model follows Claude Code's background-agent UX as closely as Pi's public extension API allows, with some ideas borrowed from Grok Build's unified tasks pane (running-first ordering, single-key stop, auto-appearing list).
 
+**Security note:** workers share the parent process credentials and OS permissions. Tool allowlists and cwd bounds reduce accidents; they are **not** a sandbox. For untrusted repositories, run Pi inside a container (see Pi's security docs).
+
 ## Built-in profiles and inheritance
 
-The built-in profiles are:
+| Profile | Behavior | Default tools | Defaults |
+|---|---|---|---|
+| `general` | General implementation worker; may edit files | `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls` | model/thinking inherit |
+| `explorer` | Read-only codebase reconnaissance | `read`, `grep`, `find`, `ls` (no bash) | thinking `low`; no AGENTS.md injection |
 
-| Profile | Behavior | Default tools |
-|---|---|---|
-| `general` | General implementation worker; may edit files | Pi defaults (`read`, `bash`, `edit`, `write`) |
-| `explorer` | Read-only codebase reconnaissance | `read`, `grep`, `find`, `ls` |
+Tool capability comes **only** from the profile (or Markdown definition). The model cannot pass a `tools` override to escalate privileges.
 
 Model and thinking resolution is deterministic:
 
@@ -20,7 +22,7 @@ Model and thinking resolution is deterministic:
 3. `model` / `thinkingLevel` in a Markdown agent definition.
 4. `inherit`: the parent session's current model and thinking level at spawn time.
 
-Built-in profiles have no fixed model or thinking level, so their untouched default is `inherit`. Explicitly selecting `inherit` in `/agents settings` also overrides a Markdown agent's fixed setting.
+Built-in `general` has no fixed model/thinking, so its untouched default is `inherit`. `explorer` defaults thinking to `low` unless overridden. Explicitly selecting `inherit` in `/agents settings` also overrides a Markdown agent's fixed setting.
 
 `/agents settings [profile]` opens the profile settings menu. It can save an explicit model, an explicit thinking level, force either field to `inherit`, or clear the saved override and return to the agent definition. Settings are stored outside the repo at `~/.pi/agent/pi-config/subagent.json`; no credentials are written. Preferences are keyed by profile name only, so a user-level and a project-level definition with the same name share one saved override. `/agents limits` configures session-local concurrency/retention, and `/agents clear [id|all]` disposes terminal records.
 
@@ -31,11 +33,22 @@ The `subagent` tool exposes these actions:
 | Action | Purpose |
 |---|---|
 | `spawn` | Enqueue one `task` or a `tasks` batch and return stable ids immediately |
-| `read` | Without `id`, list retained workers; with `id`, return one bounded snapshot |
-| `send` | Attach to queued work, steer/follow up a running worker, continue a completed conversation, or fresh-rerun with `fresh: true`; failed/stopped workers rerun fresh automatically |
-| `stop` | Abort a running worker or remove a queued worker |
+| `read` | Without `id`, compact list; with `id`, bounded result snapshot (not full transcript) |
+| `send` | Attach to queued work, steer a running worker, continue a completed conversation, or fresh-rerun with `fresh: true`; failed/stopped workers rerun fresh automatically |
+| `stop` | Abort a running worker or remove a queued worker (**notifies the parent** with any partial output) |
 
-`spawn` accepts `agent`, `model`, `thinkingLevel`, `tools`, `cwd`, and `label` per task, plus optional spawn-level `maxConcurrency` / `maxAgents` overrides. Use `model: "inherit"` or `thinkingLevel: "inherit"` to force the parent setting for that invocation. An explicit empty `tools` list creates a model-only worker with no tools. The default limits are 3 concurrent and 16 retained agents; hard limits are 8 and 32. Excess tasks remain queued and start automatically when a slot opens. Before a spawn fails at `maxAgents`, the controller automatically reclaims the oldest eligible terminal records, preferring viewed successful/stopped work and protecting active workers, unsettled batch members, and unread failures.
+### Model-facing spawn fields
+
+| Field | Notes |
+|---|---|
+| `task` / `tasks` | Required (exactly one form). Brief the worker fully — it has no parent conversation context. |
+| `agent` | Profile name; default `general`. Use `explorer` for read-only recon. |
+| `label` | Short 3–8 word summary for TUI/notifications (strongly recommended). |
+| `model` / `thinkingLevel` | Optional; prefer omit. `"inherit"` forces the parent setting. |
+| `cwd` | Optional path **relative to / under** the parent session cwd (escape outside that tree is rejected). |
+| `agentScope` | Default `user`. Use `project`/`both` only when you intentionally need `.pi/agents` definitions (interactive confirm required; cannot be disabled by the model). |
+
+Deployment limits (`maxConcurrency` / `maxAgents`) are **not** tool parameters — use `/agents limits`. Defaults: 3 concurrent, 16 retained (hard caps 8 / 32). Excess tasks queue automatically. Before a spawn fails at `maxAgents`, the controller reclaims the oldest eligible terminal records (protecting active workers, unsettled batch members, and unread failures).
 
 ## TUI
 
@@ -65,12 +78,12 @@ The input line is always focused, and Enter always performs the single action th
 
 | State | Mode label | Enter behavior |
 |---|---|---|
-| running | `[send]` | delivered to the worker after its current tool batch |
+| running | `[send]` | steered to the worker after its current tool batch |
 | queued/starting | `[on start]` | attaches the message before the run starts |
 | completed | `[continue]` | continues the existing conversation |
 | failed/stopped | `[rerun]` | reruns fresh — empty input repeats the task, typed text replaces it |
 
-Pressing Enter with an empty input (outside `[rerun]`) shows a short explanation instead of doing nothing. Steer-vs-follow-up delivery is a model-side concept only (`send` action `delivery`); the human UI always steers. Human housekeeping uses `/agents clear [id|all]` and `/agents limits` rather than model tool actions.
+Pressing Enter with an empty input (outside `[rerun]`) shows a short explanation instead of doing nothing. Human housekeeping uses `/agents clear [id|all]` and `/agents limits` rather than model tool actions.
 
 ### Main-transcript rendering
 
@@ -99,13 +112,15 @@ thinkingLevel: low
 Additional system instructions for this profile.
 ```
 
-Project-local definitions are repository-controlled prompts. Interactive calls confirm before executing them by default; without an interactive UI the tool returns `no_ui` unless the caller explicitly sets `confirmProjectAgents: false` for a trusted repository.
+Project-local definitions are repository-controlled prompts. Interactive calls **always** confirm before executing them; without an interactive UI the tool returns `no_ui`. The model cannot disable confirmation.
 
 ## Completion and lifecycle
 
-Each worker uses `SessionManager.inMemory()` and disables child extension loading, preventing recursive `subagent` registration. All workers share one extension-owned `ModelRuntime` (created lazily on the first spawn, which may add a one-time model-catalog refresh). Before each spawn, provider configurations dynamically registered in the parent session (`pi.registerProvider`) are replayed into that runtime, and parent-side unregistrations are mirrored, so custom/proxy models stay usable inside workers. Two limitations: providers registered as native pi-ai `Provider` objects are not exposed for replay by the current API surface, and runtime-only api keys injected via `setRuntimeApiKey` exist solely in the parent runtime's memory — such providers fall back to on-disk auth. Workers inherit user settings: the resource loader and the session share one `SettingsManager.create(cwd)` per working directory (read-only use), so retry and compaction behavior follow your configuration; skills stay enabled. A single spawn sends its completion or failure to the parent with `pi.sendMessage(..., { triggerTurn: true, deliverAs: "followUp" })`; workers spawned in one batch retain independent ids but produce one combined parent follow-up after every initial member settles. Completion messages are capped at 24,000 characters; batch notifications reserve a bounded section for every member before dividing the remaining result budget, so later workers and the synthesis instruction are never lost to whole-message truncation. The raw custom message is hidden from the transcript to avoid duplicating the parent model's user-facing summary; the TUI notification and queued parent turn remain. `read` is capped at 32,000 characters; the live in-memory timeline is also bounded.
+Each worker uses `SessionManager.inMemory()` and disables child extension loading, preventing recursive `subagent` registration. Skills and prompt templates are not loaded into workers (smaller prompts, smaller injection surface). All workers share one extension-owned `ModelRuntime` (created lazily on the first spawn, which may add a one-time model-catalog refresh). Before each spawn, provider configurations dynamically registered in the parent session (`pi.registerProvider`) are replayed into that runtime, and parent-side unregistrations are mirrored, so custom/proxy models stay usable inside workers. Two limitations: providers registered as native pi-ai `Provider` objects are not exposed for replay by the current API surface, and runtime-only api keys injected via `setRuntimeApiKey` exist solely in the parent runtime's memory — such providers fall back to on-disk auth. Workers inherit user settings: the resource loader and the session share one `SettingsManager.create(cwd)` per working directory (read-only use), so retry and compaction behavior follow your configuration. Worker system prompts are a slim role role (not the full default pi assistant template); `general` still receives project context files (AGENTS.md / CLAUDE.md), while `explorer` skips them and can read those files on demand.
 
-Active workers are session-process resources. `/reload`, `/new`, `/resume`, and session shutdown abort and dispose them. `/tree` navigation keeps them alive at the session level, so a later completion is delivered to whichever branch is active then. Workers share their requested cwd; do not assign overlapping edits unless they are deliberately coordinated. Worktree isolation is not currently implemented.
+A single spawn sends its completion, failure, or **stop** to the parent with `pi.sendMessage(..., { triggerTurn: true, deliverAs: "followUp" })`; workers spawned in one batch retain independent ids but produce one combined parent follow-up after every initial member settles. Completion messages are capped at 16,000 characters; batch notifications reserve a bounded section for every member before dividing the remaining result budget, so later workers and the synthesis instruction are never lost to whole-message truncation. Model-facing `read` snapshots are capped at 8,000 characters (status + output + short recent tools — not the full timeline). The raw custom message is hidden from the transcript to avoid duplicating the parent model's user-facing summary; the TUI notification and queued parent turn remain. The live in-memory timeline for the panel is also bounded.
+
+Active workers are session-process resources. `/reload`, `/new`, `/resume`, and session shutdown abort and dispose them. `/tree` navigation keeps them alive at the session level, so a later completion is delivered to whichever branch is active then. Workers share their requested cwd (must stay under the parent session cwd); do not assign overlapping edits unless they are deliberately coordinated. Worktree isolation is not currently implemented.
 
 ## Files
 

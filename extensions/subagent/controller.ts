@@ -51,7 +51,6 @@ import {
 import { panelOverlayOptions, SubagentPanel } from "./panel.ts";
 import type {
 	AgentScope,
-	DeliveryMode,
 	SubagentParams,
 	SubagentTaskParams,
 	ThinkingLevelName,
@@ -85,6 +84,14 @@ const BUILTIN_TOOLS = new Set([
 	"find",
 	"ls",
 ]);
+
+/** True when candidate is parentCwd or a path under it (Windows-safe). */
+function isPathInsideParent(parentCwd: string, candidate: string): boolean {
+	const parent = path.resolve(parentCwd);
+	const resolved = path.resolve(candidate);
+	const rel = path.relative(parent, resolved);
+	return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
 
 function emptyUsage(): SubagentUsage {
 	return {
@@ -123,13 +130,19 @@ function latestAssistantMessage(
 	return undefined;
 }
 
+/**
+ * Slim custom system prompt for workers. Via Pi's resource loader this becomes
+ * buildSystemPrompt({ customPrompt }), so the heavy default pi assistant
+ * template (docs paths, etc.) is not included — only this text plus optional
+ * project_context / skills from the loader.
+ */
 function makeWorkerSystemPrompt(agent: AgentDefinition): string {
 	const role = agent.systemPrompt.trim();
 	return [
-		`You are Pi background subagent "${agent.name}", a focused worker delegated one concrete task.`,
-		"Work directly and efficiently inside the assigned working directory. Keep scope bounded to the task, obey applicable project instruction files, and report a clear result for the parent agent.",
-		"Do not ask the end user questions from this isolated session. If blocked, explain the exact blocker and the decision the parent agent needs to make.",
-		"Do not spawn additional subagents; this worker is already the delegated execution context.",
+		`You are Pi background subagent "${agent.name}", a focused worker for one concrete task.`,
+		"Stay inside the assigned working directory and the task scope. Report a clear result for the parent agent.",
+		"Do not ask the end user questions. If blocked, state the exact blocker and the decision the parent must make.",
+		"Do not spawn additional subagents; you are already the delegated execution context.",
 		role,
 	]
 		.filter(Boolean)
@@ -517,12 +530,7 @@ export class SubagentController implements SubagentPanelHost {
 			case "read":
 				return this.readResult(params.id);
 			case "send":
-				return this.sendResult(
-					params.id,
-					params.message,
-					params.delivery ?? "steer",
-					params.fresh ?? false,
-				);
+				return this.sendResult(params.id, params.message, params.fresh ?? false);
 			case "stop":
 				return this.stopResult(params.id);
 		}
@@ -531,16 +539,14 @@ export class SubagentController implements SubagentPanelHost {
 	async sendInstruction(
 		id: string,
 		message: string | undefined,
-		delivery: DeliveryMode,
 		fresh = false,
 	): Promise<string> {
-		return this.sendAgent(id, message, delivery, fresh);
+		return this.sendAgent(id, message, fresh);
 	}
 
 	private async sendAgent(
 		id: string,
 		message: string | undefined,
-		delivery: DeliveryMode,
 		fresh: boolean,
 	): Promise<string> {
 		const record = this.requireRecord(id);
@@ -550,12 +556,12 @@ export class SubagentController implements SubagentPanelHost {
 		}
 		if (!instruction) {
 			throw new Error(
-				`${record.id} is ${record.status}; send requires a message unless fresh=true or the worker is failed/stopped.`,
+				`${record.id} is ${record.status}; send requires a message unless fresh=true or the worker is failed/stopped. Example: { action:"send", id:"${record.id}", message:"..." }`,
 			);
 		}
 
 		if (record.status === "queued" || record.status === "starting") {
-			record.pendingInstructions.push({ message: instruction, delivery });
+			record.pendingInstructions.push(instruction);
 			this.addTimeline(record, "user", instruction);
 			record.updatedAt = Date.now();
 			this.requestPanelRender();
@@ -567,12 +573,10 @@ export class SubagentController implements SubagentPanelHost {
 				throw new Error(`${record.id} is still initializing.`);
 			this.addTimeline(record, "user", instruction);
 			record.updatedAt = Date.now();
-			if (delivery === "followUp") await record.session.followUp(instruction);
-			else await record.session.steer(instruction);
+			// Always steer: deliver after the current tool batch (human UI and model agree).
+			await record.session.steer(instruction);
 			this.requestPanelRender();
-			return delivery === "followUp"
-				? `Queued — ${record.id} sees it when current work settles.`
-				: `Sent — ${record.id} sees it after the current tool batch.`;
+			return `Sent — ${record.id} sees it after the current tool batch.`;
 		}
 
 		this.enqueueRun(record, { prompt: instruction, fresh: false });
@@ -612,7 +616,8 @@ export class SubagentController implements SubagentPanelHost {
 			record.unread = true;
 			this.addTimeline(record, "system", "Stopped before execution started.");
 			this.stateChanged();
-			this.settleCompletion(record, completionGroupId, false);
+			// Always notify so the parent need not poll (batch settles when all members finish).
+			this.settleCompletion(record, completionGroupId, true);
 			return `${record.id} removed from the queue.`;
 		}
 
@@ -628,7 +633,7 @@ export class SubagentController implements SubagentPanelHost {
 			record.unread = true;
 			this.addTimeline(record, "system", "Stopped by the parent session.");
 			this.stateChanged();
-			this.settleCompletion(record, completionGroupId, false);
+			this.settleCompletion(record, completionGroupId, true);
 			try {
 				await record.session?.abort();
 			} catch {
@@ -694,12 +699,14 @@ export class SubagentController implements SubagentPanelHost {
 		const projectAgents = prepared.specs
 			.map((spec) => spec.agentDefinition)
 			.filter((agent) => agent.source === "project");
-		if (projectAgents.length && (params.confirmProjectAgents ?? true)) {
+		// Project definitions are repo-controlled; always require interactive confirm.
+		// The model cannot disable this gate.
+		if (projectAgents.length) {
 			if (!ctx.hasUI) {
 				return this.errorResult(
 					"spawn",
 					"no_ui",
-					"Project-local agents require interactive confirmation. Retry in an interactive UI or explicitly set confirmProjectAgents=false for a trusted repository.",
+					"Project-local agents require interactive confirmation. Retry in an interactive UI, or use agentScope \"user\" with built-in/user profiles only.",
 				);
 			}
 			const names = [...new Set(projectAgents.map((agent) => agent.name))].join(
@@ -717,19 +724,14 @@ export class SubagentController implements SubagentPanelHost {
 				);
 		}
 
-		const nextConfig = {
-			maxConcurrency: params.maxConcurrency ?? this.config.maxConcurrency,
-			maxAgents: params.maxAgents ?? this.config.maxAgents,
-		};
 		const targetMaxAgents = Math.max(
 			1,
-			Math.min(HARD_MAX_AGENTS, nextConfig.maxAgents),
+			Math.min(HARD_MAX_AGENTS, this.config.maxAgents),
 		);
 		const capacity = this.makeRoomForSpawn(tasks.length, targetMaxAgents);
 		if ("error" in capacity) {
 			return this.errorResult("spawn", "max_agents", capacity.error);
 		}
-		this.applyConfig(nextConfig, true);
 
 		const spawned: SubagentRecord[] = [];
 		for (const preparedSpec of prepared.specs) {
@@ -786,7 +788,9 @@ export class SubagentController implements SubagentPanelHost {
 			capacity.evicted.length
 				? `Reclaimed ${capacity.evicted.length} terminal record${capacity.evicted.length === 1 ? "" : "s"}: ${capacity.evicted.join(", ")}.`
 				: "",
-			`Concurrency: ${this.activeRuns}/${this.config.maxConcurrency} active; ${this.queue.length} queued. ${completionGroupId ? "One combined completion notification will be delivered after the batch settles." : "Completion notification will be delivered automatically."}`,
+			completionGroupId
+				? "One combined completion follow-up will arrive after the batch settles. Do not poll."
+				: "Completion will arrive automatically as a parent follow-up. Do not poll.",
 		]
 			.filter(Boolean)
 			.join("\n");
@@ -801,7 +805,8 @@ export class SubagentController implements SubagentPanelHost {
 		const hasSingle = Boolean(singleTask);
 		if (hasBatch === hasSingle) {
 			return {
-				error: "spawn requires exactly one of task (single) or tasks (batch).",
+				error:
+					'spawn requires exactly one of task (single) or tasks (batch). Example: { action:"spawn", agent:"explorer", label:"auth map", task:"..." }',
 			};
 		}
 		if (params.tasks) return params.tasks;
@@ -811,7 +816,6 @@ export class SubagentController implements SubagentPanelHost {
 				...(params.agent ? { agent: params.agent } : {}),
 				...(params.label ? { label: params.label } : {}),
 				...(params.model ? { model: params.model } : {}),
-				...(params.tools ? { tools: params.tools } : {}),
 				...(params.cwd ? { cwd: params.cwd } : {}),
 				...(params.thinkingLevel
 					? { thinkingLevel: params.thinkingLevel }
@@ -856,7 +860,14 @@ export class SubagentController implements SubagentPanelHost {
 				};
 			}
 
-			const cwd = path.resolve(ctx.cwd, task.cwd?.trim() || ".");
+			const parentCwd = path.resolve(ctx.cwd);
+			const cwd = path.resolve(parentCwd, task.cwd?.trim() || ".");
+			if (!isPathInsideParent(parentCwd, cwd)) {
+				return {
+					error: `Subagent cwd must stay inside the parent session working directory (${parentCwd}). Use a relative path under that tree.`,
+					code: "invalid_cwd",
+				};
+			}
 			try {
 				if (!fs.statSync(cwd).isDirectory()) {
 					return {
@@ -871,12 +882,14 @@ export class SubagentController implements SubagentPanelHost {
 				};
 			}
 
-			const tools = task.tools ?? agentDefinition.tools;
+			// Capability comes only from the agent profile / Markdown definition —
+			// callers cannot escalate tools via the tool arguments.
+			const tools = agentDefinition.tools;
 			if (tools) {
 				const unsupported = tools.filter((tool) => !BUILTIN_TOOLS.has(tool));
 				if (unsupported.length) {
 					return {
-						error: `Unsupported subagent tools: ${unsupported.join(", ")}. Allowed built-ins: ${[...BUILTIN_TOOLS].join(", ")}.`,
+						error: `Agent "${agentName}" declares unsupported tools: ${unsupported.join(", ")}. Allowed built-ins: ${[...BUILTIN_TOOLS].join(", ")}.`,
 						code: "unsupported_tools",
 					};
 				}
@@ -1051,8 +1064,7 @@ export class SubagentController implements SubagentPanelHost {
 			const prompt = [
 				run.prompt,
 				...deferred.map(
-					(item) =>
-						`Additional parent instruction (${item.delivery === "followUp" ? "follow-up" : "steer"}): ${item.message}`,
+					(item) => `Additional parent instruction: ${item}`,
 				),
 			].join("\n\n");
 			const session = record.session;
@@ -1110,23 +1122,35 @@ export class SubagentController implements SubagentPanelHost {
 	/** Cached, reloaded ResourceLoader keyed by cwd + agent identity + prompt. */
 	private loaderFor(record: SubagentRecord): Promise<DefaultResourceLoader> {
 		const agent = record.agentDefinition;
-		// systemPrompt is part of the key: an on-disk agent definition can be
-		// edited between spawns, and a stale loader closes over the old prompt.
-		const key = [record.cwd, agent.name, agent.source, agent.systemPrompt].join(
-			"\0",
-		);
+		// systemPrompt and loader flags are part of the key so definition edits
+		// and omitContextFiles do not reuse a stale loader.
+		const key = [
+			record.cwd,
+			agent.name,
+			agent.source,
+			agent.systemPrompt,
+			agent.omitContextFiles ? "1" : "0",
+		].join("\0");
 		const existing = this.loaders.get(key);
 		if (existing) return existing;
 		const promise = (async () => {
 			const loader = new DefaultResourceLoader({
 				cwd: record.cwd,
 				agentDir: getAgentDir(),
+				// Block recursive extension tools (including this one) and keep
+				// workers lean: no skills/prompt-templates/themes by default.
 				noExtensions: true,
+				noSkills: true,
 				noPromptTemplates: true,
 				noThemes: true,
+				// Explorer (and similar) skip AGENTS.md injection to save tokens;
+				// general keeps project context for implementation fidelity.
+				noContextFiles: Boolean(agent.omitContextFiles),
 				settingsManager: this.settingsManagerFor(record.cwd),
-				systemPromptOverride: (base) =>
-					[base, makeWorkerSystemPrompt(agent)].filter(Boolean).join("\n\n"),
+				// Replace loader system prompt with a slim worker role. Optional
+				// on-disk SYSTEM.md is dropped for workers; project_context still
+				// comes from context files when noContextFiles is false.
+				systemPromptOverride: () => makeWorkerSystemPrompt(agent),
 			});
 			await loader.reload();
 			return loader;
@@ -1432,7 +1456,7 @@ export class SubagentController implements SubagentPanelHost {
 		const intro = `Subagent batch ${groupId} settled: ${completed}/${notices.length} completed successfully.`;
 		const closing = [
 			"Respond to the user once with a concise synthesis of the whole batch. Do not quote this notification verbatim and do not call subagent read merely to confirm completion.",
-			`Control: use subagent action "read" for a retained snapshot, or "send" to continue/steer a worker; set fresh=true for a new isolated context.`,
+			'Control: subagent read for a snapshot, send to continue/steer, send with fresh=true for a new context, stop to cancel.',
 		].join("\n\n");
 		const sectionPrefixes = notices.map((notice) =>
 			[
@@ -1452,7 +1476,11 @@ export class SubagentController implements SubagentPanelHost {
 			const succeeded = notice.status === "completed";
 			const rawOutput = succeeded
 				? notice.lastOutput || "(completed without text output)"
-				: notice.error || notice.lastOutput || "(no diagnostics)";
+				: notice.lastOutput ||
+					notice.error ||
+					(notice.status === "stopped"
+						? "(stopped with no partial output)"
+						: "(no diagnostics)");
 			return `${sectionPrefixes[index]}${truncateText(rawOutput, resultBudget, `${notice.id} result`)}`;
 		});
 		const content = [intro, ...sections, closing].join(separator);
@@ -1486,9 +1514,14 @@ export class SubagentController implements SubagentPanelHost {
 	private notifyParent(record: SubagentRecord): void {
 		if (this.disposed) return;
 		const succeeded = record.status === "completed";
+		// Prefer partial assistant text on stop/fail so the parent has evidence.
 		const rawOutput = succeeded
 			? record.lastOutput || "(completed without text output)"
-			: record.error || record.lastOutput || "(no diagnostics)";
+			: record.lastOutput ||
+				record.error ||
+				(record.status === "stopped"
+					? "(stopped with no partial output)"
+					: "(no diagnostics)");
 		const stats = [
 			`${record.usage.toolUses} tool use${record.usage.toolUses === 1 ? "" : "s"}`,
 			`${record.usage.turns} turn${record.usage.turns === 1 ? "" : "s"}`,
@@ -1504,10 +1537,13 @@ export class SubagentController implements SubagentPanelHost {
 			`Task: ${oneLine(record.task, 500)}`,
 			`Stats: ${stats}`,
 		];
-		const resultPrefix = "Result:\n";
+		const resultPrefix =
+			record.status === "stopped" || record.status === "failed"
+				? "Partial result:\n"
+				: "Result:\n";
 		const closing = [
 			"Respond to the user once with a concise synthesis. Do not quote this notification verbatim and do not call subagent read merely to confirm completion.",
-			`Control: use subagent action "read" for its retained snapshot, or "send" to continue/steer it; set fresh=true for a new isolated context.`,
+			'Control: subagent read for a snapshot, send to continue/steer, send with fresh=true for a new context, stop to cancel.',
 		];
 		const separator = "\n\n";
 		const fixedChars = [
@@ -1773,19 +1809,25 @@ export class SubagentController implements SubagentPanelHost {
 		if (!records.length) {
 			return this.result(
 				"read_list",
-				`No subagents in this session. Limits: maxConcurrency=${this.config.maxConcurrency}, maxAgents=${this.config.maxAgents}.`,
+				"No subagents in this session.",
 			);
 		}
 		const lines = records.map((record) => {
 			const elapsed = record.startedAt
 				? formatDuration(record.startedAt, record.endedAt ?? Date.now()) || "-"
 				: "-";
-			return `- ${record.id} [${record.status}] ${record.label} agent=${record.agentName} toolUses=${record.usage.toolUses} elapsed=${elapsed}${record.currentActivity ? ` activity=${oneLine(record.currentActivity, 100)}` : ""}`;
+			const activity = record.currentActivity
+				? ` · ${oneLine(record.currentActivity, 60)}`
+				: "";
+			const tokens = record.usage.output
+				? ` · ↓${formatTokens(record.usage.output)}`
+				: "";
+			return `${record.id} [${record.status}] ${oneLine(record.label, 40)} (${record.agentName}) · ${elapsed}${tokens}${activity}`;
 		});
 		return this.result(
 			"read_list",
 			[
-				`Subagents (${this.activeRuns}/${this.config.maxConcurrency} active, ${this.queue.length} queued, ${records.length}/${this.config.maxAgents} retained):`,
+				`Subagents ${this.activeRuns} active / ${this.queue.length} queued / ${records.length} retained:`,
 				...lines,
 			].join("\n"),
 			records,
@@ -1799,63 +1841,40 @@ export class SubagentController implements SubagentPanelHost {
 			return this.errorResult(
 				"read",
 				"not_found",
-				`Unknown subagent id: ${id}.`,
+				`Unknown subagent id: ${id}. Use read without id to list workers.`,
 			);
 		this.markViewed(record.id);
 
-		const activities = [
-			record.omittedActivities
-				? `... ${record.omittedActivities} earlier tool activities omitted`
-				: "",
-			...record.activities.slice(-120).map((activity) => {
-				const result = activity.resultSummary
-					? ` — ${activity.resultSummary}`
-					: "";
-				return `[${activity.status}] ${activity.summary}${result}`;
-			}),
-		]
-			.filter(Boolean)
-			.join("\n");
-		const timeline = record.timeline
-			.slice(-120)
-			.filter(
-				(item) =>
-					item.kind !== "tool" &&
-					item.kind !== "toolResult" &&
-					!(item.kind === "assistant" && item.text === record.lastOutput),
-			)
-			.map((item) => `[${item.kind}] ${item.text}`)
-			.concat(
-				record.liveText ? [`[assistant-streaming] ${record.liveText}`] : [],
-			)
-			.join("\n");
+		// Compact snapshot for the model — full activity/timeline stay in the panel.
+		const recentTools = record.activities
+			.slice(-5)
+			.map((activity) => `[${activity.status}] ${activity.summary}`)
+			.join("; ");
 		const finalOutput = truncateText(
-			record.lastOutput || "(no final assistant output yet)",
-			Math.floor(READ_OUTPUT_CHARS * 0.7),
-			"final result",
+			record.liveText ||
+				record.lastOutput ||
+				"(no assistant output yet)",
+			Math.floor(READ_OUTPUT_CHARS * 0.75),
+			"output",
 		);
 		const raw = [
 			`${record.id} [${record.status}] ${record.label}`,
-			`Agent: ${record.agentName} (${record.agentDefinition.source})`,
-			`Cwd: ${record.cwd}`,
-			`Task: ${record.task}`,
-			`Runs: ${record.runCount}; turns: ${record.usage.turns}; tool uses: ${record.usage.toolUses}; tokens: input=${record.usage.input}, output=${record.usage.output}, cacheRead=${record.usage.cacheRead}, cacheWrite=${record.usage.cacheWrite}; cost=$${record.usage.cost.toFixed(4)}`,
+			`agent=${record.agentName} source=${record.agentDefinition.source}`,
+			`task: ${oneLine(record.task, 300)}`,
+			`usage: turns=${record.usage.turns} tools=${record.usage.toolUses} out=${formatTokens(record.usage.output)} cost=$${record.usage.cost.toFixed(4)}`,
 			record.currentActivity
-				? `Current activity: ${record.currentActivity}`
+				? `activity: ${oneLine(record.currentActivity, 120)}`
 				: "",
-			record.error ? `Error: ${record.error}` : "",
-			"Tool activity:",
-			activities || "(no tool activity yet)",
-			record.status === "completed" ? "Final result:" : "Latest assistant output:",
+			record.error ? `error: ${record.error}` : "",
+			recentTools ? `recent tools: ${recentTools}` : "",
+			record.status === "completed" ? "result:" : "output:",
 			finalOutput,
-			"Conversation updates:",
-			timeline || "(no conversation updates yet)",
 		]
 			.filter(Boolean)
-			.join("\n\n");
+			.join("\n");
 		return this.result(
 			"read",
-			truncateText(raw, READ_OUTPUT_CHARS, "retained snapshot"),
+			truncateText(raw, READ_OUTPUT_CHARS, "snapshot"),
 			[record],
 		);
 	}
@@ -1863,18 +1882,17 @@ export class SubagentController implements SubagentPanelHost {
 	private async sendResult(
 		id: string | undefined,
 		message: string | undefined,
-		delivery: DeliveryMode,
 		fresh: boolean,
 	): Promise<AgentToolResult<SubagentDetails>> {
 		if (!id) {
 			return this.errorResult(
 				"send",
 				"invalid_parameters",
-				"send requires id.",
+				'send requires id. Example: { action:"send", id:"sa-01", message:"..." }',
 			);
 		}
 		try {
-			const text = await this.sendAgent(id, message, delivery, fresh);
+			const text = await this.sendAgent(id, message, fresh);
 			return this.result("send", text, [this.requireRecord(id)]);
 		} catch (error) {
 			return this.errorResult(
@@ -1892,7 +1910,7 @@ export class SubagentController implements SubagentPanelHost {
 			return this.errorResult(
 				"stop",
 				"invalid_parameters",
-				"stop requires id.",
+				'stop requires id. Example: { action:"stop", id:"sa-01" }',
 			);
 		try {
 			const text = await this.stopAgent(id);

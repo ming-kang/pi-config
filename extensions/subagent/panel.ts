@@ -325,7 +325,7 @@ export class SubagentPanel implements Component {
 		}
 		this.input.setValue("");
 		this.scrollFromBottom = 0;
-		this.runAction(() => this.host.sendInstruction(selected.id, message, "steer"));
+		this.runAction(() => this.host.sendInstruction(selected.id, message));
 	}
 
 	private restartSelected(): void {
@@ -335,7 +335,7 @@ export class SubagentPanel implements Component {
 		this.input.setValue("");
 		this.scrollFromBottom = 0;
 		this.runAction(() =>
-			this.host.sendInstruction(selected.id, replacement, "steer", true),
+			this.host.sendInstruction(selected.id, replacement, true),
 		);
 	}
 

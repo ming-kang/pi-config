@@ -20,21 +20,46 @@ const THINKING_LEVELS = new Set<ThinkingLevelName>([
 	"max",
 ]);
 
+/** Default tool sets — capability comes only from the profile, not the caller. */
+export const GENERAL_TOOLS = [
+	"read",
+	"bash",
+	"edit",
+	"write",
+	"grep",
+	"find",
+	"ls",
+] as const;
+
+export const EXPLORER_TOOLS = ["read", "grep", "find", "ls"] as const;
+
 const BUILTIN_AGENTS: AgentDefinition[] = [
 	{
 		name: "general",
 		description:
 			"General-purpose worker that may inspect and modify the workspace",
-		systemPrompt:
-			"Complete the delegated task end to end. You may modify files when the task requires it.",
+		systemPrompt: [
+			"Complete the delegated task end to end. Prefer editing existing files over creating new ones.",
+			"Do not create documentation files unless the task explicitly asks for them.",
+			"When finished, respond with a concise report for the parent agent: what changed (paths), key findings, and any blockers — essentials only.",
+		].join(" "),
+		tools: [...GENERAL_TOOLS],
 		source: "builtin",
 	},
 	{
 		name: "explorer",
 		description: "Read-only codebase reconnaissance and compressed findings",
-		systemPrompt:
-			"Explore the codebase without modifying it. Locate relevant files, trace important relationships, and return concise findings with exact paths and symbols for the parent agent.",
-		tools: ["read", "grep", "find", "ls"],
+		systemPrompt: [
+			"READ-ONLY reconnaissance. You must not create, modify, delete, or move files, or run any command that changes system state.",
+			"You have only read, grep, find, and ls — no bash, edit, or write.",
+			"Search efficiently (parallel tool calls when useful). Return concise findings with exact paths, symbols, and line references the parent can act on.",
+			"If project conventions matter, read AGENTS.md or README yourself; do not invent structure.",
+		].join(" "),
+		tools: [...EXPLORER_TOOLS],
+		// Cheap default for recon; parent/settings/spawn can still override.
+		thinkingLevel: "low",
+		// Skip AGENTS.md injection; explorer can read it if needed.
+		omitContextFiles: true,
 		source: "builtin",
 	},
 ];

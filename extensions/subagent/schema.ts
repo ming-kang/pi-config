@@ -1,31 +1,24 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
 
-import {
-	HARD_MAX_AGENTS,
-	HARD_MAX_CONCURRENCY,
-	MAX_BATCH_TASKS,
-} from "./constants.ts";
+import { MAX_BATCH_TASKS } from "./constants.ts";
 
 export const SubagentActionSchema = StringEnum(
 	["spawn", "read", "send", "stop"] as const,
-	{ description: "Operation to perform on background subagents" },
+	{
+		description:
+			'spawn: start work; read: list or one snapshot; send: instruct/continue; stop: abort (notifies parent)',
+	},
 );
 
 export const AgentScopeSchema = StringEnum(
 	["user", "project", "both"] as const,
 	{
 		description:
-			'For spawn: agent definition scope. Default: "user". Project definitions come from the nearest .pi/agents directory.',
+			'For spawn: where to load Markdown agent definitions. Default "user" (built-ins + ~/.pi/agent/agents). Use "project" or "both" only when you intentionally need repository .pi/agents definitions (interactive confirm required).',
 		default: "user",
 	},
 );
-
-export const DeliverySchema = StringEnum(["steer", "followUp"] as const, {
-	description:
-		'For send to a running agent, "steer" delivers after the current tool batch; "followUp" waits until its current work settles.',
-	default: "steer",
-});
 
 export const ThinkingLevelSchema = StringEnum(
 	["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const,
@@ -34,41 +27,40 @@ export const ThinkingLevelSchema = StringEnum(
 
 export const SubagentTaskSchema = Type.Object({
 	task: Type.String({
-		description: "Concrete task for the worker",
+		description:
+			"Concrete briefing for the worker: goal, constraints, paths, expected report shape",
 		minLength: 1,
 		maxLength: 20_000,
 	}),
 	agent: Type.Optional(
 		Type.String({
 			description:
-				'Agent definition name. Defaults to the built-in "general" worker.',
+				'Profile name. Default "general" (may edit). Use "explorer" for read-only recon.',
 		}),
 	),
 	label: Type.Optional(
-		Type.String({ description: "Short human-readable label shown in the TUI" }),
+		Type.String({
+			description:
+				"Short 3–8 word summary shown in the TUI and notifications (strongly recommended)",
+			maxLength: 80,
+		}),
 	),
 	model: Type.Optional(
 		Type.String({
 			description:
-				'Model id or provider/model id. Use "inherit" (or omit) to use the parent/profile resolution chain.',
-		}),
-	),
-	tools: Type.Optional(
-		Type.Array(Type.String(), {
-			description:
-				"Built-in tool allowlist for this worker; an empty list disables all tools",
-			maxItems: 16,
+				'Optional model id or provider/model. Prefer omit; use "inherit" to force the parent model.',
 		}),
 	),
 	cwd: Type.Optional(
 		Type.String({
-			description: "Working directory, absolute or relative to the parent cwd",
+			description:
+				"Working directory relative to the parent session cwd (must stay inside that tree)",
 		}),
 	),
 	thinkingLevel: Type.Optional(
 		Type.Union([ThinkingLevelSchema, Type.Literal("inherit")], {
 			description:
-				'Reasoning effort override; "inherit" uses the current parent level.',
+				'Optional reasoning override. Prefer omit. "inherit" uses the parent level.',
 		}),
 	),
 });
@@ -76,26 +68,27 @@ export const SubagentTaskSchema = Type.Object({
 export const SubagentParamsSchema = Type.Object({
 	action: SubagentActionSchema,
 
-	// Single-spawn shorthand. Use tasks for a batch.
+	// spawn: single-task shorthand. Use tasks for a batch.
 	task: Type.Optional(SubagentTaskSchema.properties.task),
 	agent: Type.Optional(SubagentTaskSchema.properties.agent),
 	label: Type.Optional(SubagentTaskSchema.properties.label),
 	model: Type.Optional(SubagentTaskSchema.properties.model),
-	tools: Type.Optional(SubagentTaskSchema.properties.tools),
 	cwd: Type.Optional(SubagentTaskSchema.properties.cwd),
 	thinkingLevel: Type.Optional(SubagentTaskSchema.properties.thinkingLevel),
 	tasks: Type.Optional(
 		Type.Array(SubagentTaskSchema, {
-			description: "For spawn: independent tasks to enqueue together",
+			description:
+				"For spawn: independent tasks to enqueue together (prefer over serial spawns)",
 			minItems: 1,
 			maxItems: MAX_BATCH_TASKS,
 		}),
 	),
 
-	// Existing-agent actions.
+	// read / send / stop
 	id: Type.Optional(
 		Type.String({
-			description: "For read/send/stop: stable subagent id returned by spawn/read",
+			description:
+				"For read/send/stop: stable id from spawn (e.g. sa-01). Omit on read to list workers.",
 		}),
 	),
 	message: Type.Optional(
@@ -106,7 +99,6 @@ export const SubagentParamsSchema = Type.Object({
 			maxLength: 20_000,
 		}),
 	),
-	delivery: Type.Optional(DeliverySchema),
 	fresh: Type.Optional(
 		Type.Boolean({
 			description:
@@ -114,37 +106,12 @@ export const SubagentParamsSchema = Type.Object({
 		}),
 	),
 
-	// Discovery/security.
+	// Optional discovery scope (defaults to user-level definitions only).
 	agentScope: Type.Optional(AgentScopeSchema),
-	confirmProjectAgents: Type.Optional(
-		Type.Boolean({
-			description:
-				"For spawn: prompt before executing repository-controlled project agent definitions. Default: true.",
-			default: true,
-		}),
-	),
-
-	// Spawn-time session deployment limits.
-	maxConcurrency: Type.Optional(
-		Type.Integer({
-			description: "For spawn: maximum concurrently running subagents",
-			minimum: 1,
-			maximum: HARD_MAX_CONCURRENCY,
-		}),
-	),
-	maxAgents: Type.Optional(
-		Type.Integer({
-			description:
-				"For spawn: maximum retained subagent records, including completed workers",
-			minimum: 1,
-			maximum: HARD_MAX_AGENTS,
-		}),
-	),
 });
 
 export type SubagentAction = Static<typeof SubagentActionSchema>;
 export type AgentScope = Static<typeof AgentScopeSchema>;
-export type DeliveryMode = Static<typeof DeliverySchema>;
 export type ThinkingLevelName = Static<typeof ThinkingLevelSchema>;
 export type ThinkingLevelSetting = ThinkingLevelName | "inherit";
 export type SubagentTaskParams = Static<typeof SubagentTaskSchema>;

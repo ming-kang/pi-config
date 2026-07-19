@@ -1,7 +1,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 
-import type { AgentScope, DeliveryMode, ThinkingLevelName } from "./schema.ts";
+import type { AgentScope, ThinkingLevelName } from "./schema.ts";
 
 export type AgentDefinitionSource = "builtin" | "user" | "project";
 
@@ -12,6 +12,8 @@ export interface AgentDefinition {
 	tools?: string[];
 	model?: string;
 	thinkingLevel?: ThinkingLevelName;
+	/** When true, skip AGENTS.md / CLAUDE.md injection into the worker system prompt. */
+	omitContextFiles?: boolean;
 	source: AgentDefinitionSource;
 	filePath?: string;
 }
@@ -124,7 +126,7 @@ export interface SubagentRecord extends SubagentLaunchSpec {
 	pendingRun?: PendingRun;
 	/** Protects a settled initial batch member until the group notification fires. */
 	currentCompletionGroupId?: string;
-	pendingInstructions: Array<{ message: string; delivery: DeliveryMode }>;
+	pendingInstructions: string[];
 	session?: AgentSession;
 	unsubscribe?: () => void;
 	resolvedModel?: Model<Api>;
@@ -180,7 +182,6 @@ export interface SubagentPanelHost {
 	sendInstruction(
 		id: string,
 		message: string | undefined,
-		delivery: DeliveryMode,
 		fresh?: boolean,
 	): Promise<string>;
 	stopAgent(id: string): Promise<string>;
