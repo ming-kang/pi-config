@@ -30,12 +30,12 @@ export interface TodoDetails {
 
 const StatusSchema = StringEnum(["pending", "in_progress", "completed", "deleted"] as const, {
 	description:
-		"Task status: pending for future work, in_progress for the single active task, completed for verified done work, and deleted for obsolete or no-longer-needed tasks. With action list, status also acts as a filter: only tasks with this status are listed.",
+		"Task status: pending for future work, in_progress for the single active task, completed for verified done work, and deleted for an immutable obsolete-task tombstone. Set deleted through update or use the delete action. With action list, status also acts as a filter: only tasks with this status are listed.",
 });
 
 const ActionSchema = StringEnum(["create", "update", "list", "get", "delete", "clear"] as const, {
 	description:
-		"Todo operation: create a task, update status/details/dependencies, list current tasks (optionally filtered by status), get one task, delete an obsolete task, or clear the list.",
+		"Todo operation: create a pending task, update status/details/dependencies, list current tasks (optionally filtered by status), get one task, delete an obsolete task and release dependents, or clear the list without reusing ids.",
 });
 
 export const TodoParamsSchema = Type.Object({
@@ -69,7 +69,7 @@ export const TodoParamsSchema = Type.Object({
 	),
 	id: Type.Optional(Type.Number({ description: "Task id, required for update, get, and delete." })),
 	includeDeleted: Type.Optional(
-		Type.Boolean({ description: "Include deleted tombstones in list output; default is false for active work views." }),
+		Type.Boolean({ description: "Include deleted tombstones in unfiltered list output; an explicit status=deleted query includes them automatically." }),
 	),
 });
 

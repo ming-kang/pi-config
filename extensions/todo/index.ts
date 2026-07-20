@@ -124,7 +124,4 @@ export default function todo(pi: ExtensionAPI): void {
 		overlay?.update();
 	});
 
-	pi.on("agent_start", async () => {
-		overlay?.hideCompletedFromPreviousTurn();
-	});
 }

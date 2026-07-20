@@ -1,18 +1,22 @@
 import type { ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 
+import type { TodoState, TodoStatus } from "./schema.ts";
 import { getTodoState } from "./state.ts";
-import { renderOverlayLines } from "./view.ts";
+import { hasVisibleOverlayItems, renderOverlayLines } from "./view.ts";
 
 const WIDGET_KEY = "pi-config-todos";
+const RECENT_COMPLETION_MS = 30_000;
 
 export class TodoOverlay {
 	private ui: ExtensionUIContext | undefined;
 	private tui: TUI | undefined;
 	private registered = false;
-	private completedPendingHide = new Set<number>();
+	private knownStatuses = new Map<number, TodoStatus>();
+	private completedAt = new Map<number, number>();
 	private hiddenCompleted = new Set<number>();
-	/** Pure render cache: same width + same visibility sets → skip rebuild. */
+	private completionHideTimer: ReturnType<typeof setTimeout> | undefined;
+	/** Pure render cache: same width + visibility state → skip rebuild. */
 	private cachedWidth: number | undefined;
 	private cachedLines: string[] | undefined;
 
@@ -23,24 +27,26 @@ export class TodoOverlay {
 	}
 
 	resetVisibility(): void {
-		this.completedPendingHide.clear();
+		this.clearCompletionHideTimer();
+		this.knownStatuses.clear();
+		this.completedAt.clear();
 		this.hiddenCompleted.clear();
 		this.invalidateRenderCache();
 	}
 
-	hideCompletedFromPreviousTurn(): void {
-		for (const id of this.completedPendingHide) this.hiddenCompleted.add(id);
-		this.completedPendingHide.clear();
-		this.invalidateRenderCache();
-		this.tui?.requestRender();
-	}
-
 	update(): void {
 		if (!this.ui) return;
-		// Visibility bookkeeping belongs here (state mutation time), not in render,
-		// so paint can stay pure and width-cacheable.
-		this.syncVisibilityFromState();
+		const state = getTodoState();
+		this.syncVisibilityFromState(state);
 		this.invalidateRenderCache();
+
+		// Register/unregister based on state, never as a render side effect.
+		if (!hasVisibleOverlayItems(state, this.hiddenCompleted)) {
+			if (this.registered) this.ui.setWidget(WIDGET_KEY, undefined);
+			this.registered = false;
+			this.tui = undefined;
+			return;
+		}
 
 		if (!this.registered) {
 			this.ui.setWidget(
@@ -64,21 +70,66 @@ export class TodoOverlay {
 		this.tui?.requestRender();
 	}
 
-	/** Drop completed ids that no longer exist; queue newly completed for next-turn hide. */
-	private syncVisibilityFromState(): void {
-		const state = getTodoState();
-		const completed = new Set(state.items.filter((item) => item.status === "completed").map((item) => item.id));
-		for (const id of [...this.completedPendingHide]) {
-			if (!completed.has(id)) this.completedPendingHide.delete(id);
-		}
-		for (const id of [...this.hiddenCompleted]) {
-			if (!completed.has(id)) this.hiddenCompleted.delete(id);
-		}
+	/** Track new completions for a short confirmation window; hide historical ones. */
+	private syncVisibilityFromState(state: TodoState): void {
+		const now = Date.now();
+		const nextStatuses = new Map<number, TodoStatus>();
+
 		for (const item of state.items) {
-			if (item.status !== "completed") continue;
-			if (this.hiddenCompleted.has(item.id) || this.completedPendingHide.has(item.id)) continue;
-			this.completedPendingHide.add(item.id);
+			nextStatuses.set(item.id, item.status);
+			const previousStatus = this.knownStatuses.get(item.id);
+			if (item.status !== "completed") {
+				this.completedAt.delete(item.id);
+				this.hiddenCompleted.delete(item.id);
+				continue;
+			}
+
+			if (previousStatus === undefined) {
+				// A replayed/reloaded completion is old from this overlay's point of
+				// view. Keep the live surface focused on current work.
+				this.hiddenCompleted.add(item.id);
+				this.completedAt.delete(item.id);
+				continue;
+			}
+			if (previousStatus !== "completed") {
+				this.completedAt.set(item.id, now);
+				this.hiddenCompleted.delete(item.id);
+			}
 		}
+
+		for (const id of this.knownStatuses.keys()) {
+			if (nextStatuses.has(id)) continue;
+			this.completedAt.delete(id);
+			this.hiddenCompleted.delete(id);
+		}
+		this.knownStatuses = nextStatuses;
+
+		for (const [id, completedAt] of this.completedAt) {
+			if (now - completedAt < RECENT_COMPLETION_MS) continue;
+			this.completedAt.delete(id);
+			this.hiddenCompleted.add(id);
+		}
+		this.scheduleCompletionHide();
+	}
+
+	private scheduleCompletionHide(): void {
+		this.clearCompletionHideTimer();
+		let earliestExpiry = Infinity;
+		for (const completedAt of this.completedAt.values()) {
+			earliestExpiry = Math.min(earliestExpiry, completedAt + RECENT_COMPLETION_MS);
+		}
+		if (!Number.isFinite(earliestExpiry)) return;
+
+		this.completionHideTimer = setTimeout(() => {
+			this.completionHideTimer = undefined;
+			this.update();
+		}, Math.max(10, earliestExpiry - Date.now()));
+	}
+
+	private clearCompletionHideTimer(): void {
+		if (this.completionHideTimer === undefined) return;
+		clearTimeout(this.completionHideTimer);
+		this.completionHideTimer = undefined;
 	}
 
 	private invalidateRenderCache(): void {
@@ -87,22 +138,12 @@ export class TodoOverlay {
 	}
 
 	private render(theme: Theme, width: number): string[] {
-		const w = Math.max(1, width);
-		if (this.cachedLines !== undefined && this.cachedWidth === w) return this.cachedLines;
+		const normalizedWidth = Math.max(1, width);
+		if (this.cachedLines !== undefined && this.cachedWidth === normalizedWidth) return this.cachedLines;
 
-		const state = getTodoState();
-		const lines = renderOverlayLines(state, theme, w, this.hiddenCompleted);
-		this.cachedWidth = w;
+		const lines = renderOverlayLines(getTodoState(), theme, normalizedWidth, this.hiddenCompleted);
+		this.cachedWidth = normalizedWidth;
 		this.cachedLines = lines;
-
-		if (lines.length === 0 && this.ui && this.registered) {
-			queueMicrotask(() => {
-				this.ui?.setWidget(WIDGET_KEY, undefined);
-				this.registered = false;
-				this.tui = undefined;
-				this.invalidateRenderCache();
-			});
-		}
 		return lines;
 	}
 

@@ -74,6 +74,23 @@ export function cloneState(source: TodoState): TodoState {
 	};
 }
 
+function omitBlockedBy(item: TodoItem): TodoItem {
+	const next = { ...item };
+	delete next.blockedBy;
+	return next;
+}
+
+/** Keep a tombstone while detaching its id from every dependent task. */
+function markDeleted(state: TodoState, id: number): TodoState {
+	const items = state.items.map((item) => {
+		if (item.id === id) return { ...item, status: "deleted" as const };
+		if (!item.blockedBy?.includes(id)) return item;
+		const blockedBy = item.blockedBy.filter((dependencyId) => dependencyId !== id);
+		return blockedBy.length ? { ...item, blockedBy } : omitBlockedBy(item);
+	});
+	return { items, nextId: state.nextId };
+}
+
 function error(state: TodoState, message: string): MutationResult {
 	return { state, operation: { kind: "error", message } };
 }
@@ -118,14 +135,14 @@ function validateDependenciesReady(state: TodoState, deps: number[] | undefined)
 	return undefined;
 }
 
-/** True when every blockedBy dependency is completed (for overlay hints). */
+/** IDs of dependencies that still prevent a task from starting or completing. */
+export function unresolvedDependencyIds(state: TodoState, item: TodoItem): number[] {
+	return (item.blockedBy ?? []).filter((id) => findItem(state, id)?.status !== "completed");
+}
+
+/** True when every blockedBy dependency is completed (for transition and overlay checks). */
 export function dependenciesSatisfied(state: TodoState, item: TodoItem): boolean {
-	if (!item.blockedBy?.length) return true;
-	for (const dep of item.blockedBy) {
-		const blocker = findItem(state, dep);
-		if (!blocker || blocker.status !== "completed") return false;
-	}
-	return true;
+	return unresolvedDependencyIds(state, item).length === 0;
 }
 
 function createsCycle(items: TodoItem[], id: number, nextDeps: number[]): boolean {
@@ -158,6 +175,9 @@ export function applyTodoMutation(input: TodoState, params: TodoParams): Mutatio
 		case "create": {
 			const subject = params.subject?.trim();
 			if (!subject) return error(state, "subject required for create");
+			if (params.status !== undefined && params.status !== "pending") {
+				return error(state, "create always starts pending; use update to start or complete a task");
+			}
 			const dependencyError = validateDependencies(state, params.blockedBy);
 			if (dependencyError) return error(state, dependencyError);
 
@@ -183,6 +203,8 @@ export function applyTodoMutation(input: TodoState, params: TodoParams): Mutatio
 			const index = state.items.findIndex((item) => item.id === params.id);
 			if (index === -1) return error(state, `#${params.id} not found`);
 			const current = state.items[index];
+			if (current.status === "deleted") return error(state, `#${params.id} is deleted and cannot be updated`);
+			if (params.subject !== undefined && !params.subject.trim()) return error(state, "subject cannot be empty");
 
 			const hasChange =
 				params.subject !== undefined ||
@@ -194,6 +216,15 @@ export function applyTodoMutation(input: TodoState, params: TodoParams): Mutatio
 				(params.addBlockedBy?.length ?? 0) > 0 ||
 				(params.removeBlockedBy?.length ?? 0) > 0;
 			if (!hasChange) return error(state, "update requires at least one field");
+
+			// `status: deleted` is the update form of delete; keep its dependency
+			// cleanup identical to the dedicated delete action.
+			if (params.status === "deleted") {
+				return {
+					state: markDeleted(state, current.id),
+					operation: { kind: "update", id: current.id, from: current.status, to: "deleted" },
+				};
+			}
 
 			const nextStatus = params.status ?? current.status;
 			if (!isTransitionAllowed(current.status, nextStatus)) {
@@ -295,17 +326,18 @@ export function applyTodoMutation(input: TodoState, params: TodoParams): Mutatio
 			if (index === -1) return error(state, `#${params.id} not found`);
 			const current = state.items[index];
 			if (current.status === "deleted") return error(state, `#${params.id} is already deleted`);
-			const items = [...state.items];
-			items[index] = { ...current, status: "deleted" };
+
 			return {
-				state: { items, nextId: state.nextId },
+				state: markDeleted(state, current.id),
 				operation: { kind: "delete", id: current.id, subject: current.subject },
 			};
 		}
 
 		case "clear":
 			return {
-				state: cloneState(EMPTY_TODO_STATE),
+				// IDs remain monotonic across a clear so stale references cannot point
+				// at an unrelated task created later on the same conversation branch.
+				state: { items: [], nextId: state.nextId },
 				operation: { kind: "clear", count: state.items.length },
 			};
 	}
@@ -372,7 +404,8 @@ export function formatTodoContent(operation: Operation, state: TodoState): strin
 			return `Cleared ${operation.count} tasks`;
 		case "list": {
 			let view = state.items;
-			if (!operation.includeDeleted) view = view.filter((item) => item.status !== "deleted");
+			// An explicit deleted-status query is sufficient intent to include tombstones.
+			if (!operation.includeDeleted && operation.status !== "deleted") view = view.filter((item) => item.status !== "deleted");
 			if (operation.status) view = view.filter((item) => item.status === operation.status);
 			return formatBoundedList(view, operation.status, operation.includeDeleted);
 		}
