@@ -1,6 +1,6 @@
 export interface QuestionOption {
 	label: string;
-	description?: string;
+	description: string;
 	preview?: string;
 }
 
@@ -20,7 +20,8 @@ export type QuestionToolError =
 	| "invalid_option_count"
 	| "duplicate_question"
 	| "duplicate_option_label"
-	| "reserved_label";
+	| "reserved_label"
+	| "invalid_text_length";
 
 export interface AnswerNote {
 	option: string;
@@ -38,8 +39,11 @@ export interface QuestionAnswer {
 	preview?: string;
 }
 
+export type QuestionOutcome = "answered" | "cancelled" | "needs_clarification" | "error";
+
 export interface QuestionToolDetails {
 	answers: QuestionAnswer[];
+	outcome: QuestionOutcome;
 	cancelled: boolean;
 	error?: QuestionToolError;
 }
@@ -60,7 +64,7 @@ export interface QuestionState {
 
 export interface DialogResult {
 	answers: QuestionAnswer[];
-	cancelled: boolean;
+	outcome: QuestionOutcome;
 }
 
 export type DisplayOption =

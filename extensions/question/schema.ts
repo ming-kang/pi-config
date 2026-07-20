@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import { QUESTION_LIMITS } from "./limits.ts";
 import type { Question, QuestionOption, QuestionToolError } from "./types.ts";
 
 const MIN_OPTIONS = 2;
@@ -8,14 +9,17 @@ const RESERVED_LABELS = ["Other", "Type something.", "Chat about this", "Next"] 
 
 const OptionSchema = Type.Object({
 	label: Type.String({
+		maxLength: QUESTION_LIMITS.optionLabelChars,
 		description:
 			"Short user-facing option label (1-5 words), distinct within the question. Reserved labels ('Other', 'Type something.', 'Chat about this', 'Next') are rejected — the UI adds the custom-answer path itself.",
 	}),
-	description: Type.Optional(
-		Type.String({ description: "One concise sentence explaining the option's meaning, consequence, or tradeoff." }),
-	),
+	description: Type.String({
+		maxLength: QUESTION_LIMITS.optionDescriptionChars,
+		description: "One concise sentence explaining the option's meaning, consequence, or tradeoff.",
+	}),
 	preview: Type.Optional(
 		Type.String({
+			maxLength: QUESTION_LIMITS.previewChars,
 			description:
 				"Optional markdown preview shown only for focused single-select options; use for concrete snippets, layouts, copy, or config comparisons.",
 		}),
@@ -24,9 +28,13 @@ const OptionSchema = Type.Object({
 
 const QuestionSchema = Type.Object({
 	question: Type.String({
-		description: "One clear, specific decision or preference question. Ask only what is needed to proceed.",
+		maxLength: QUESTION_LIMITS.questionChars,
+		description: "One clear, specific decision or preference question ending in a question mark. Ask only what is needed to proceed.",
 	}),
-	header: Type.String({ description: "Very short decision label shown as a chip (max ~12 chars), e.g. 'Auth method'." }),
+	header: Type.String({
+		maxLength: QUESTION_LIMITS.headerChars,
+		description: "Very short decision label shown as a chip (max ~12 chars), e.g. 'Auth method'.",
+	}),
 	options: Type.Array(OptionSchema, {
 		minItems: MIN_OPTIONS,
 		maxItems: MAX_OPTIONS,
@@ -63,6 +71,10 @@ export function validateQuestions(
 		}
 		seenQuestions.add(q.question);
 
+		if (q.question.length > QUESTION_LIMITS.questionChars || q.header.length > QUESTION_LIMITS.headerChars) {
+			return { ok: false, error: "invalid_text_length", message: "Question text or header exceeds its length limit" };
+		}
+
 		if (q.options.length < MIN_OPTIONS || q.options.length > MAX_OPTIONS) {
 			return {
 				ok: false,
@@ -73,6 +85,13 @@ export function validateQuestions(
 
 		const seenLabels = new Set<string>();
 		for (const option of q.options as QuestionOption[]) {
+			if (
+				option.label.length > QUESTION_LIMITS.optionLabelChars ||
+				option.description.length > QUESTION_LIMITS.optionDescriptionChars ||
+				(option.preview?.length ?? 0) > QUESTION_LIMITS.previewChars
+			) {
+				return { ok: false, error: "invalid_text_length", message: "Option text exceeds its length limit" };
+			}
 			if ((RESERVED_LABELS as readonly string[]).includes(option.label)) {
 				return {
 					ok: false,

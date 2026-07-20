@@ -1,4 +1,4 @@
-import type { AnswerNote, CustomAnswer, DialogResult, DisplayOption, Question, QuestionAnswer, QuestionState } from "./types.ts";
+import type { AnswerNote, CustomAnswer, DisplayOption, Question, QuestionAnswer, QuestionState } from "./types.ts";
 import { OTHER_OPTION } from "./types.ts";
 
 export function newQuestionState(): QuestionState {
@@ -37,7 +37,7 @@ function noteEntries(state: QuestionState, allowedOptions: readonly string[]): A
 	return entries.length ? entries : undefined;
 }
 
-function firstUnanswered(states: QuestionState[]): number | undefined {
+export function firstUnanswered(states: QuestionState[]): number | undefined {
 	for (let i = 0; i < states.length; i++) {
 		const state = states[i];
 		if (!hasAnswer(state)) return i;
@@ -80,29 +80,4 @@ export function orderedAnswers(questions: Question[], states: QuestionState[]): 
 		}
 	}
 	return answers;
-}
-
-export function nextQuestion(current: number, count: number): number {
-	return count === 0 ? 0 : (current + 1) % count;
-}
-
-export function previousQuestion(current: number, count: number): number {
-	return count === 0 ? 0 : (current - 1 + count) % count;
-}
-
-export function submitIfComplete(
-	done: (result: DialogResult) => void,
-	questions: Question[],
-	states: QuestionState[],
-	currentIdx: number,
-): void {
-	const missing = firstUnanswered(states);
-	if (missing === undefined) {
-		done({ answers: orderedAnswers(questions, states), cancelled: false });
-		return;
-	}
-	states[currentIdx].warning =
-		missing === currentIdx
-			? "Answer this question before submitting."
-			: "Answer the remaining question(s), then press Enter to submit.";
 }

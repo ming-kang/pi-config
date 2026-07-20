@@ -6,30 +6,43 @@ import {
 	Markdown,
 	matchesKey,
 	type TUI,
+	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import { ruleBorder, wrapWithPrefix } from "./dialog-primitives.ts";
+import { QUESTION_LIMITS } from "./limits.ts";
 import { WidthCachedRender } from "./render-cache.ts";
 import {
 	displayOptions,
+	firstUnanswered,
 	hasAnswer,
 	hasMultiAnswer,
 	newQuestionState,
-	nextQuestion,
 	orderedAnswers,
-	previousQuestion,
-	submitIfComplete,
 } from "./state.ts";
 import type { DialogResult, DisplayOption, InputMode, Question, QuestionOption } from "./types.ts";
 
+type DialogView = "question" | "review";
+
+type DialogKeybindings = {
+	matches(data: string, keybinding: string): boolean;
+	getKeys(keybinding: string): string[];
+};
+
+const PREVIEW_MAX_LINES = 16;
+const PREVIEW_CHROME_ROWS = 18;
+
 export function createQuestionDialog(questions: Question[]) {
-	return (tui: TUI, theme: Theme, _kb: unknown, done: (result: DialogResult) => void) => {
+	return (tui: TUI, theme: Theme, keybindings: unknown, done: (result: DialogResult) => void) => {
 		let currentIdx = 0;
+		let view: DialogView = "question";
 		let inputMode: InputMode;
 		let noteTarget: string | undefined;
 		let dialogFocused = false;
+		let footerFocused = false;
 		const cache = new WidthCachedRender();
 		const states = questions.map(() => newQuestionState());
+		const bindings = keybindings as DialogKeybindings | undefined;
 
 		const editorTheme: EditorTheme = {
 			borderColor: (s) => theme.fg("accent", s),
@@ -45,6 +58,9 @@ export function createQuestionDialog(questions: Question[]) {
 
 		const currentQuestion = () => questions[currentIdx];
 		const currentState = () => states[currentIdx];
+		const keyMatches = (data: string, keybinding: string, fallback: string) =>
+			bindings?.matches(data, keybinding) ?? matchesKey(data, fallback);
+		const keyLabel = (keybinding: string, fallback: string) => bindings?.getKeys(keybinding).join("/") || fallback;
 
 		function refresh(): void {
 			cache.invalidate();
@@ -56,9 +72,11 @@ export function createQuestionDialog(questions: Question[]) {
 		}
 
 		function setCurrentIdx(index: number): void {
-			currentIdx = index;
+			currentIdx = Math.max(0, Math.min(questions.length - 1, index));
+			view = "question";
 			inputMode = undefined;
 			noteTarget = undefined;
+			footerFocused = false;
 			editor.setText("");
 			syncEditorFocus();
 			refresh();
@@ -70,6 +88,36 @@ export function createQuestionDialog(questions: Question[]) {
 
 		function focusedOption(): DisplayOption | undefined {
 			return displayOptions(currentQuestion())[currentState().optionIndex];
+		}
+
+		function showReview(): void {
+			const missing = firstUnanswered(states);
+			if (missing !== undefined) {
+				setCurrentIdx(missing);
+				currentState().warning = "Answer this question before reviewing your answers.";
+				refresh();
+				return;
+			}
+			view = "review";
+			inputMode = undefined;
+			noteTarget = undefined;
+			footerFocused = false;
+			editor.setText("");
+			syncEditorFocus();
+			refresh();
+		}
+
+		function advanceAfterAnswer(): void {
+			if (questions.length === 1 && !currentQuestion().multiSelect) {
+				done({ answers: orderedAnswers(questions, states), outcome: "answered" });
+				return;
+			}
+			const missing = firstUnanswered(states);
+			if (missing === undefined) {
+				showReview();
+				return;
+			}
+			setCurrentIdx(missing);
 		}
 
 		function beginCustomInput(): void {
@@ -105,7 +153,7 @@ export function createQuestionDialog(questions: Question[]) {
 				return;
 			}
 			if (question.multiSelect && !state.multiSelected.has(option.optionIndex)) {
-				state.warning = "Select the option first, then press Tab to add notes.";
+				state.warning = "Select the option first, then add notes.";
 				refresh();
 				return;
 			}
@@ -120,34 +168,47 @@ export function createQuestionDialog(questions: Question[]) {
 		function recordSingle(option: DisplayOption): void {
 			if (option.kind === "other") {
 				if (currentState().singleAnswer?.kind === "custom") {
-					submitIfComplete(done, questions, states, currentIdx);
-					refresh();
+					advanceAfterAnswer();
 					return;
 				}
 				beginCustomInput();
 				return;
 			}
 			selectSingleOption(option);
-			submitIfComplete(done, questions, states, currentIdx);
-			refresh();
+			advanceAfterAnswer();
 		}
 
 		function recordMulti(): void {
 			const state = currentState();
 			if (!hasMultiAnswer(state)) {
-				state.warning = "Select at least one option, type a custom answer, or press Esc to cancel.";
+				state.warning = "Select at least one option, type a custom answer, or cancel the questions.";
 				refresh();
 				return;
 			}
 			state.warning = undefined;
-			submitIfComplete(done, questions, states, currentIdx);
-			refresh();
+			advanceAfterAnswer();
+		}
+
+		function finishReview(): void {
+			const missing = firstUnanswered(states);
+			if (missing !== undefined) {
+				setCurrentIdx(missing);
+				currentState().warning = "Answer this question before submitting.";
+				refresh();
+				return;
+			}
+			done({ answers: orderedAnswers(questions, states), outcome: "answered" });
 		}
 
 		editor.onSubmit = (value) => {
 			const trimmed = value.trim();
 			const question = currentQuestion();
 			const state = currentState();
+			if (trimmed.length > QUESTION_LIMITS.userTextChars) {
+				state.warning = `Keep notes and custom answers under ${QUESTION_LIMITS.userTextChars} characters.`;
+				refresh();
+				return;
+			}
 			if (inputMode === "notes") {
 				if (noteTarget) {
 					if (trimmed) state.notesByOption.set(noteTarget, trimmed);
@@ -188,14 +249,27 @@ export function createQuestionDialog(questions: Question[]) {
 				inputMode = undefined;
 				editor.setText("");
 				syncEditorFocus();
-				submitIfComplete(done, questions, states, currentIdx);
-				refresh();
+				advanceAfterAnswer();
 			}
 		};
 
-		function handleInput(data: string): void {
+		function handleReviewInput(data: string): void {
+			if (matchesKey(data, Key.left)) {
+				setCurrentIdx(questions.length - 1);
+				return;
+			}
+			if (keyMatches(data, "tui.select.confirm", Key.enter)) {
+				finishReview();
+				return;
+			}
+			if (keyMatches(data, "tui.select.cancel", Key.escape)) {
+				setCurrentIdx(questions.length - 1);
+			}
+		}
+
+		function handleQuestionInput(data: string): void {
 			if (inputMode) {
-				if (matchesKey(data, Key.escape)) {
+				if (keyMatches(data, "tui.select.cancel", Key.escape)) {
 					inputMode = undefined;
 					noteTarget = undefined;
 					editor.setText("");
@@ -209,42 +283,61 @@ export function createQuestionDialog(questions: Question[]) {
 			}
 
 			if (matchesKey(data, Key.left)) {
-				setCurrentIdx(previousQuestion(currentIdx, questions.length));
+				if (currentIdx > 0) setCurrentIdx(currentIdx - 1);
 				return;
 			}
 			if (matchesKey(data, Key.right)) {
-				setCurrentIdx(nextQuestion(currentIdx, questions.length));
+				if (currentIdx < questions.length - 1) setCurrentIdx(currentIdx + 1);
+				else if (firstUnanswered(states) === undefined) showReview();
 				return;
 			}
 
 			const state = currentState();
 			const options = displayOptions(currentQuestion());
-			if (matchesKey(data, Key.up)) {
-				state.optionIndex = Math.max(0, state.optionIndex - 1);
+			if (keyMatches(data, "tui.select.up", Key.up)) {
+				if (footerFocused) {
+					footerFocused = false;
+					state.optionIndex = options.length - 1;
+				} else if (state.optionIndex > 0) {
+					state.optionIndex--;
+				}
 				clearWarning();
 				refresh();
 				return;
 			}
-			if (matchesKey(data, Key.down)) {
-				state.optionIndex = Math.min(options.length - 1, state.optionIndex + 1);
+			if (keyMatches(data, "tui.select.down", Key.down)) {
+				if (footerFocused) return;
+				if (state.optionIndex < options.length - 1) state.optionIndex++;
+				else footerFocused = true;
 				clearWarning();
 				refresh();
 				return;
 			}
-			if (matchesKey(data, Key.tab)) {
-				beginNotesInput();
+			if (keyMatches(data, "tui.input.tab", Key.tab)) {
+				if (!footerFocused) beginNotesInput();
+				return;
+			}
+
+			if (footerFocused) {
+				if (keyMatches(data, "tui.select.confirm", Key.enter)) {
+					done({ answers: orderedAnswers(questions, states), outcome: "needs_clarification" });
+					return;
+				}
+				if (keyMatches(data, "tui.select.cancel", Key.escape)) {
+					done({ answers: orderedAnswers(questions, states), outcome: "cancelled" });
+				}
 				return;
 			}
 
 			const question = currentQuestion();
 			const option = options[state.optionIndex];
-			if (question.multiSelect && (data === " " || matchesKey(data, "space"))) {
+			if (question.multiSelect && (data === " " || matchesKey(data, Key.space))) {
 				if (option?.kind === "other") {
 					if (state.customAnswer) {
 						state.customAnswer.selected = !state.customAnswer.selected;
 						clearWarning();
 					} else {
-						state.warning = "Press Tab to type a custom answer.";
+						state.warning = `Press ${keyLabel("tui.input.tab", "Tab")} to type a custom answer.`;
 					}
 					refresh();
 					return;
@@ -258,56 +351,100 @@ export function createQuestionDialog(questions: Question[]) {
 				return;
 			}
 
-			if (matchesKey(data, Key.enter)) {
-				if (question.multiSelect) {
-					recordMulti();
-				} else if (option) {
-					recordSingle(option);
-				}
+			if (keyMatches(data, "tui.select.confirm", Key.enter)) {
+				if (question.multiSelect) recordMulti();
+				else if (option) recordSingle(option);
 				return;
 			}
 
-			if (matchesKey(data, Key.escape)) {
-				done({ answers: orderedAnswers(questions, states), cancelled: true });
+			if (keyMatches(data, "tui.select.cancel", Key.escape)) {
+				done({ answers: orderedAnswers(questions, states), outcome: "cancelled" });
 			}
 		}
 
-		function render(width: number): string[] {
-			return cache.get(width, compute);
+		function handleInput(data: string): void {
+			if (view === "review") handleReviewInput(data);
+			else handleQuestionInput(data);
 		}
 
-		function compute(width: number): string[] {
+		function render(width: number): string[] {
+			return cache.get(width, tui.terminal.rows, compute);
+		}
+
+		function renderTabs(renderWidth: number, lines: string[]): void {
+			if (questions.length < 2) return;
+			const tabCount = questions.length + 1;
+			const headerWidth = Math.max(4, Math.floor((renderWidth - tabCount * 5) / tabCount));
+			const tabs = [
+				...questions.map((question, index) => {
+					const answered = hasAnswer(states[index]);
+					const label = ` ${answered ? "■" : "□"} ${truncateToWidth(question.header, headerWidth)} `;
+					if (view === "question" && index === currentIdx) {
+						return theme.bg("selectedBg", theme.fg(answered ? "success" : "text", label));
+					}
+					return theme.fg(answered ? "success" : "muted", label);
+				}),
+				view === "review"
+					? theme.bg("selectedBg", theme.fg("text", " ✓ Submit "))
+					: theme.fg(firstUnanswered(states) === undefined ? "success" : "dim", " ✓ Submit "),
+			].join(" ");
+			wrapWithPrefix(" ", tabs, renderWidth, lines);
+			lines.push("");
+		}
+
+		function previewLines(previewText: string, width: number, terminalRows: number): string[] {
+			const markdown = new Markdown(previewText, 1, 0, getMarkdownTheme());
+			const rendered = markdown.render(Math.max(1, width));
+			const maxLines = Math.max(4, Math.min(PREVIEW_MAX_LINES, terminalRows - PREVIEW_CHROME_ROWS));
+			if (rendered.length <= maxLines) return rendered;
+			return [
+				...rendered.slice(0, maxLines),
+				theme.fg("dim", truncateToWidth(`… ${rendered.length - maxLines} preview lines hidden`, Math.max(1, width))),
+			];
+		}
+
+		function renderReview(renderWidth: number, lines: string[]): void {
+			wrapWithPrefix(" ", theme.fg("accent", "Review answers"), renderWidth, lines);
+			lines.push("");
+			for (const answer of orderedAnswers(questions, states)) {
+				wrapWithPrefix(" ", theme.fg("text", `${answer.questionIndex + 1}. ${answer.question}`), renderWidth, lines);
+				const response = answer.kind === "multi" ? answer.selected?.join(", ") ?? "(no input)" : answer.answer ?? "(no input)";
+				wrapWithPrefix("    ", theme.fg("success", response), renderWidth, lines);
+				for (const note of answer.notes ?? []) {
+					wrapWithPrefix("    ", theme.fg("muted", `Note for ${note.option}: ${note.text}`), renderWidth, lines);
+				}
+				lines.push("");
+			}
+			wrapWithPrefix(" ", theme.fg("dim", `${keyLabel("tui.select.confirm", "Enter")} to submit • ${keyLabel("tui.select.cancel", "Esc")} to edit the last question`), renderWidth, lines);
+		}
+
+		function compute(width: number, terminalRows: number): string[] {
 			const lines: string[] = [];
 			const renderWidth = Math.max(1, width);
+			lines.push(ruleBorder(theme, renderWidth));
+			renderTabs(renderWidth, lines);
+
+			if (view === "review") {
+				renderReview(renderWidth, lines);
+				lines.push(ruleBorder(theme, renderWidth));
+				return lines;
+			}
+
 			const question = currentQuestion();
 			const state = currentState();
 			const options = displayOptions(question);
 			const isMulti = question.multiSelect === true;
-
-			lines.push(ruleBorder(theme, renderWidth));
-			if (questions.length >= 2) {
-				const tabs = questions
-					.map((q, i) => {
-						const answered = hasAnswer(states[i]);
-						const label = ` ${answered ? "■" : "□"} ${q.header} `;
-						if (i === currentIdx) return theme.bg("selectedBg", theme.fg(answered ? "success" : "text", label));
-						return theme.fg(answered ? "success" : "muted", label);
-					})
-					.join(" ");
-				wrapWithPrefix(" ", tabs, renderWidth, lines);
-				lines.push("");
-			}
 			wrapWithPrefix(" ", `${theme.fg("accent", question.header)}  ${theme.fg("text", question.question)}`, renderWidth, lines);
 			lines.push("");
 
 			const optionLines: string[] = [];
-			const hasPreview = !isMulti && options.some((o) => o.kind === "option" && o.preview);
+			const hasPreview = !isMulti && options.some((option) => option.kind === "option" && option.preview);
 			const showPreviewSideBySide = hasPreview && renderWidth >= 60;
 			const listWidth = showPreviewSideBySide ? Math.max(20, Math.floor(renderWidth * 0.4)) : renderWidth;
 
-			for (let i = 0; i < options.length; i++) {
-				const option = options[i];
-				const focused = i === state.optionIndex;
+			for (let index = 0; index < options.length; index++) {
+				const option = options[index];
+				const focused = !footerFocused && index === state.optionIndex;
 				const checked =
 					isMulti &&
 					((option.kind === "option" && state.multiSelected.has(option.optionIndex)) ||
@@ -333,19 +470,19 @@ export function createQuestionDialog(questions: Question[]) {
 						? (state.customAnswer?.text ?? (state.singleAnswer?.kind === "custom" ? state.singleAnswer.answer : undefined))
 						: undefined;
 				const labelText = customText ? `${option.label}  ✎ ${customText}` : option.label;
-				const label = `${i + 1}. ${labelText}${selectedSingle ? " ✓" : ""}${note}`;
+				const label = `${index + 1}. ${labelText}${selectedSingle ? " ✓" : ""}${note}`;
 				const color = focused ? "accent" : selectedSingle || checked ? "success" : "text";
 				wrapWithPrefix(`${focusArrow} ${marker} `, theme.fg(color, label), listWidth, optionLines);
-				if (option.kind === "option" && option.description) wrapWithPrefix("       ", theme.fg("muted", option.description), listWidth, optionLines);
+				if (option.kind === "option" && option.description) {
+					wrapWithPrefix("       ", theme.fg("muted", option.description), listWidth, optionLines);
+				}
 			}
 
 			if (inputMode) {
 				optionLines.push("");
 				const label = inputMode === "notes" ? `Notes for ${noteTarget ?? "option"}:` : "Your answer:";
 				wrapWithPrefix(" ", theme.fg("muted", label), listWidth, optionLines);
-				for (const line of editor.render(Math.max(1, listWidth - 2))) {
-					optionLines.push(` ${line}`);
-				}
+				for (const line of editor.render(Math.max(1, listWidth - 2))) optionLines.push(` ${line}`);
 			}
 
 			if (showPreviewSideBySide) {
@@ -353,14 +490,13 @@ export function createQuestionDialog(questions: Question[]) {
 				const rightWidth = renderWidth - listWidth - gap;
 				const focused = options[state.optionIndex];
 				const previewText = focused?.kind === "option" && focused.preview ? focused.preview : "";
-				const md = new Markdown(previewText, 1, 0, getMarkdownTheme());
-				const rightLines = previewText ? md.render(rightWidth) : [theme.fg("dim", "(no preview)")];
+				const rightLines = previewText ? previewLines(previewText, rightWidth, terminalRows) : [theme.fg("dim", "(no preview)")];
 				const maxRows = Math.max(optionLines.length, rightLines.length);
 				const pad = " ".repeat(gap);
-				for (let r = 0; r < maxRows; r++) {
-					const left = r < optionLines.length ? optionLines[r] : "";
+				for (let row = 0; row < maxRows; row++) {
+					const left = row < optionLines.length ? optionLines[row] : "";
 					const leftPadded = left + " ".repeat(Math.max(0, listWidth - visibleWidth(left)));
-					const right = r < rightLines.length ? rightLines[r] : "";
+					const right = row < rightLines.length ? rightLines[row] : "";
 					lines.push(`${leftPadded}${pad}${right}`);
 				}
 			} else {
@@ -371,33 +507,43 @@ export function createQuestionDialog(questions: Question[]) {
 					if (previewText) {
 						lines.push("");
 						lines.push(ruleBorder(theme, renderWidth, "dim"));
-						const md = new Markdown(previewText, 1, 0, getMarkdownTheme());
-						lines.push(...md.render(renderWidth));
+						lines.push(...previewLines(previewText, renderWidth, terminalRows));
 					}
 				}
 			}
 
 			lines.push("");
+			const chatPrefix = footerFocused ? theme.fg("accent", "→") : " ";
+			wrapWithPrefix(`${chatPrefix} `, theme.fg(footerFocused ? "accent" : "text", "Chat about this"), renderWidth, lines);
 			if (state.warning) {
-				wrapWithPrefix(" ", theme.fg("warning", state.warning), renderWidth, lines);
 				lines.push("");
+				wrapWithPrefix(" ", theme.fg("warning", state.warning), renderWidth, lines);
 			}
+			lines.push("");
 			if (inputMode === "notes") {
-				wrapWithPrefix(" ", theme.fg("dim", "Enter to save notes • Esc to go back"), renderWidth, lines);
+				wrapWithPrefix(" ", theme.fg("dim", `${keyLabel("tui.select.confirm", "Enter")} to save notes • ${keyLabel("tui.select.cancel", "Esc")} to go back`), renderWidth, lines);
 			} else if (inputMode === "custom") {
-				const hint = isMulti ? "Enter to save custom answer • Esc to go back" : "Enter to submit • Esc to go back";
-				wrapWithPrefix(" ", theme.fg("dim", hint), renderWidth, lines);
+				const hint = isMulti ? "to save custom answer" : "to continue";
+				wrapWithPrefix(" ", theme.fg("dim", `${keyLabel("tui.select.confirm", "Enter")} ${hint} • ${keyLabel("tui.select.cancel", "Esc")} to go back`), renderWidth, lines);
+			} else if (footerFocused) {
+				wrapWithPrefix(" ", theme.fg("dim", `${keyLabel("tui.select.confirm", "Enter")} to discuss • ${keyLabel("tui.select.up", "Up")} to return to options`), renderWidth, lines);
 			} else if (isMulti) {
 				wrapWithPrefix(
 					" ",
-					theme.fg("dim", "Space to toggle • Tab for notes/custom • Enter to submit • ←/→ questions • Esc to cancel"),
+					theme.fg(
+						"dim",
+						`Space to toggle • ${keyLabel("tui.input.tab", "Tab")} for notes/custom • ${keyLabel("tui.select.confirm", "Enter")} to continue • ←/→ questions • ${keyLabel("tui.select.cancel", "Esc")} to cancel`,
+					),
 					renderWidth,
 					lines,
 				);
 			} else {
 				wrapWithPrefix(
 					" ",
-					theme.fg("dim", "Tab for notes/custom • Enter to submit answer • ←/→ questions • Esc to cancel"),
+					theme.fg(
+						"dim",
+						`${keyLabel("tui.input.tab", "Tab")} for notes/custom • ${keyLabel("tui.select.confirm", "Enter")} to select • ←/→ questions • ${keyLabel("tui.select.cancel", "Esc")} to cancel`,
+					),
 					renderWidth,
 					lines,
 				);
