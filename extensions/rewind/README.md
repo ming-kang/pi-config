@@ -63,9 +63,6 @@ rebuilt from them on `session_start`.
 - **Restore safety.** `applySnapshot` only rewrites files that differ and never
   throws out — an unreadable backup degrades to "leave the file alone", so a
   broken backup can never abort the user's session.
-- **Independent read safety.** Rewind owns only backup and restore behavior. The
-  separate read-before-edit plugin conservatively clears its own cache after
-  every `/tree` navigation, so the plugins do not share mutable state.
 - **Change detection.** A file is re-backed-up only when its stat (mode/size) or
   content differs from its latest backup; an `mtime` older than the backup skips
   the content read entirely. A process-local `lastSeen` index records worktree

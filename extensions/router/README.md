@@ -151,10 +151,6 @@ There is **no migration** from any older models manager config. Add relays with 
 | `constants.ts` | Command name, defaults, `router-codex` api tag |
 | `types.ts` | Config types |
 
-## Subagents
-
-Registration uses the **config form** of `registerProvider` (not a native `createProvider` object), so the parent session’s `subagent` extension can replay providers into worker runtimes.
-
 ## Limits
 
 - SSE only (no Codex WebSocket / zstd request body).

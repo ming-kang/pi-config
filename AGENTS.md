@@ -16,7 +16,7 @@ This file governs work on the code here: cross-cutting conventions live in this 
 - **No build.** Pi loads `.ts` directly via jiti; offline experiments go in `scratch/` (git-ignored).
 - **No tracked automated tests.** Verify extension behavior through Pi's native runtime and UI states; add tests only when a focused check materially reduces regression risk.
 - **Iterate:** `pi -ne -e ./pi-config` loads this checkout for the session only (`-ne` stops installed copies from shadowing it).
-- **Verify a change:** drive the affected tool through Pi's native pending, success, error, collapsed, and expanded states as applicable; for lifecycle extensions (`rewind` / `read-before-edit` / `todo`) also exercise `/reload` and `/tree` navigation.
+- **Verify a change:** drive the affected tool through Pi's native pending, success, error, collapsed, and expanded states as applicable; for lifecycle extensions (`rewind` / `todo`) also exercise `/reload` and `/tree` navigation.
 - **Upstream references:** use DeepWiki first. If source inspection is unavoidable, put temporary upstream clones, reference projects, and research material under `references/` (git-ignored and often skipped by normal searches), study them there, then delete them when no longer needed. Treat `references/` as read-only research input: never vendor or copy source from it into this repo.
 
 ## Architecture Boundaries
@@ -51,7 +51,7 @@ This file governs work on the code here: cross-cutting conventions live in this 
 
 ## Per-extension design notes
 
-[`deepwiki`](extensions/deepwiki/README.md) · [`question`](extensions/question/README.md) · [`todo`](extensions/todo/README.md) · [`rewind`](extensions/rewind/README.md) · [`read-before-edit`](extensions/read-before-edit/README.md) · [`statusline`](extensions/statusline/README.md) · [`subagent`](extensions/subagent/README.md) · [`router`](extensions/router/README.md)
+[`deepwiki`](extensions/deepwiki/README.md) · [`question`](extensions/question/README.md) · [`todo`](extensions/todo/README.md) · [`rewind`](extensions/rewind/README.md) · [`statusline`](extensions/statusline/README.md) · [`router`](extensions/router/README.md)
 
 ## Compact Instructions
 

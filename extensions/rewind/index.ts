@@ -23,8 +23,7 @@
  *
  * Restore safety: applySnapshot only rewrites files that differ and never throws
  * out — a broken backup degrades to "leave the file alone", so it can never abort
- * the user's session. read-before-edit independently invalidates its cache after
- * every /tree navigation.
+ * the user's session.
  *
  * Architecture informed by oh-my-pi (GPL-3.0) and Claude Code's file-history;
  * independent implementation. No ANSI: all UI is native (ctx.ui.* + theme).

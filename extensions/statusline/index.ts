@@ -247,7 +247,7 @@ function formatExtensionStatuses(statuses: ReadonlyMap<string, string>, theme: T
 		.sort(([firstKey], [secondKey]) => firstKey.localeCompare(secondKey))
 		.map(([, text]) => sanitizeStatus(text))
 		.filter(Boolean)
-		// Extensions may pre-color (e.g. subagent fleet chip). Don't re-wrap those.
+		// Extensions may pre-color status text. Don't re-wrap those.
 		.map((text) => (hasAnsiColor(text) ? text : theme.fg("muted", text)));
 	return parts.join("  ");
 }

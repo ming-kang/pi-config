@@ -51,7 +51,7 @@ CTX 2.1%/1.0M                    ↑13k ↓13k R440k CH99.4% $0.074
 - Extension status text from `ctx.ui.setStatus()` is sorted by key and centered
   in the gap between context and usage when space permits; otherwise it is
   dropped so CTX and usage stay readable. Plain text is muted; strings that
-  already carry ANSI color (e.g. the subagent fleet chip) are left unchanged.
+  already carry ANSI color are left unchanged.
 
 Zero-value usage fields are omitted. Before the first assistant response, the
 right side of line 2 is empty (or holds extension status only).
