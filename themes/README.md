@@ -10,24 +10,25 @@ are discovered through the package manifest's `pi.themes` entry.
 | `ice-cream-dark` | `ice-cream-dark.json` | Cool salt night plate; warm cream tool titles; neutral user chip. |
 | `ice-cream-light` | `ice-cream-light.json` | Daylight salt paper; same semantic mapping, ink-on-paper contrast. |
 
-## Design intent (海盐冰淇淋 × Claude Code hierarchy)
+## Design intent (海盐冰淇淋)
 
-Identity stays **ice-cream / sea-salt** (cool cyan plate + warm cream scoops). Layout
-and contrast hierarchy borrow from Claude Code's dark/light palettes without
-copying brand orange as the primary accent.
+Identity stays **ice-cream / sea-salt**: cool cyan-blue plate + warm cream scoops.
+The palette is built around a cold neutral base with warm accents for tooling
+and semantic highlights, keeping the UI calm and readable.
 
-### Lessons from Claude Code (`references/ClaudeCodeRev/src/utils/theme.ts`)
+### Contrast hierarchy
 
-| CC role | CC dark example | What we take |
+| Role | Color idea | Examples |
 |---|---|---|
-| Brand chrome | `claude` warm orange | Warm **cream** for `toolTitle` (tool names), not the whole UI |
-| Secondary / links / paths | lavender-blue `permission` / `suggestion` | Cool **seasalt** as `accent` |
-| Text ladder | white → `#999` inactive → `#505050` subtle | `text` / `muted` / `dim` / `faint` |
-| User chip | solid neutral gray `#373737` on near-black | Cool-neutral `bgUserMsg` with a **large step** off terminal/default bg (not a faint tint) |
-| Tool chrome | minimal / often no full-card fill | `tool*Bg` and `customMessageBg` = `""` |
-| Bash identity | pink `bashBorder` | `bashMode` = coral (editor border only) |
-| Semantics | bright green / red / amber | `seafoam` / `red` / `gold` slightly brighter on dark |
-| Selection | cool blue-gray | `bgSelected` separate from user chip |
+| Primary accent | Cool **seasalt** | `accent`, headings, selected chrome |
+| Warm tooling | Warm **cream** → **coral** | `toolTitle`, keywords, list bullets |
+| Text ladder | 4-step grayscale | `text` → `muted` → `dim` → `faint` |
+| User chip | Cool-neutral solid block | `bgUserMsg` with a **large step** off terminal/default bg |
+| Tool cards | Transparent (no fill) | `tool*Bg` = `""`, status shown via title/output color only |
+| Bash mode | Coral border | `bashMode` = coral, shared with `syntaxKeyword` |
+| Semantics | Seafoam / red / gold | `success`, `error`, `warning` — kept pastel and not oversaturated |
+| Selection | Cool blue-gray | `bgSelected` distinct from user chip |
+| Thinking levels | Cool → warm hue arc | blue-gray → blue → teal → green → gold → orange → red |
 
 ### Surface hierarchy
 
@@ -36,7 +37,7 @@ copying brand orange as the primary accent.
 | `bgBase` | page / terminal chrome | cool salt night or salt paper |
 | `bgSurface` | secondary cards / export card | mid lift |
 | `bgSelected` | list / tree selection | cool blue-gray, distinct from user chip |
-| `bgUserMsg` | user message | **strong neutral chip** — CC-like step (dark ≈ +40 L over base; light ≈ −30 L under paper) |
+| `bgUserMsg` | user message | **strong neutral chip** with a large luminance step off the base background (dark ≈ +40 L; light ≈ −30 L) |
 | `bgCustomMsg` | extension / system (var kept) | unused while `customMessageBg` is `""` |
 | `bgToolPending` / `Success` / `Error` | tool cards (vars kept) | unused while `tool*Bg` is `""` |
 
@@ -60,8 +61,8 @@ Readability rules:
 - Keep body `text` high-contrast against every surface (near-white on dark,
   near-ink on light).
 - **User chip must read as a block**, not a soft wash: on dark, lift well above
-  terminal default; on light, sink clearly below paper white. CC uses ~`#373737`
-  vs black and ~`#f0f0f0` vs white — aim for a similar delta, cool-tinted.
+  terminal default; on light, sink clearly below paper white. Aim for a similar
+  delta to the ~40 L contrast benchmarks, cool-tinted.
 - With transparent tool cards, `toolOutput` must stay readable on the terminal
   default bg — prefer mid-muted, not ultra-faint; keep `muted`/`dim` further
   from `text` so collapse hints stay secondary.
